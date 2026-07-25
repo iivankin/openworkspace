@@ -88,15 +88,17 @@ export function ConversationView({
   if (error) {
     return (
       <section className="w-full px-3 sm:px-6">
-        <div className="flex h-14 items-center border-b">
+        <div className="flex h-14 items-center border-b border-border/70">
           <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft /> Back</Button>
         </div>
-        <div className="grid min-h-72 place-items-center text-center">
+        <div className="grid min-h-72 place-items-center py-16 text-center">
           <div>
-            <CircleAlert className="mx-auto size-7 text-destructive/70" />
-            <p className="mt-3 text-sm font-medium">Could not load this conversation</p>
-            <p className="mt-1 max-w-sm text-xs text-muted-foreground">{error}</p>
-            <Button className="mt-4" variant="outline" size="sm" onClick={onRetry}>
+            <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+              <CircleAlert className="size-6" strokeWidth={1.75} />
+            </span>
+            <p className="mt-5 font-display text-lg font-semibold">Could not load this conversation</p>
+            <p className="mx-auto mt-1.5 max-w-sm text-sm leading-6 text-muted-foreground">{error}</p>
+            <Button className="mt-5" variant="outline" size="sm" onClick={onRetry}>
               <RotateCw /> Retry
             </Button>
           </div>
@@ -140,12 +142,12 @@ export function ConversationView({
   }
 
   return (
-    <article className="w-full px-3 pb-24 sm:px-6 lg:pb-8">
-      <header className="sticky top-0 z-30 -mx-3 flex h-14 items-center gap-1 border-b bg-background/95 px-3 backdrop-blur sm:-mx-6 sm:px-6">
+    <article className="w-full px-3 pb-24 sm:px-6 lg:pb-10">
+      <header className="sticky top-0 z-30 -mx-3 flex h-14 items-center gap-1 border-b border-border/70 bg-background/85 px-3 backdrop-blur-xl sm:-mx-6 sm:px-6">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft /> Back
         </Button>
-        <Separator orientation="vertical" className="mx-2 h-5" />
+        <Separator orientation="vertical" className="mx-2.5 h-5" />
         {mailboxState === "active" ? (
           <Button variant="ghost" size="icon-sm" onClick={onArchive}>
             <Archive /><span className="sr-only">Archive conversation</span>
@@ -163,14 +165,20 @@ export function ConversationView({
             <Trash2 /><span className="sr-only">Move conversation to trash</span>
           </Button>
         )}
+        <span className="ml-auto hidden truncate pl-4 text-xs text-muted-foreground sm:block">
+          {mailboxState === "active" ? "Inbox" : mailboxState} · {messages.length}{" "}
+          {messages.length === 1 ? "message" : "messages"}
+        </span>
       </header>
 
-      <div className="mx-auto max-w-4xl py-7 sm:py-10">
-        <div className="mb-8">
-          <p className="text-xs font-medium text-muted-foreground">
+      <div className="mx-auto max-w-4xl py-8 sm:py-12">
+        <div className="mb-9 border-b border-border/70 pb-7">
+          <p className="text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
             {messages.length} {messages.length === 1 ? "message" : "messages"}
           </p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">{conversationSubject}</h1>
+          <h1 className="mt-2.5 font-display text-[1.75rem] leading-[1.15] font-semibold text-balance sm:text-[2.25rem]">
+            {conversationSubject}
+          </h1>
         </div>
 
         <BubbleGroup className="gap-1 pb-3">
@@ -241,7 +249,7 @@ function MessageBubble({
   return (
     <section
       className={cn(
-        "group/message flex items-end gap-2 pb-5 pt-1",
+        "group/message flex items-start gap-2.5 pt-1 pb-6",
         outgoing && "justify-end",
       )}
       data-message-id={message.id}
@@ -249,17 +257,17 @@ function MessageBubble({
       {!outgoing && (
         showAvatar
           ? (
-              <Avatar className="size-8 shrink-0">
-                <AvatarFallback className="text-[11px] font-semibold">{initials(sender)}</AvatarFallback>
+              <Avatar className="mt-6 size-9 shrink-0 shadow-xs">
+                <AvatarFallback className="text-[11px]">{initials(sender)}</AvatarFallback>
               </Avatar>
             )
-          : <span className="w-8 shrink-0" aria-hidden="true" />
+          : <span className="w-9 shrink-0" aria-hidden="true" />
       )}
 
       <Bubble
         align={outgoing ? "end" : "start"}
-        variant={outgoing ? "tinted" : "secondary"}
-        className="max-w-[calc(100%-2.5rem)] sm:max-w-[78%]"
+        variant={outgoing ? "tinted" : "outline"}
+        className="max-w-[calc(100%-2.75rem)] sm:max-w-[82%]"
       >
         <MessageMetadata
           message={message}
@@ -267,38 +275,38 @@ function MessageBubble({
           sender={sender}
           outgoing={outgoing}
         />
-        <BubbleContent className="w-full min-w-36 px-3.5 py-2.5">
+        <BubbleContent className="w-full min-w-36 px-4 py-3">
           {message.hasHtmlBody && !message.quotedText && mailboxId ? (
             <EmailHtmlBody mailboxId={mailboxId} message={message} />
           ) : (
-            <div className="whitespace-pre-wrap text-[15px] leading-6">
+            <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
               {message.bodyText || (message.quotedText ? "No new text" : message.preview || "No text body")}
             </div>
           )}
 
           {message.quotedText && (
-            <Collapsible className="mt-2 border-t border-current/10 pt-1.5">
-              <CollapsibleTrigger className="group/quote flex items-center gap-1 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:underline">
+            <Collapsible className="mt-3 border-t border-current/10 pt-2">
+              <CollapsibleTrigger className="group/quote flex items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:underline">
                 <ChevronDown className="size-3.5 transition-transform group-data-[panel-open]/quote:rotate-180" />
                 Show quoted text
               </CollapsibleTrigger>
-              <CollapsibleContent className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap border-l-2 border-current/15 pl-3 text-xs leading-5 text-muted-foreground">
+              <CollapsibleContent className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap border-l-2 border-primary/30 pl-3 text-xs leading-5 text-muted-foreground">
                 {message.quotedText}
               </CollapsibleContent>
             </Collapsible>
           )}
 
           {message.attachments.length > 0 && (
-            <div className="mt-2 divide-y divide-current/10 border-t border-current/10">
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-current/10 pt-3">
               {message.attachments.map((attachment) => (
                 <a
                   key={attachment.id}
-                  className="flex items-center gap-2 py-2 text-xs hover:opacity-70"
+                  className="group/file flex max-w-full items-center gap-2 rounded-lg border border-current/12 bg-current/4 px-2.5 py-1.5 text-xs transition-colors hover:border-current/25 hover:bg-current/8"
                   href={`/api/mail/messages/${message.id}/attachments/${attachment.id}?mailboxId=${encodeURIComponent(mailboxId ?? "")}`}
                 >
-                  <Download className="size-3.5" />
-                  <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
-                  <span className="opacity-60">{formatBytes(attachment.size)}</span>
+                  <Download className="size-3.5 shrink-0 opacity-70" />
+                  <span className="min-w-0 flex-1 truncate font-medium">{attachment.filename}</span>
+                  <span className="shrink-0 opacity-60 tabular-nums">{formatBytes(attachment.size)}</span>
                 </a>
               ))}
             </div>
@@ -381,14 +389,17 @@ function MessageMetadata({
   outgoing: boolean;
 }) {
   return (
-    <details className={cn("group/meta max-w-full text-xs", outgoing && "text-right")}>
-      <summary className="flex cursor-pointer list-none items-baseline gap-2 text-muted-foreground outline-none focus-visible:underline">
-        <span className="min-w-0 truncate font-medium text-foreground">{outgoing ? "You" : sender}</span>
-        <time className="shrink-0 text-[11px]">{format(new Date(message.timelineAt), "MMM d · HH:mm")}</time>
+    <details className={cn("group/meta max-w-full px-1 text-xs", outgoing && "text-right")}>
+      <summary className={cn(
+        "flex cursor-pointer list-none items-baseline gap-2 text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:underline",
+        outgoing && "justify-end",
+      )}>
+        <span className="min-w-0 truncate text-[0.8125rem] font-semibold text-foreground">{outgoing ? "You" : sender}</span>
+        <time className="shrink-0 text-[11px] tabular-nums">{format(new Date(message.timelineAt), "MMM d · HH:mm")}</time>
         <ChevronDown className="size-3 shrink-0 transition-transform group-open/meta:rotate-180" />
       </summary>
       <dl className={cn(
-        "mt-1 grid max-w-xl grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-left text-[11px]",
+        "mt-2 grid max-w-xl grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-lg bg-surface-sunken px-3 py-2.5 text-left text-[11px] ring-1 ring-border",
         outgoing && "ml-auto",
       )}>
         <dt className="text-muted-foreground">From</dt><dd className="truncate">{message.fromAddress}</dd>
@@ -419,10 +430,10 @@ function MessageMetadata({
 
 function AudienceChange({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-3 py-4 text-[11px] text-muted-foreground">
-      <Separator className="flex-1" />
-      <span>{text}</span>
-      <Separator className="flex-1" />
+    <div className="flex items-center gap-3 py-5 text-[11px] text-muted-foreground">
+      <Separator className="flex-1 bg-border/70" />
+      <span className="rounded-full bg-surface-sunken px-2.5 py-1 font-medium ring-1 ring-border">{text}</span>
+      <Separator className="flex-1 bg-border/70" />
     </div>
   );
 }

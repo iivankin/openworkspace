@@ -5,6 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  adminPanelClass,
+  AdminPanelBody,
+  AdminPanelFooter,
+  AdminPanelHeader,
+} from "./admin-panel";
 import type { AdminUser, UpdateUserInput } from "./types";
 
 export function UserAccessEditor({
@@ -36,54 +42,53 @@ export function UserAccessEditor({
   }
 
   return (
-    <form className="my-6 border-y bg-muted/25 py-5" onSubmit={submit}>
-      <div className="mb-4 flex items-start gap-3">
-        <Avatar className="size-10">
+    <form className={adminPanelClass} onSubmit={submit}>
+      <AdminPanelHeader
+        title={`Manage ${user.name}`}
+        description={`Personal mailbox: ${user.personalEmail}`}
+      >
+        <Avatar className="size-10 shrink-0">
           <AvatarImage src={avatarUrl || undefined} />
-          <AvatarFallback>{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+          <AvatarFallback className="text-xs">{name.slice(0, 2).toUpperCase()}</AvatarFallback>
         </Avatar>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">Manage {user.name}</p>
-          <p className="truncate text-xs text-muted-foreground">
-            Personal mailbox: {user.personalEmail}
-          </p>
+      </AdminPanelHeader>
+
+      <AdminPanelBody className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor={`user-name-${user.id}`}>Name</Label>
+            <Input
+              id={`user-name-${user.id}`}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`user-avatar-${user.id}`}>Avatar URL</Label>
+            <Input
+              id={`user-avatar-${user.id}`}
+              type="url"
+              placeholder="Optional"
+              value={avatarUrl}
+              onChange={(event) => setAvatarUrl(event.target.value)}
+            />
+          </div>
         </div>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <Label htmlFor={`user-name-${user.id}`}>Name</Label>
-          <Input
-            id={`user-name-${user.id}`}
-            className="mt-1.5 bg-background"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <Label htmlFor={`user-avatar-${user.id}`}>Avatar URL</Label>
-          <Input
-            id={`user-avatar-${user.id}`}
-            className="mt-1.5 bg-background"
-            type="url"
-            placeholder="Optional"
-            value={avatarUrl}
-            onChange={(event) => setAvatarUrl(event.target.value)}
-          />
-        </div>
-      </div>
-      {user.status !== "invited" && (
-        <label className="mt-4 flex items-center justify-between gap-4 border-y py-3">
-          <span>
-            <span className="block text-sm font-medium">Account access</span>
-            <span className="block text-xs text-muted-foreground">
-              Disabling ends sessions and revokes every OIDC token.
+        {user.status !== "invited" && (
+          <label className="flex items-center justify-between gap-4 rounded-xl bg-surface-sunken px-4 py-3 ring-1 ring-border">
+            <span>
+              <span className="block text-[0.8125rem] font-semibold">Account access</span>
+              <span className="block text-xs text-muted-foreground">
+                Disabling ends sessions and revokes every OIDC token.
+              </span>
             </span>
-          </span>
-          <Switch checked={active} onCheckedChange={setActive} />
-        </label>
-      )}
-      <div className="mt-4 flex items-center justify-between gap-3">
+            <Switch checked={active} onCheckedChange={setActive} />
+          </label>
+        )}
+      </AdminPanelBody>
+
+      <AdminPanelFooter className="justify-between">
         <Button
           type="button"
           variant="outline"
@@ -101,7 +106,7 @@ export function UserAccessEditor({
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}
           Save changes
         </Button>
-      </div>
+      </AdminPanelFooter>
     </form>
   );
 }

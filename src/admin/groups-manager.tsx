@@ -9,6 +9,12 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api, responseJson } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import {
+  adminPanelClass,
+  AdminPanelBody,
+  AdminPanelFooter,
+} from "./admin-panel";
 import type { AdminGroup, AdminUser } from "./types";
 
 export function GroupsManager({
@@ -43,7 +49,7 @@ export function GroupsManager({
   return (
     <div className="grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
       <aside>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between px-1">
           <div>
             <p className="text-sm font-semibold">Identity groups</p>
             <p className="text-xs text-muted-foreground">{groups.length} groups</p>
@@ -56,30 +62,38 @@ export function GroupsManager({
             <Plus />
           </Button>
         </div>
-        <div className="divide-y border-y">
-          {groups.map((group) => (
-            <button
-              key={group.id}
-              type="button"
-              className="flex w-full items-center gap-3 py-3 text-left"
-              onClick={() => setSelectedId(group.id)}
-            >
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted">
-                <UsersRound className="size-4" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{group.name}</span>
-                <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                  {group.slug}
+        <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+          {groups.map((group) => {
+            const active = group.id === selected?.id;
+            return (
+              <button
+                key={group.id}
+                type="button"
+                aria-current={active}
+                className={cn(
+                  "relative flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors",
+                  "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:transition-opacity",
+                  active ? "bg-accent/60 before:opacity-100" : "before:opacity-0 hover:bg-accent/40",
+                )}
+                onClick={() => setSelectedId(group.id)}
+              >
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
+                  <UsersRound className="size-4" />
                 </span>
-              </span>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {group.memberIds.length}
-              </span>
-            </button>
-          ))}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[0.8125rem] font-semibold">{group.name}</span>
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    {group.slug}
+                  </span>
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {group.memberIds.length}
+                </span>
+              </button>
+            );
+          })}
           {groups.length === 0 && (
-            <p className="py-8 text-center text-xs text-muted-foreground">
+            <p className="py-10 text-center text-xs text-muted-foreground">
               No identity groups
             </p>
           )}
@@ -166,21 +180,21 @@ function GroupEditor({
   }
 
   return (
-    <form onSubmit={submit}>
-      <div className="mb-6 border-b pb-5">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+    <form className={adminPanelClass} onSubmit={submit}>
+      <div className="border-b border-border/70 bg-surface-sunken/60 px-5 py-4">
+        <p className="font-mono text-[11px] tracking-[0.06em] text-muted-foreground">
           {group ? group.id : "New group"}
         </p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+        <h2 className="mt-1.5 font-display text-xl font-semibold">
           {group?.name ?? "Create identity group"}
         </h2>
       </div>
+      <AdminPanelBody className="space-y-5">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="group-name">Display name</Label>
           <Input
             id="group-name"
-            className="mt-1.5"
             value={name}
             onChange={(event) => {
               const next = event.target.value;
@@ -190,11 +204,11 @@ function GroupEditor({
             required
           />
         </div>
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="group-slug">Claim slug</Label>
           <Input
             id="group-slug"
-            className="mt-1.5 font-mono"
+            className="font-mono"
             value={slug}
             onChange={(event) => {
               setSlugEdited(true);
@@ -205,61 +219,64 @@ function GroupEditor({
           />
         </div>
       </div>
-      <div className="mt-4">
+      <div className="space-y-2">
         <Label htmlFor="group-description">Description</Label>
         <Textarea
           id="group-description"
-          className="mt-1.5"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
           placeholder="What this group represents"
         />
       </div>
 
-      <fieldset className="mt-6 max-h-80 overflow-y-auto border-y">
-        <legend className="px-2 text-sm font-semibold">Members</legend>
-        {users.map((user) => (
-          <label key={user.id} className="flex items-center gap-3 border-b py-2.5 last:border-0">
-            <Checkbox
-              checked={memberIds.includes(user.id)}
-              onCheckedChange={(checked) =>
-                setMemberIds(
-                  checked
-                    ? [...memberIds, user.id]
-                    : memberIds.filter((id) => id !== user.id),
-                )}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{user.name}</span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {user.personalEmail}
-              </span>
-            </span>
-            <span className="text-[11px] text-muted-foreground">{user.status}</span>
-          </label>
-        ))}
-      </fieldset>
-
-      <div className="mt-6 flex justify-between gap-3">
-        <div>
-          {group && (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={remove.isPending}
-              onClick={() => {
-                if (window.confirm(`Delete ${group.name}?`)) remove.mutate();
-              }}
+      <fieldset>
+        <legend className="mb-2.5 text-[0.8125rem] font-semibold text-foreground/85">Members</legend>
+        <div className="max-h-80 divide-y divide-border/60 overflow-y-auto rounded-xl bg-surface-sunken/50 ring-1 ring-border">
+          {users.map((user) => (
+            <label
+              key={user.id}
+              className="flex items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-accent/40"
             >
-              <Trash2 /> Delete
-            </Button>
-          )}
+              <Checkbox
+                checked={memberIds.includes(user.id)}
+                onCheckedChange={(checked) =>
+                  setMemberIds(
+                    checked
+                      ? [...memberIds, user.id]
+                      : memberIds.filter((id) => id !== user.id),
+                  )}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[0.8125rem] font-semibold">{user.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {user.personalEmail}
+                </span>
+              </span>
+              <span className="text-[11px] text-muted-foreground capitalize">{user.status}</span>
+            </label>
+          ))}
         </div>
+      </fieldset>
+      </AdminPanelBody>
+
+      <AdminPanelFooter className={group ? "justify-between" : undefined}>
+        {group && (
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => {
+              if (window.confirm(`Delete ${group.name}?`)) remove.mutate();
+            }}
+          >
+            <Trash2 /> Delete
+          </Button>
+        )}
         <Button disabled={save.isPending || !name || !slug}>
           {save.isPending ? <LoaderCircle className="animate-spin" /> : <Save />}
           {group ? "Save group" : "Create group"}
         </Button>
-      </div>
+      </AdminPanelFooter>
     </form>
   );
 }

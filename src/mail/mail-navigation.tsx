@@ -35,13 +35,13 @@ export function FolderTabBar({
   return (
     <>
       <FolderTabs
-        className="hidden h-11 shrink-0 border-b px-6 lg:block"
+        className="hidden h-12 shrink-0 border-b border-border/70 bg-surface/60 px-5 backdrop-blur-xl lg:block"
         folder={folder}
         folders={items}
         onSelect={onSelect}
       />
       <FolderTabs
-        className="fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t bg-background/95 px-4 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-border/70 bg-surface/90 px-4 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-16px_var(--shadow-color)] backdrop-blur-xl lg:hidden"
         folder={folder}
         folders={items}
         onSelect={onSelect}
@@ -63,14 +63,14 @@ function FolderTabs({
 }) {
   return (
     <nav className={className} aria-label="Mail folders">
-      <div className="h-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="scrollbar-none h-full overflow-x-auto">
         <Tabs className="h-full gap-0" value={folder} onValueChange={(value) => onSelect(String(value))}>
-          <TabsList variant="line" className="h-full w-max min-w-full justify-start gap-6 rounded-none p-0">
+          <TabsList variant="line" className="h-full w-max min-w-full justify-start gap-1 rounded-none p-0">
             {folders.map((item) => (
               <TabsTrigger
                 key={item.id}
                 value={item.id}
-                className="h-full flex-none rounded-none px-0 text-sm after:bottom-0"
+                className="h-full flex-none rounded-none px-3 text-[0.8125rem] font-medium tracking-[-0.005em] after:inset-x-3 after:bottom-0"
               >
                 {item.name}
               </TabsTrigger>

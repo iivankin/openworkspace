@@ -9,6 +9,12 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  adminPanelClass,
+  AdminPanelBody,
+  AdminPanelFooter,
+  AdminPanelHeader,
+} from "./admin-panel";
 import type {
   AdminUser,
   CreateMailboxInput,
@@ -38,11 +44,14 @@ export function InviteForm({
   }
 
   return (
-    <form onSubmit={submit}>
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-        <UserPlus className="size-4" /> Invite a person
-      </div>
-      <FieldGroup className="grid gap-3 sm:grid-cols-2">
+    <form className={adminPanelClass} onSubmit={submit}>
+      <AdminPanelHeader
+        Icon={UserPlus}
+        title="Invite a person"
+        description="They receive a one-time link to register a passkey."
+      />
+      <AdminPanelBody>
+      <FieldGroup className="grid gap-4 sm:grid-cols-2">
         <Field>
           <FieldLabel className="sr-only" htmlFor="invite-name">Name</FieldLabel>
           <Input
@@ -77,13 +86,13 @@ export function InviteForm({
           />
         </Field>
       </FieldGroup>
-      <div className="mt-4 flex items-center justify-between gap-4">
-        <span />
+      </AdminPanelBody>
+      <AdminPanelFooter>
         <Button disabled={pending}>
           {pending ? <LoaderCircle className="animate-spin" /> : <UserPlus />}
           Invite
         </Button>
-      </div>
+      </AdminPanelFooter>
     </form>
   );
 }
@@ -105,24 +114,28 @@ export function MailboxForm({
     onSubmit({ displayName, address, members });
   }
   return (
-    <form onSubmit={submit}>
-      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
-        <MailPlus className="size-4" /> Create a shared mailbox
-      </div>
-      <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_1.3fr]">
-        <Field><FieldLabel className="sr-only" htmlFor="mailbox-display-name">Display name</FieldLabel><Input id="mailbox-display-name" placeholder="Support" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></Field>
-        <Field><FieldLabel className="sr-only" htmlFor="mailbox-address">Address</FieldLabel><Input id="mailbox-address" type="email" placeholder="support@your-domain.com" value={address} onChange={(event) => setAddress(event.target.value)} required /></Field>
-      </FieldGroup>
-      <FieldSet className="mt-4">
-        <FieldLegend variant="label">Mailbox access</FieldLegend>
-        <SharedUserAccess users={users} value={members} onChange={setMembers} />
-      </FieldSet>
-      <div className="mt-4 flex justify-end">
+    <form className={adminPanelClass} onSubmit={submit}>
+      <AdminPanelHeader
+        Icon={MailPlus}
+        title="Create a shared mailbox"
+        description="Choose the address and exactly who can read or send from it."
+      />
+      <AdminPanelBody className="space-y-6">
+        <FieldGroup className="grid gap-4 sm:grid-cols-[1fr_1.3fr]">
+          <Field><FieldLabel className="sr-only" htmlFor="mailbox-display-name">Display name</FieldLabel><Input id="mailbox-display-name" placeholder="Support" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></Field>
+          <Field><FieldLabel className="sr-only" htmlFor="mailbox-address">Address</FieldLabel><Input id="mailbox-address" type="email" placeholder="support@your-domain.com" value={address} onChange={(event) => setAddress(event.target.value)} required /></Field>
+        </FieldGroup>
+        <FieldSet>
+          <FieldLegend variant="label">Mailbox access</FieldLegend>
+          <SharedUserAccess users={users} value={members} onChange={setMembers} />
+        </FieldSet>
+      </AdminPanelBody>
+      <AdminPanelFooter>
         <Button disabled={pending || members.length === 0}>
           {pending ? <LoaderCircle className="animate-spin" /> : <MailPlus />}
           Create
         </Button>
-      </div>
+      </AdminPanelFooter>
     </form>
   );
 }

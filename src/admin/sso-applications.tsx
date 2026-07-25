@@ -28,6 +28,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, responseJson } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import {
+  adminPanelClass,
+  AdminPanelBody,
+  AdminPanelFooter,
+} from "./admin-panel";
 import type {
   AdminGroup,
   AdminOidcClient,
@@ -46,6 +52,16 @@ type ClientInput = {
   enabled: boolean;
   assignedUserIds: string[];
   exposedGroupIds: string[];
+};
+
+const clientTypeLabels: Record<ClientInput["clientType"], string> = {
+  confidential: "Confidential web app",
+  public: "Public browser app",
+};
+
+const accessPolicyLabels: Record<ClientInput["accessPolicy"], string> = {
+  selected_users: "Selected users",
+  all_active_users: "All active users",
 };
 
 const emptyClient: ClientInput = {
@@ -97,7 +113,7 @@ export function SsoApplications({
   return (
     <div className="grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
       <aside>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between px-1">
           <div>
             <p className="text-sm font-semibold">SSO applications</p>
             <p className="text-xs text-muted-foreground">{clients.length} registered</p>
@@ -113,31 +129,39 @@ export function SsoApplications({
             <Plus />
           </Button>
         </div>
-        <div className="divide-y border-y">
-          {clients.map((client) => (
-            <button
-              key={client.id}
-              type="button"
-              className="flex w-full items-center gap-3 py-3 text-left"
-              onClick={() => {
-                setSelectedId(client.id);
-                setSecret(undefined);
-              }}
-            >
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted">
-                <Shield className="size-4" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{client.name}</span>
-                <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                  {client.id}
+        <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+          {clients.map((client) => {
+            const active = client.id === selected?.id;
+            return (
+              <button
+                key={client.id}
+                type="button"
+                aria-current={active}
+                className={cn(
+                  "relative flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors",
+                  "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:transition-opacity",
+                  active ? "bg-accent/60 before:opacity-100" : "before:opacity-0 hover:bg-accent/40",
+                )}
+                onClick={() => {
+                  setSelectedId(client.id);
+                  setSecret(undefined);
+                }}
+              >
+                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
+                  <Shield className="size-4" />
                 </span>
-              </span>
-              {!client.enabled && <Badge variant="secondary">Off</Badge>}
-            </button>
-          ))}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[0.8125rem] font-semibold">{client.name}</span>
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    {client.id}
+                  </span>
+                </span>
+                {!client.enabled && <Badge variant="outline">Off</Badge>}
+              </button>
+            );
+          })}
           {clients.length === 0 && (
-            <p className="py-8 text-center text-xs text-muted-foreground">
+            <p className="py-10 text-center text-xs text-muted-foreground">
               No applications yet
             </p>
           )}
@@ -275,17 +299,17 @@ function ClientEditor({
   }
 
   return (
-    <form onSubmit={submit}>
-      <div className="mb-6 flex items-start justify-between gap-4 border-b pb-5">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+    <form className={adminPanelClass} onSubmit={submit}>
+      <div className="flex items-start justify-between gap-4 border-b border-border/70 bg-surface-sunken/60 px-5 py-4">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-[11px] tracking-[0.06em] text-muted-foreground">
             {client ? client.id : "New client"}
           </p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+          <h2 className="mt-1.5 truncate font-display text-xl font-semibold">
             {client?.name ?? "Register application"}
           </h2>
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-muted-foreground">
           Enabled
           <Switch
             checked={input.enabled}
@@ -294,14 +318,15 @@ function ClientEditor({
         </label>
       </div>
 
+      <AdminPanelBody className="space-y-6">
       {secret && (
-        <div className="mb-6 border-y bg-muted/25 py-4">
+        <div className="rounded-xl bg-warning/12 p-4 ring-1 ring-warning/30">
           <p className="text-sm font-semibold">Copy this secret now</p>
           <p className="mt-1 text-xs text-muted-foreground">
             It is stored only as a hash and cannot be shown again.
           </p>
           <div className="mt-3 flex gap-2">
-            <Input className="font-mono text-xs" readOnly value={secret} />
+            <Input className="bg-surface font-mono text-xs" readOnly value={secret} />
             <Button
               type="button"
               variant="outline"
@@ -319,17 +344,16 @@ function ClientEditor({
       )}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
+        <div className="space-y-2">
           <Label htmlFor="oidc-name">Application name</Label>
           <Input
             id="oidc-name"
-            className="mt-1.5"
             value={input.name}
             onChange={(event) => setInput({ ...input, name: event.target.value })}
             required
           />
         </div>
-        <div>
+        <div className="space-y-2">
           <Label>Client type</Label>
           <Select
             value={input.clientType}
@@ -340,12 +364,12 @@ function ClientEditor({
                 clientType: clientType as ClientInput["clientType"],
               })}
           >
-            <SelectTrigger className="mt-1.5 w-full">
-              <SelectValue />
+            <SelectTrigger className="w-full">
+              <SelectValue>{clientTypeLabels[input.clientType]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="confidential">Confidential web app</SelectItem>
-              <SelectItem value="public">Public browser app</SelectItem>
+              <SelectItem value="confidential">{clientTypeLabels.confidential}</SelectItem>
+              <SelectItem value="public">{clientTypeLabels.public}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -373,11 +397,11 @@ function ClientEditor({
         />
       </div>
 
-      <fieldset className="mt-6 border-y py-4">
-        <legend className="px-2 text-sm font-semibold">Allowed scopes</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
+      <fieldset>
+        <legend className="mb-2.5 text-[0.8125rem] font-semibold text-foreground/85">Allowed scopes</legend>
+        <div className="grid gap-2 rounded-xl bg-surface-sunken/50 p-3.5 ring-1 ring-border sm:grid-cols-2">
           {oidcScopes.map((scope) => (
-            <label key={scope} className="flex items-center gap-2 text-sm">
+            <label key={scope} className="flex items-center gap-2.5 text-sm">
               <Checkbox
                 checked={input.allowedScopes.includes(scope)}
                 disabled={scope === "openid"}
@@ -395,8 +419,8 @@ function ClientEditor({
         </div>
       </fieldset>
 
-      <div className="mt-6 grid gap-6 sm:grid-cols-2">
-        <div>
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div className="space-y-2">
           <Label>Application access</Label>
           <Select
             value={input.accessPolicy}
@@ -406,12 +430,12 @@ function ClientEditor({
                 accessPolicy: accessPolicy as ClientInput["accessPolicy"],
               })}
           >
-            <SelectTrigger className="mt-1.5 w-full">
-              <SelectValue />
+            <SelectTrigger className="w-full">
+              <SelectValue>{accessPolicyLabels[input.accessPolicy]}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="selected_users">Selected users</SelectItem>
-              <SelectItem value="all_active_users">All active users</SelectItem>
+              <SelectItem value="selected_users">{accessPolicyLabels.selected_users}</SelectItem>
+              <SelectItem value="all_active_users">{accessPolicyLabels.all_active_users}</SelectItem>
             </SelectContent>
           </Select>
           {input.accessPolicy === "selected_users" && (
@@ -430,9 +454,9 @@ function ClientEditor({
             />
           )}
         </div>
-        <div>
+        <div className="space-y-2">
           <Label>Groups claim allowlist</Label>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+          <p className="text-xs leading-5 text-muted-foreground">
             Membership never grants application access. Only selected groups are disclosed.
           </p>
           <SelectionList
@@ -449,9 +473,9 @@ function ClientEditor({
         </div>
       </div>
 
-      <label className="mt-6 flex items-center justify-between gap-4 border-y py-3">
+      <label className="flex items-center justify-between gap-4 rounded-xl bg-surface-sunken px-4 py-3 ring-1 ring-border">
         <span>
-          <span className="block text-sm font-medium">Trusted application</span>
+          <span className="block text-[0.8125rem] font-semibold">Trusted application</span>
           <span className="block text-xs text-muted-foreground">
             Skip consent after the user has authenticated.
           </span>
@@ -461,8 +485,9 @@ function ClientEditor({
           onCheckedChange={(trusted) => setInput({ ...input, trusted })}
         />
       </label>
+      </AdminPanelBody>
 
-      <div className="mt-6 flex flex-wrap justify-between gap-3">
+      <AdminPanelFooter className="justify-between">
         <div className="flex gap-2">
           {client?.clientType === "confidential" && (
             <Button
@@ -480,7 +505,7 @@ function ClientEditor({
           {client && (
             <Button
               type="button"
-              variant="outline"
+              variant="destructive"
               disabled={remove.isPending}
               onClick={() => {
                 if (window.confirm(`Delete ${client.name}?`)) remove.mutate();
@@ -494,7 +519,7 @@ function ClientEditor({
           {save.isPending ? <LoaderCircle className="animate-spin" /> : <Save />}
           {client ? "Save application" : "Create application"}
         </Button>
-      </div>
+      </AdminPanelFooter>
     </form>
   );
 }
@@ -513,17 +538,17 @@ function UriField({
   required?: boolean;
 }) {
   return (
-    <div className="mt-4">
+    <div className="space-y-2">
       <Label htmlFor={id}>{label}</Label>
       <Textarea
         id={id}
-        className="mt-1.5 min-h-20 font-mono text-xs"
+        className="min-h-20 font-mono text-xs"
         placeholder="https://app.example.com/callback"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
       />
-      <p className="mt-1 text-[11px] text-muted-foreground">One exact URI per line.</p>
+      <p className="text-[11px] text-muted-foreground">One exact URI per line.</p>
     </div>
   );
 }
@@ -540,10 +565,10 @@ function SelectionList({
   onChange: (value: string[]) => void;
 }) {
   return (
-    <fieldset className="mt-3 max-h-56 overflow-y-auto border-y">
+    <fieldset className="mt-3 max-h-56 divide-y divide-border/60 overflow-y-auto rounded-xl bg-surface-sunken/50 ring-1 ring-border">
       <legend className="sr-only">{label}</legend>
       {items.map((item) => (
-        <label key={item.id} className="flex items-center gap-3 border-b py-2 last:border-0">
+        <label key={item.id} className="flex items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-accent/40">
           <Checkbox
             checked={value.includes(item.id)}
             onCheckedChange={(checked) =>
@@ -554,7 +579,7 @@ function SelectionList({
               )}
           />
           <span className="min-w-0">
-            <span className="block truncate text-xs font-medium">{item.label}</span>
+            <span className="block truncate text-xs font-semibold">{item.label}</span>
             {item.detail && (
               <span className="block truncate text-[11px] text-muted-foreground">
                 {item.detail}

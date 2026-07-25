@@ -126,9 +126,9 @@ export function ConversationReply({
   }
 
   return (
-    <div className="sticky bottom-16 z-20 -mx-3 bg-gradient-to-t from-background via-background to-transparent px-3 pt-8 pb-4 sm:-mx-6 sm:px-6 sm:pb-6 lg:bottom-0">
-      <form className="mx-auto max-w-2xl overflow-hidden rounded-xl border bg-background shadow-lg shadow-black/5" onSubmit={submit}>
-        <div className="flex min-h-10 items-center gap-2 border-b px-2.5">
+    <div className="sticky bottom-16 z-20 -mx-3 bg-gradient-to-t from-background via-background to-transparent px-3 pt-10 pb-4 sm:-mx-6 sm:px-6 sm:pb-6 lg:bottom-0">
+      <form className="mx-auto max-w-2xl animate-rise overflow-hidden rounded-2xl bg-surface shadow-xl ring-1 ring-border" onSubmit={submit}>
+        <div className="flex min-h-11 items-center gap-2 border-b border-border/70 bg-surface-sunken/70 px-2.5">
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" className="h-7 px-2" />}>
               <ReplyActionIcon mode={action.mode} />
@@ -165,8 +165,8 @@ export function ConversationReply({
           </div>
         </div>
 
-        <div className="truncate border-b px-3 py-1.5 text-xs text-muted-foreground">
-          Replying to <span className="font-medium text-foreground">{parent.fromName || parent.fromAddress}</span>
+        <div className="truncate border-b border-border/70 px-3.5 py-2 text-xs text-muted-foreground">
+          Replying to <span className="font-semibold text-foreground">{parent.fromName || parent.fromAddress}</span>
           <span aria-hidden="true"> · </span>{parent.preview}
         </div>
 
@@ -177,9 +177,9 @@ export function ConversationReply({
           <RecipientFieldRow compact label="Bcc" value={bcc} onChange={setBcc} />
         )}
 
-        <InputGroup className="min-h-24 rounded-none border-0 bg-transparent dark:bg-transparent">
+        <InputGroup className="min-h-24 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
           <InputGroupTextarea
-            className="min-h-16 px-4 pt-3.5 text-[15px] leading-6"
+            className="min-h-16 px-4 pt-3.5 text-[0.9375rem] leading-[1.65]"
             value={body}
             onChange={(event) => setBody(event.target.value)}
             onKeyDown={(event) => {
@@ -195,7 +195,7 @@ export function ConversationReply({
             }}
             placeholder={action.mode === "reply_all" ? "Reply to everyone" : `Reply to ${action.to.join(", ")}`}
           />
-          <InputGroupAddon align="block-end" className="border-t px-2.5 py-2">
+          <InputGroupAddon align="block-end" className="border-t border-border/70 bg-surface-sunken/40 px-2.5 py-2">
             <input
               ref={fileInput}
               className="sr-only"
@@ -224,7 +224,7 @@ export function ConversationReply({
         </InputGroup>
 
         {files.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 border-t px-3 py-2">
+          <div className="flex flex-wrap gap-1.5 border-t border-border/70 px-3 py-2.5">
             {files.map((file, index) => (
               <Badge key={`${file.name}-${index}`} variant="outline" className="max-w-56 gap-1.5">
                 <Paperclip className="size-3" />

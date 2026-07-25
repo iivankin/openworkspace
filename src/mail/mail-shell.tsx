@@ -121,6 +121,18 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     setForwardedMessage(undefined);
   }
 
+  // Reads the live URL: a mutation can settle after the user already moved to
+  // another folder, and the captured `folder` would drag them back.
+  function closeConversation() {
+    const search = new URLSearchParams(window.location.search);
+    if (!search.has("conversation")) return;
+    search.delete("conversation");
+    navigateRoute({
+      pathname: window.location.pathname,
+      search: search.size ? `?${search.toString()}` : "",
+    });
+  }
+
   function mutateConversation(
     input: {
       mailboxState?: "active" | "archive" | "spam" | "trash";
@@ -133,7 +145,7 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
       { id: conversationId, mailboxId: mailbox.id, input },
       {
         onSuccess: () => {
-          if (returnToList) navigate({ conversation: null });
+          if (returnToList) closeConversation();
         },
         onError: (error) => toast.error(error.message),
       },
@@ -145,7 +157,7 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
   }
 
   return (
-    <main className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
+    <main className="paper-grain flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
       <MailHeader
         mailbox={mailbox}
         mailboxes={mailboxQuery.data?.mailboxes ?? []}
@@ -176,26 +188,30 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
             onOpenConversation={(id) => navigate({ folder: "sent", conversation: id })}
           />
         ) : (
-          <section className="w-full px-3 pb-24 sm:px-6 lg:px-8 lg:pb-8">
-            <div className="flex items-end justify-between gap-4 py-6 sm:py-8">
+          <section className="w-full px-3 pb-24 sm:px-6 lg:px-8 lg:pb-10">
+            <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pt-7 pb-5 sm:pt-9 sm:pb-6">
               <div className="min-w-0">
-                <p className="truncate text-xs text-muted-foreground">{mailbox?.address}</p>
-                <h1 className="mt-1 text-2xl font-semibold tracking-[-0.035em]">{folderName}</h1>
+                <p className="truncate text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
+                  {mailbox?.address}
+                </p>
+                <h1 className="mt-1.5 font-display text-[2rem] leading-none font-semibold sm:text-[2.5rem]">
+                  {folderName}
+                </h1>
               </div>
-              <p className="shrink-0 text-xs text-muted-foreground">
+              <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
                 {conversations.length}{conversationsQuery.hasNextPage ? "+" : ""} conversations
               </p>
             </div>
 
             <label className="relative mb-4 block xl:hidden">
-              <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="h-10 bg-muted/50 pl-9" placeholder={`Search in ${folderName}`} value={search} onChange={(event) => setSearch(event.target.value)} />
+              <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input className="h-11 rounded-full pl-10" placeholder={`Search in ${folderName}`} value={search} onChange={(event) => setSearch(event.target.value)} />
             </label>
 
             <MessageList
               folderName={folderName}
               messages={conversations}
-                loading={mailboxQuery.isLoading || foldersQuery.isLoading || conversationsQuery.isLoading}
+              loading={mailboxQuery.isLoading || foldersQuery.isLoading || conversationsQuery.isLoading}
               loadingMore={conversationsQuery.isFetchingNextPage}
               hasMore={Boolean(conversationsQuery.hasNextPage)}
               search={debouncedSearch}

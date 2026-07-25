@@ -1,14 +1,17 @@
-import { format, isToday, isYesterday } from "date-fns";
-import { CircleAlert, LoaderCircle, MailOpen, RotateCw } from "lucide-react";
+import { format, isThisYear, isToday, isYesterday } from "date-fns";
+import { CircleAlert, LoaderCircle, MailOpen, RotateCw, SearchX } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import type { ConversationSummary } from "./types";
 
 function shortDate(value: string) {
   const date = new Date(value);
   if (isToday(date)) return format(date, "HH:mm");
   if (isYesterday(date)) return "Yesterday";
-  return format(date, "MMM d");
+  if (isThisYear(date)) return format(date, "MMM d");
+  return format(date, "MMM d, yyyy");
 }
 
 function LoadMoreButton({ loading, onLoadMore }: {
@@ -26,6 +29,33 @@ function LoadMoreButton({ loading, onLoadMore }: {
       {loading ? <LoaderCircle className="animate-spin" /> : null}
       Load older conversations
     </Button>
+  );
+}
+
+function EmptyState({
+  Icon,
+  title,
+  description,
+  children,
+}: {
+  Icon: typeof MailOpen;
+  title: string;
+  description?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="grid min-h-80 place-items-center px-8 py-16 text-center">
+      <div className="animate-fade-in">
+        <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-surface-sunken text-muted-foreground ring-1 ring-border">
+          <Icon className="size-6" strokeWidth={1.75} />
+        </span>
+        <p className="mt-5 font-display text-lg font-semibold">{title}</p>
+        {description ? (
+          <p className="mx-auto mt-1.5 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+        ) : null}
+        {children ? <div className="mt-5">{children}</div> : null}
+      </div>
+    </div>
   );
 }
 
@@ -53,44 +83,53 @@ export function MessageList({
   onSelect: (message: ConversationSummary) => void;
 }) {
   if (loading) {
-    return <div className="grid min-h-72 place-items-center"><LoaderCircle className="size-5 animate-spin text-muted-foreground" /></div>;
+    return (
+      <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface ring-1 ring-border">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index} className="flex items-center gap-4 px-4 py-4">
+            <Skeleton className="size-10 shrink-0 rounded-full" />
+            <Skeleton className="h-3.5 w-40 shrink-0" />
+            <Skeleton className="h-3.5 min-w-0 flex-1" />
+            <Skeleton className="h-3 w-12 shrink-0" />
+          </div>
+        ))}
+      </div>
+    );
   }
   if (error) {
     return (
-      <div className="grid min-h-72 place-items-center border-y px-8 text-center">
-        <div>
-          <CircleAlert className="mx-auto size-7 text-destructive/70" />
-          <p className="mt-3 text-sm font-medium">Could not load conversations</p>
-          <p className="mt-1 max-w-sm text-xs text-muted-foreground">{error}</p>
-          <Button className="mt-4" type="button" variant="outline" size="sm" onClick={onRetry}>
+      <div className="rounded-2xl bg-surface ring-1 ring-border">
+        <EmptyState
+          Icon={CircleAlert}
+          title="Could not load conversations"
+          description={error}
+        >
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
             <RotateCw /> Retry
           </Button>
-        </div>
+        </EmptyState>
       </div>
     );
   }
   if (!messages.length) {
     return (
-      <div className="grid flex-1 place-items-center px-8 text-center">
-        <div>
-          <MailOpen className="mx-auto size-7 text-muted-foreground/60" />
-          <p className="mt-3 text-sm font-medium">
-            {search ? `No matches in ${folderName}` : `No conversations in ${folderName}`}
-          </p>
-          {search ? <p className="mt-1 text-xs text-muted-foreground">Try a different name, address, subject, or phrase.</p> : null}
-          {hasMore ? (
-            <div className="mt-4">
-              <LoadMoreButton loading={loadingMore} onLoadMore={onLoadMore} />
-            </div>
-          ) : null}
-        </div>
+      <div className="rounded-2xl bg-surface ring-1 ring-border">
+        <EmptyState
+          Icon={search ? SearchX : MailOpen}
+          title={search ? `No matches in ${folderName}` : `${folderName} is empty`}
+          description={search
+            ? "Try a different name, address, subject, or phrase."
+            : "New conversations will appear here as soon as they arrive."}
+        >
+          {hasMore ? <LoadMoreButton loading={loadingMore} onLoadMore={onLoadMore} /> : null}
+        </EmptyState>
       </div>
     );
   }
 
   return (
-    <div className="border-y">
-      <div className="divide-y">
+    <div className="overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+      <div className="divide-y divide-border/60">
         {messages.map((message) => {
           const sender = message.conversationLabel;
           return (
@@ -98,29 +137,42 @@ export function MessageList({
               type="button"
               key={message.id}
               onClick={() => onSelect(message)}
-              className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-3 py-4 text-left transition-colors hover:bg-muted/45 sm:gap-4 sm:px-5"
+              className={cn(
+                "group relative grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-3.5 text-left",
+                "transition-colors duration-150 ease-out hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
+                "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity hover:before:opacity-100 focus-visible:before:opacity-100",
+                "sm:gap-4 sm:px-5",
+              )}
             >
-              <div>
-                <Avatar className="size-10 sm:size-11">
-                  <AvatarFallback className="text-xs font-semibold">
-                    {sender.slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
+              <Avatar className="size-10">
+                <AvatarFallback className="text-xs">
+                  {sender.slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+
+              <div className="min-w-0 lg:flex lg:items-baseline lg:gap-4">
+                <span className="block truncate text-[0.9375rem] leading-6 font-semibold tracking-[-0.01em] lg:w-56 lg:shrink-0">
+                  {sender}
+                </span>
+                <span className="mt-0.5 block min-w-0 lg:mt-0 lg:flex lg:flex-1 lg:items-baseline lg:gap-2">
+                  <span className="block truncate text-sm leading-6 font-medium text-foreground/90 lg:max-w-[46%] lg:shrink-0">
+                    {message.subject}
+                  </span>
+                  <span className="mt-0.5 block line-clamp-2 text-[0.8125rem] leading-5 text-muted-foreground lg:mt-0 lg:min-w-0 lg:flex-1 lg:truncate lg:before:mr-2 lg:before:text-border lg:before:content-['—']">
+                    {message.preview || "No text preview"}
+                  </span>
+                </span>
               </div>
-              <div className="min-w-0">
-                <div className="flex items-baseline gap-3">
-                  <span className="min-w-0 flex-1 truncate text-sm">{sender}</span>
-                </div>
-                <p className="mt-0.5 truncate text-sm text-foreground/85">{message.subject}</p>
-                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground sm:line-clamp-1">{message.preview || "No text preview"}</p>
-              </div>
-              <time className="pt-0.5 text-[11px] text-muted-foreground">{shortDate(message.timelineAt)}</time>
+
+              <time className="shrink-0 pt-1 text-[11px] font-medium text-muted-foreground tabular-nums">
+                {shortDate(message.timelineAt)}
+              </time>
             </button>
           );
         })}
       </div>
       {hasMore ? (
-        <div className="flex justify-center border-t px-4 py-5">
+        <div className="flex justify-center border-t border-border/60 bg-surface-sunken/60 px-4 py-4">
           <LoadMoreButton loading={loadingMore} onLoadMore={onLoadMore} />
         </div>
       ) : null}

@@ -26,13 +26,13 @@ export function SharedUserAccess({
   }
 
   return (
-    <div className="divide-y border-y">
+    <div className="divide-y divide-border/60 overflow-hidden rounded-xl bg-surface-sunken/50 ring-1 ring-border">
       {users.map((user) => {
         const member = value.find((item) => item.userId === user.id);
         return (
           <div
             key={user.id}
-            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 py-2.5 text-xs"
+            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3.5 py-3 text-xs transition-colors hover:bg-accent/40"
           >
             <Checkbox
               aria-label={`Give ${user.name} access`}
@@ -40,12 +40,12 @@ export function SharedUserAccess({
               onCheckedChange={(checked) => setMember(user.id, checked)}
             />
             <span className="min-w-0">
-              <span className="block truncate font-medium">{user.name}</span>
+              <span className="block truncate text-[0.8125rem] font-semibold">{user.name}</span>
               <span className="block truncate text-muted-foreground">
                 {user.personalEmail}
               </span>
             </span>
-            <label className="flex items-center gap-2 text-muted-foreground">
+            <label className="flex items-center gap-2.5 text-muted-foreground">
               <span>{member?.canSend ? "Read & send" : "Read only"}</span>
               <Switch
                 size="sm"

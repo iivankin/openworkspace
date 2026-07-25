@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Fingerprint, Inbox, LoaderCircle } from "lucide-react";
+import { Fingerprint, Inbox, LoaderCircle, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,39 +29,43 @@ export function AuthScreen() {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-background px-6 py-12">
-      <section className="w-full max-w-sm">
-        <div className="mb-12 flex items-center gap-3">
-          <span className="grid size-9 place-items-center rounded-xl bg-foreground text-background">
-            <Inbox className="size-4" />
-          </span>
-          <span className="text-sm font-semibold">OpenWorkspace</span>
-        </div>
-        <div className="mb-8 border-b pb-6">
-          <p className="text-xs font-medium text-muted-foreground">
+    <main className="grid min-h-dvh lg:grid-cols-[1fr_minmax(0,34rem)]">
+      <BrandPanel />
+
+      <section className="paper-grain flex items-center justify-center bg-background px-6 py-14 sm:px-10">
+        <div className="w-full max-w-sm animate-rise">
+          <div className="mb-10 flex items-center gap-2.5 lg:hidden">
+            <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+              <Inbox className="size-4.5" strokeWidth={2.25} />
+            </span>
+            <span className="font-display text-base font-semibold">OpenWorkspace</span>
+          </div>
+
+          <p className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
             {auth.needsBootstrap ? "Initial setup" : "Authentication"}
           </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em]">
+          <h1 className="mt-3 font-display text-[2.5rem] leading-none font-semibold">
             {auth.needsBootstrap ? "Create administrator" : "Sign in"}
           </h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          <p className="mt-4 text-sm leading-6 text-muted-foreground text-pretty">
             {auth.needsBootstrap
               ? "The first account owns the workspace and its first personal mailbox."
               : "Use a passkey registered for this workspace."}
           </p>
-        </div>
 
-        {auth.needsBootstrap ? (
+          <div className="my-8 h-px rule-fade" />
+
+          {auth.needsBootstrap ? (
             <form className="space-y-5" onSubmit={submit}>
               <div className="space-y-2">
                 <Label htmlFor="name">Your name</Label>
-                <Input id="name" value={name} onChange={(event) => setName(event.target.value)} required />
+                <Input id="name" className="h-11" value={name} onChange={(event) => setName(event.target.value)} required />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email">Personal mailbox</Label>
-                <Input id="email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                <Input id="email" className="h-11" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
               </div>
-              <Button className="h-10 w-full" disabled={busy}>
+              <Button className="w-full" size="lg" disabled={busy}>
                 {busy ? <LoaderCircle className="animate-spin" /> : <Fingerprint />}
                 Create with passkey
               </Button>
@@ -70,6 +74,7 @@ export function AuthScreen() {
                   className="w-full"
                   type="button"
                   variant="outline"
+                  size="lg"
                   disabled={busy}
                   onClick={() => void run(() => auth.bootstrap({ name, email }, true))}
                 >
@@ -79,21 +84,78 @@ export function AuthScreen() {
             </form>
           ) : (
             <div className="space-y-3">
-              <Button className="h-10 w-full" disabled={busy} onClick={() => void run(() => auth.login())}>
+              <Button className="w-full" size="lg" disabled={busy} onClick={() => void run(() => auth.login())}>
                 {busy ? <LoaderCircle className="animate-spin" /> : <Fingerprint />}
                 Continue with passkey
               </Button>
               {auth.mockAuthEnabled && (
-                <Button className="w-full" variant="outline" disabled={busy} onClick={() => void run(() => auth.login(true))}>
+                <Button className="w-full" variant="outline" size="lg" disabled={busy} onClick={() => void run(() => auth.login(true))}>
                   Open seeded local demo
                 </Button>
               )}
             </div>
           )}
-        <p className="mt-8 border-t pt-5 text-xs leading-5 text-muted-foreground">
-          Authentication is passwordless. Biometric data remains on your device.
-        </p>
+
+          <p className="mt-9 flex items-start gap-2.5 rounded-xl bg-surface-sunken px-3.5 py-3 text-xs leading-5 text-muted-foreground ring-1 ring-border">
+            <ShieldCheck className="mt-px size-4 shrink-0 text-success" />
+            Authentication is passwordless. Biometric data remains on your device.
+          </p>
+        </div>
       </section>
     </main>
+  );
+}
+
+function BrandPanel() {
+  return (
+    <aside className="relative hidden overflow-hidden bg-[oklch(0.2178_0.0125_67.2)] p-14 text-[oklch(0.96_0.008_84)] lg:flex lg:flex-col lg:justify-between">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-70"
+        style={{
+          backgroundImage:
+            "radial-gradient(38rem 30rem at 78% 6%, oklch(0.7642 0.1442 68.5 / 0.28), transparent 68%), radial-gradient(32rem 26rem at 6% 92%, oklch(0.5482 0.1155 245 / 0.22), transparent 70%)",
+        }}
+      />
+      {/* Airmail edging: the striped border of a par-avion envelope. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 left-0 w-2.5 opacity-60"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(135deg, oklch(0.7642 0.1442 68.5) 0 10px, transparent 10px 20px, oklch(0.5482 0.1155 245) 20px 30px, transparent 30px 40px)",
+        }}
+      />
+
+      <div className="relative flex items-center gap-3">
+        <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg">
+          <Inbox className="size-5" strokeWidth={2.25} />
+        </span>
+        <span className="font-display text-lg font-semibold">OpenWorkspace</span>
+      </div>
+
+      <div className="relative max-w-md">
+        <p className="font-display text-[2.75rem] leading-[1.05] font-semibold text-balance">
+          Mail that belongs to your workspace, not to a vendor.
+        </p>
+        <p className="mt-6 text-sm leading-7 text-[oklch(0.96_0.008_84_/_0.62)] text-pretty">
+          Shared mailboxes, passkey-only access, and single sign-on — running entirely
+          on infrastructure you control.
+        </p>
+      </div>
+
+      <dl className="relative grid grid-cols-3 gap-6 border-t border-white/10 pt-8 text-xs">
+        {[
+          ["Passkeys", "No passwords, ever"],
+          ["Shared", "Team mailboxes"],
+          ["SSO", "OIDC provider"],
+        ].map(([term, detail]) => (
+          <div key={term}>
+            <dt className="font-display text-base font-semibold text-primary">{term}</dt>
+            <dd className="mt-1 text-[oklch(0.96_0.008_84_/_0.55)]">{detail}</dd>
+          </div>
+        ))}
+      </dl>
+    </aside>
   );
 }

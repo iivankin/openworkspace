@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Fingerprint, Inbox, LoaderCircle } from "lucide-react";
+import { Fingerprint, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import type { AccessLinkKind } from "../../shared/auth";
 import { Button } from "@/components/ui/button";
 import { api, responseJson } from "@/lib/api";
 import { useAuth } from "./auth-context";
+import { AuthHeading, AuthShell } from "./auth-shell";
 
 const copy = {
   invitation: {
@@ -55,46 +56,39 @@ export function AccessLinkScreen({ kind }: { kind: AccessLinkKind }) {
   }
 
   return (
-    <main className="grid min-h-dvh place-items-center bg-background px-6 py-12">
-      <section className="w-full max-w-sm">
-        <span className="mb-10 grid size-10 place-items-center rounded-xl bg-foreground text-background">
-          <Inbox className="size-5" />
-        </span>
-        {preview.isLoading ? (
+    <AuthShell subtitle={labels.eyebrow} width="max-w-md">
+      {preview.isLoading ? (
+        <div className="grid place-items-center py-10">
           <LoaderCircle className="animate-spin text-muted-foreground" />
-        ) : preview.isError || !preview.data ? (
-          <>
-            <h1 className="text-2xl font-semibold tracking-tight">{labels.unavailable}</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              This link is invalid, expired, or already used.
+        </div>
+      ) : preview.isError || !preview.data ? (
+        <AuthHeading
+          title={labels.unavailable}
+          description="This link is invalid, expired, or already used."
+        />
+      ) : (
+        <>
+          <AuthHeading eyebrow={labels.eyebrow} title={preview.data.name} />
+          <p className="mt-6 rounded-xl bg-surface-sunken px-4 py-3 text-sm leading-6 text-muted-foreground ring-1 ring-border">
+            Personal mailbox:{" "}
+            <strong className="font-semibold text-foreground">{preview.data.email}</strong>
+          </p>
+          {kind === "recovery" && (
+            <p className="mt-4 text-xs leading-5 text-muted-foreground">
+              Registering a new passkey removes existing passkeys and signs out other sessions.
             </p>
-          </>
-        ) : (
-          <>
-            <p className="text-xs font-medium text-muted-foreground">{labels.eyebrow}</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em]">
-              {preview.data.name}
-            </h1>
-            <p className="mt-3 border-y py-4 text-sm leading-6 text-muted-foreground">
-              Personal mailbox:{" "}
-              <strong className="font-medium text-foreground">{preview.data.email}</strong>
-            </p>
-            {kind === "recovery" && (
-              <p className="mt-4 text-xs leading-5 text-muted-foreground">
-                Registering a new passkey removes existing passkeys and signs out other sessions.
-              </p>
-            )}
-            <Button
-              className={kind === "recovery" ? "mt-6 h-10 w-full" : "mt-8 h-10 w-full"}
-              disabled={busy}
-              onClick={() => void complete()}
-            >
-              {busy ? <LoaderCircle className="animate-spin" /> : <Fingerprint />}
-              {labels.button}
-            </Button>
-          </>
-        )}
-      </section>
-    </main>
+          )}
+          <Button
+            className="mt-6 w-full"
+            size="lg"
+            disabled={busy}
+            onClick={() => void complete()}
+          >
+            {busy ? <LoaderCircle className="animate-spin" /> : <Fingerprint />}
+            {labels.button}
+          </Button>
+        </>
+      )}
+    </AuthShell>
   );
 }

@@ -179,29 +179,31 @@ export function AdminPage() {
 
   return (
     <main className="flex h-dvh min-h-0 bg-background">
-      <aside className="hidden w-64 shrink-0 flex-col border-r bg-muted/15 md:flex">
-        <div className="flex h-16 items-center gap-2.5 border-b px-5">
-          <span className="grid size-8 place-items-center rounded-xl bg-foreground text-background"><Inbox className="size-4" /></span>
+      <aside className="hidden w-68 shrink-0 flex-col border-r border-border/70 bg-sidebar md:flex">
+        <div className="flex h-18 shrink-0 items-center gap-2.5 border-b border-border/70 px-5">
+          <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+            <Inbox className="size-4.5" strokeWidth={2.25} />
+          </span>
           <div>
-            <p className="text-sm font-semibold">OpenWorkspace</p>
-            <p className="text-[11px] text-muted-foreground">Administration</p>
+            <p className="font-display text-[0.9375rem] leading-tight font-semibold">OpenWorkspace</p>
+            <p className="text-[11px] leading-tight text-muted-foreground">Administration</p>
           </div>
         </div>
         <AdminNavigation value={activeSection} onChange={(value) => go(value)} />
-        <div className="mt-auto border-t p-3">
+        <div className="mt-auto border-t border-border/70 p-3">
           <Button className="w-full justify-start" variant="ghost" onClick={() => navigate("/")}>
             <ArrowLeft /> Back to mail
           </Button>
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 sm:px-6 lg:px-8">
+      <section className="paper-grain flex min-w-0 flex-1 flex-col">
+        <header className="flex h-18 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
           <Button className="md:hidden" variant="ghost" size="icon-sm" onClick={() => navigate("/")}>
             <ArrowLeft /><span className="sr-only">Back to mail</span>
           </Button>
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold tracking-tight">{viewCopy[view].title}</h1>
+            <h1 className="truncate font-display text-xl font-semibold">{viewCopy[view].title}</h1>
             <p className="hidden truncate text-xs text-muted-foreground sm:block">{viewCopy[view].description}</p>
           </div>
           {(view === "user" || view === "mailbox") && (
@@ -211,7 +213,7 @@ export function AdminPage() {
           )}
         </header>
 
-        <div className="border-b p-2 md:hidden">
+        <div className="border-b border-border/70 p-2 md:hidden">
           <MobileAdminNavigation value={activeSection} onChange={(value) => go(value)} />
         </div>
 
@@ -311,11 +313,14 @@ function AdminNavigation({
 }) {
   return (
     <Tabs value={value} onValueChange={(next) => onChange(next as AdminSection)} orientation="vertical" className="p-3">
-      <TabsList variant="line" className="w-full items-stretch gap-1">
+      <TabsList variant="line" className="w-full items-stretch gap-0.5">
         {adminSections.map(({ id, label, Icon, separatorBefore }) => (
           <Fragment key={id}>
-            {separatorBefore && <Separator className="my-2" />}
-            <TabsTrigger value={id} className="h-9 px-3">
+            {separatorBefore && <Separator className="my-2.5 bg-border/70" />}
+            <TabsTrigger
+              value={id}
+              className="h-9 justify-start gap-2.5 rounded-lg px-3 text-[0.8125rem] after:hidden group-data-[variant=line]/tabs-list:hover:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:font-semibold data-active:[&_svg]:text-primary"
+            >
               <Icon /> {label}
             </TabsTrigger>
           </Fragment>
@@ -346,17 +351,20 @@ function MobileAdminNavigation({ value, onChange }: { value: AdminSection; onCha
 
 function PeopleList({ users, loading, onManage }: { users?: AdminUser[]; loading: boolean; onManage: (id: string) => void }) {
   if (loading) return <ListSkeleton />;
+  if (!users?.length) {
+    return <AdminEmptyState Icon={Users} title="No people yet" description="Invite someone to create their personal mailbox." />;
+  }
   return (
-    <div className="divide-y border-y">
-      {users?.map((user) => (
-        <div key={user.id} className="flex items-center gap-4 py-3">
+    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+      {users.map((user) => (
+        <div key={user.id} className="flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-accent/45">
           <Avatar className="size-10"><AvatarImage src={user.avatarUrl ?? undefined} /><AvatarFallback className="text-xs">{user.name.slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{user.name}</p>
+            <p className="truncate text-sm font-semibold">{user.name}</p>
             <p className="truncate text-xs text-muted-foreground">{user.personalEmail}</p>
           </div>
-          {user.role === "admin" && <Badge variant="secondary">Admin</Badge>}
-          <Badge variant={user.status === "active" ? "outline" : "secondary"}>{user.status}</Badge>
+          {user.role === "admin" && <Badge>Admin</Badge>}
+          <Badge variant={user.status === "active" ? "success" : "outline"} className="capitalize">{user.status}</Badge>
           <Button aria-label={`Manage ${user.name}`} variant="outline" size="sm" onClick={() => onManage(user.id)}><SlidersHorizontal /> Manage</Button>
         </div>
       ))}
@@ -366,13 +374,16 @@ function PeopleList({ users, loading, onManage }: { users?: AdminUser[]; loading
 
 function MailboxList({ mailboxes, loading, onManage }: { mailboxes?: AdminMailbox[]; loading: boolean; onManage: (id: string) => void }) {
   if (loading) return <ListSkeleton />;
+  if (!mailboxes?.length) {
+    return <AdminEmptyState Icon={Settings2} title="No mailboxes yet" description="Personal mailboxes appear here once people are invited." />;
+  }
   return (
-    <div className="divide-y border-y">
-      {mailboxes?.map((mailbox) => (
-        <div key={mailbox.id} className="flex items-center gap-4 py-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted"><MailPlus className="size-4" /></span>
-          <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{mailbox.displayName}</p><p className="truncate text-xs text-muted-foreground">{mailbox.address}</p></div>
-          <Badge variant="outline">{mailbox.kind}</Badge>
+    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+      {mailboxes.map((mailbox) => (
+        <div key={mailbox.id} className="flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-accent/45">
+          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70"><MailPlus className="size-4.5" /></span>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{mailbox.displayName}</p><p className="truncate text-xs text-muted-foreground">{mailbox.address}</p></div>
+          <Badge variant="outline" className="capitalize">{mailbox.kind}</Badge>
           {mailbox.kind === "shared" && <Button aria-label={`Manage ${mailbox.displayName}`} variant="outline" size="sm" onClick={() => onManage(mailbox.id)}><SlidersHorizontal /> Manage</Button>}
         </div>
       ))}
@@ -380,8 +391,33 @@ function MailboxList({ mailboxes, loading, onManage }: { mailboxes?: AdminMailbo
   );
 }
 
+function AdminEmptyState({ Icon, title, description }: { Icon: LucideIcon; title: string; description: string }) {
+  return (
+    <div className="rounded-2xl bg-surface px-6 py-16 text-center shadow-xs ring-1 ring-border">
+      <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/12 text-foreground/60">
+        <Icon className="size-5" />
+      </span>
+      <p className="mt-4 font-display text-lg font-semibold">{title}</p>
+      <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground text-pretty">{description}</p>
+    </div>
+  );
+}
+
 function ListSkeleton() {
-  return <div className="space-y-3">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-16 w-full" />)}</div>;
+  return (
+    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface ring-1 ring-border">
+      {Array.from({ length: 4 }, (_, index) => (
+        <div key={index} className="flex items-center gap-4 px-4 py-4">
+          <Skeleton className="size-10 shrink-0 rounded-full" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-40" />
+            <Skeleton className="h-3 w-56" />
+          </div>
+          <Skeleton className="h-8 w-24 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function MissingAdminRecord({
@@ -392,12 +428,12 @@ function MissingAdminRecord({
   onBack: () => void;
 }) {
   return (
-    <div className="py-16 text-center">
-      <p className="text-sm font-medium">{label} not found</p>
-      <p className="mt-1 text-xs text-muted-foreground">
+    <div className="rounded-2xl bg-surface py-16 text-center ring-1 ring-border">
+      <p className="font-display text-lg font-semibold">{label} not found</p>
+      <p className="mt-1.5 text-sm text-muted-foreground">
         It may have been removed or the link is stale.
       </p>
-      <Button className="mt-4" variant="outline" size="sm" onClick={onBack}>
+      <Button className="mt-5" variant="outline" size="sm" onClick={onBack}>
         <ArrowLeft /> Back to list
       </Button>
     </div>
@@ -406,9 +442,12 @@ function MissingAdminRecord({
 
 function AccessLink({ kind, url, copied, onCopied }: { kind: AccessLinkKind; url: string; copied: boolean; onCopied: () => void }) {
   return (
-    <div className="mt-6 border-y py-4">
-      <InputGroup className="h-10 bg-background">
-        <InputGroupAddon><InputGroupText>{kind === "invitation" ? "Invitation" : "Recovery"}</InputGroupText></InputGroupAddon>
+    <div className="mt-6 rounded-2xl bg-primary/8 p-4 ring-1 ring-primary/25">
+      <p className="mb-2.5 text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
+        One-time link — share it over a trusted channel
+      </p>
+      <InputGroup className="h-10 bg-surface">
+        <InputGroupAddon><InputGroupText className="font-medium">{kind === "invitation" ? "Invitation" : "Recovery"}</InputGroupText></InputGroupAddon>
         <InputGroupInput readOnly value={url} />
         <InputGroupAddon align="inline-end">
           <InputGroupButton size="icon-sm" variant="outline" onClick={() => void navigator.clipboard.writeText(url).then(onCopied)}>

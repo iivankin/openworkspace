@@ -119,11 +119,11 @@ export function ComposeWindow({
     return (
       <section
         aria-label="Minimized message composer"
-        className="fixed right-4 bottom-4 z-50 flex h-12 w-[min(360px,calc(100vw-2rem))] items-center border bg-background px-4 shadow-2xl"
+        className="fixed right-4 bottom-4 z-50 flex h-13 w-[min(360px,calc(100vw-2rem))] animate-rise items-center gap-1 rounded-xl bg-surface pr-1.5 pl-4 shadow-2xl ring-1 ring-border"
       >
         <button
           type="button"
-          className="min-w-0 flex-1 truncate text-left text-sm font-medium"
+          className="min-w-0 flex-1 truncate text-left text-sm font-semibold"
           onClick={() => setMinimized(false)}
         >
           {subject || "New message"}
@@ -142,10 +142,10 @@ export function ComposeWindow({
     <section
       role="dialog"
       aria-label="New message"
-      className="fixed inset-0 z-50 flex flex-col border bg-background shadow-2xl sm:inset-auto sm:right-5 sm:bottom-5 sm:h-[min(480px,calc(100dvh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))] sm:rounded-xl"
+      className="fixed inset-0 z-50 flex animate-rise flex-col bg-surface shadow-2xl ring-1 ring-border sm:inset-auto sm:right-5 sm:bottom-5 sm:h-[min(480px,calc(100dvh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))] sm:rounded-2xl"
     >
       <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
-        <header className="flex h-12 shrink-0 items-center border-b px-4">
+        <header className="flex h-13 shrink-0 items-center gap-1 border-b border-border/70 bg-surface-sunken/70 pr-1.5 pl-4 sm:rounded-t-2xl">
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold">New message</p>
             <p className="truncate text-[11px] text-muted-foreground">From {mailbox.address}</p>
@@ -158,10 +158,10 @@ export function ComposeWindow({
           </Button>
         </header>
 
-        <div className="shrink-0 divide-y border-b px-4">
-          <InputGroup className="h-11 rounded-none border-0 bg-transparent dark:bg-transparent">
+        <div className="shrink-0 divide-y divide-border/70 border-b border-border/70 px-4">
+          <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
             <InputGroupAddon className="w-14 justify-start pl-0">
-              <InputGroupText className="text-xs">To</InputGroupText>
+              <InputGroupText className="text-xs font-medium">To</InputGroupText>
             </InputGroupAddon>
             <InputGroupInput className="px-3" value={to} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" />
             <InputGroupAddon align="inline-end" className="gap-0 pr-0">
@@ -173,9 +173,9 @@ export function ComposeWindow({
           {showCc && <RecipientFieldRow label="Cc" value={cc} onChange={setCc} />}
           {showBcc && <RecipientFieldRow label="Bcc" value={bcc} onChange={setBcc} />}
           {showReplyTo && <RecipientFieldRow label="Reply-to" value={replyTo} onChange={setReplyTo} />}
-          <InputGroup className="h-11 rounded-none border-0 bg-transparent dark:bg-transparent">
+          <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
             <InputGroupAddon className="w-14 justify-start pl-0">
-              <InputGroupText className="text-xs">Subject</InputGroupText>
+              <InputGroupText className="text-xs font-medium">Subject</InputGroupText>
             </InputGroupAddon>
             <InputGroupInput
               className="px-3"
@@ -188,23 +188,23 @@ export function ComposeWindow({
         </div>
 
         {forwardedMessage && (
-          <div className="shrink-0 border-b px-5 py-2.5 text-xs">
-            <p className="font-medium">Forwarding {forwardedMessage.fromName || forwardedMessage.fromAddress}</p>
+          <div className="shrink-0 border-b border-border/70 bg-primary/8 px-4 py-2.5 text-xs">
+            <p className="font-semibold">Forwarding {forwardedMessage.fromName || forwardedMessage.fromAddress}</p>
             <p className="mt-0.5 truncate text-muted-foreground">
               {forwardedMessage.subject} · {forwardedMessage.preview}
             </p>
           </div>
         )}
 
-        <Textarea className="min-h-0 flex-1 resize-none rounded-none border-0 px-5 py-4 text-sm leading-6 shadow-none focus-visible:ring-0" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write a message" />
+        <Textarea className="min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent px-4 py-4 text-[0.9375rem] leading-[1.65] shadow-none hover:border-transparent focus-visible:ring-0 dark:bg-transparent" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write a message" />
 
         {files.length > 0 && (
-          <div className="max-h-28 shrink-0 overflow-y-auto border-t px-4 py-2">
+          <div className="max-h-28 shrink-0 overflow-y-auto border-t border-border/70 px-4 py-2">
             {files.map((file, index) => (
               <div key={`${file.name}-${index}`} className="flex items-center gap-2 py-1 text-xs">
                 <Paperclip className="size-3.5 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                <span className="text-muted-foreground">{formatBytes(file.size)}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
+                <span className="text-muted-foreground tabular-nums">{formatBytes(file.size)}</span>
                 <Button type="button" variant="ghost" size="icon-xs" onClick={() => removeFile(index)}>
                   <X /><span className="sr-only">Remove {file.name}</span>
                 </Button>
@@ -213,7 +213,7 @@ export function ComposeWindow({
           </div>
         )}
 
-        <footer className="flex h-14 shrink-0 items-center gap-2 border-t px-4">
+        <footer className="flex h-15 shrink-0 items-center gap-2 border-t border-border/70 bg-surface-sunken/70 px-3 sm:rounded-b-2xl">
           <input
             ref={fileInput}
             className="sr-only"
