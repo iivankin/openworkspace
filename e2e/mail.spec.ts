@@ -77,8 +77,18 @@ test("opens outbound delivery details without crashing", async ({ page }, testIn
 test("searches message bodies across the selected folder", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.waitForURL(/\/mail\//u);
   const search = page.locator('input[placeholder="Search in Inbox"]:visible');
-  await search.fill("three decisions");
+  await Promise.all([
+    page.waitForResponse((response) => {
+      return (
+        response.url().includes("/api/mail/conversations") &&
+        response.url().includes("search=three") &&
+        response.ok()
+      );
+    }),
+    search.fill("three decisions"),
+  ]);
 
   await expect(page.getByText("The craft behind fast software", { exact: true })).toBeVisible();
   await expect(page.getByText("Friday launch checklist", { exact: true })).toHaveCount(0);
@@ -117,6 +127,61 @@ test("admin can edit an existing user and create recovery", async ({ page }, tes
   await page.goBack();
   await expect(page.getByRole("button", { name: "Save changes" })).toBeVisible();
   await expect(page.locator("input[readonly]")).toHaveCount(0);
+});
+
+test("direct admin links select loaded SSO and group records", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop administration assertion");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  const created = await page.evaluate(async () => {
+    const stateResponse = await fetch("/api/admin/state");
+    const state = await stateResponse.json() as {
+      users: Array<{ id: string }>;
+    };
+    const userId = state.users[0]!.id;
+    const [clientResponse, groupResponse] = await Promise.all([
+      fetch("/api/admin/oidc-clients", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Direct-link application",
+          clientType: "public",
+          accessPolicy: "selected_users",
+          redirectUris: ["https://direct.example.test/callback"],
+          postLogoutRedirectUris: [],
+          allowedOrigins: [],
+          allowedScopes: ["openid"],
+          trusted: true,
+          enabled: true,
+          assignedUserIds: [userId],
+          exposedGroupIds: [],
+        }),
+      }),
+      fetch("/api/admin/groups", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Direct-link group",
+          slug: "direct-link-group",
+          description: null,
+          memberIds: [userId],
+        }),
+      }),
+    ]);
+    return {
+      clientStatus: clientResponse.status,
+      groupStatus: groupResponse.status,
+    };
+  });
+  expect(created).toEqual({ clientStatus: 201, groupStatus: 201 });
+
+  await page.goto("/admin?view=sso-applications");
+  await expect(
+    page.getByRole("heading", { name: "Direct-link application" }),
+  ).toBeVisible();
+  await page.goto("/admin?view=groups");
+  await expect(page.getByRole("heading", { name: "Direct-link group" }))
+    .toBeVisible();
 });
 
 test("desktop mail uses navbar navigation and a corner composer", async ({ page }, testInfo) => {

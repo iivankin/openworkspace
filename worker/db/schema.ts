@@ -27,7 +27,7 @@ export const users = sqliteTable(
     role: text("role", { enum: ["admin", "member"] })
       .notNull()
       .default("member"),
-    status: text("status", { enum: ["invited", "active"] })
+    status: text("status", { enum: ["invited", "active", "disabled"] })
       .notNull()
       .default("invited"),
     ...timestamps,
@@ -208,6 +208,305 @@ export const sessions = sqliteTable(
   (table) => [
     index("sessions_user_idx").on(table.userId),
     index("sessions_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const oidcClients = sqliteTable(
+  "oidc_clients",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    clientType: text("client_type", {
+      enum: ["public", "confidential"],
+    }).notNull(),
+    secretHash: text("secret_hash"),
+    accessPolicy: text("access_policy", {
+      enum: ["all_active_users", "selected_users"],
+    })
+      .notNull()
+      .default("selected_users"),
+    redirectUris: text("redirect_uris", { mode: "json" })
+      .$type<string[]>()
+      .notNull(),
+    postLogoutRedirectUris: text("post_logout_redirect_uris", { mode: "json" })
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'`),
+    allowedOrigins: text("allowed_origins", { mode: "json" })
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'`),
+    allowedScopes: text("allowed_scopes", { mode: "json" })
+      .$type<string[]>()
+      .notNull(),
+    trusted: integer("trusted", { mode: "boolean" }).notNull().default(false),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("oidc_clients_enabled_idx").on(table.enabled),
+    index("oidc_clients_created_by_idx").on(table.createdByUserId),
+  ],
+);
+
+export const oidcClientAssignments = sqliteTable(
+  "oidc_client_assignments",
+  {
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.userId] }),
+    index("oidc_client_assignments_user_idx").on(table.userId),
+  ],
+);
+
+export const identityGroups = sqliteTable(
+  "identity_groups",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    description: text("description"),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("identity_groups_slug_unique").on(table.slug),
+    index("identity_groups_name_idx").on(table.name),
+  ],
+);
+
+export const groupMembers = sqliteTable(
+  "group_members",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => identityGroups.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.groupId, table.userId] }),
+    index("group_members_user_idx").on(table.userId),
+  ],
+);
+
+export const oidcClientGroupClaims = sqliteTable(
+  "oidc_client_group_claims",
+  {
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => identityGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.groupId] }),
+    index("oidc_client_group_claims_group_idx").on(table.groupId),
+  ],
+);
+
+export const oidcAuthorizationRequests = sqliteTable(
+  "oidc_authorization_requests",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["awaiting_login", "authenticated", "awaiting_consent"],
+    })
+      .notNull()
+      .default("awaiting_consent"),
+    browserSecretHash: text("browser_secret_hash"),
+    forceConsent: integer("force_consent", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    redirectUri: text("redirect_uri").notNull(),
+    scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+    state: text("state"),
+    nonce: text("nonce"),
+    codeChallenge: text("code_challenge").notNull(),
+    authTime: integer("auth_time", { mode: "timestamp_ms" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("oidc_authorization_requests_expiry_idx").on(table.expiresAt),
+    index("oidc_authorization_requests_user_idx").on(table.userId),
+    index("oidc_authorization_requests_status_idx").on(table.status),
+  ],
+);
+
+export const oidcAuthorizationCodes = sqliteTable(
+  "oidc_authorization_codes",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    redirectUri: text("redirect_uri").notNull(),
+    scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+    nonce: text("nonce"),
+    codeChallenge: text("code_challenge").notNull(),
+    authTime: integer("auth_time", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    usedAt: integer("used_at", { mode: "timestamp_ms" }),
+    issuedAccessTokenHash: text("issued_access_token_hash"),
+    issuedRefreshFamilyId: text("issued_refresh_family_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("oidc_authorization_codes_expiry_idx").on(table.expiresAt),
+    index("oidc_authorization_codes_user_client_idx").on(
+      table.userId,
+      table.clientId,
+    ),
+  ],
+);
+
+export const oidcGrants = sqliteTable(
+  "oidc_grants",
+  {
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+    grantedAt: integer("granted_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clientId, table.userId] }),
+    index("oidc_grants_user_idx").on(table.userId),
+  ],
+);
+
+export const oidcAccessTokens = sqliteTable(
+  "oidc_access_tokens",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    familyId: text("family_id").notNull(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+    authTime: integer("auth_time", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("oidc_access_tokens_expiry_idx").on(table.expiresAt),
+    index("oidc_access_tokens_family_idx").on(table.familyId),
+    index("oidc_access_tokens_user_client_idx").on(
+      table.userId,
+      table.clientId,
+    ),
+  ],
+);
+
+export const oidcRefreshTokens = sqliteTable(
+  "oidc_refresh_tokens",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    familyId: text("family_id").notNull(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => oidcClients.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+    authTime: integer("auth_time", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    usedAt: integer("used_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    replacedByTokenHash: text("replaced_by_token_hash"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("oidc_refresh_tokens_family_idx").on(table.familyId),
+    index("oidc_refresh_tokens_expiry_idx").on(table.expiresAt),
+    index("oidc_refresh_tokens_user_client_idx").on(
+      table.userId,
+      table.clientId,
+    ),
+  ],
+);
+
+export const oidcAuditEvents = sqliteTable(
+  "oidc_audit_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    actorUserId: text("actor_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    subjectUserId: text("subject_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    clientId: text("client_id"),
+    detail: text("detail", { mode: "json" }).$type<Record<string, unknown>>(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("oidc_audit_events_created_idx").on(table.createdAt),
+    index("oidc_audit_events_client_idx").on(table.clientId),
+  ],
+);
+
+export const rateLimitBuckets = sqliteTable(
+  "rate_limit_buckets",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull().default(1),
+    windowEndsAt: integer("window_ends_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("rate_limit_buckets_expiry_idx").on(table.windowEndsAt),
   ],
 );
 

@@ -5,8 +5,14 @@ export type SessionUser = Pick<
   "id" | "name" | "avatarUrl" | "role" | "status"
 >;
 
+export type OidcBindings = {
+  OIDC_ISSUER?: string;
+  OIDC_SIGNING_PRIVATE_JWK?: string;
+  OIDC_PREVIOUS_PUBLIC_JWKS?: string;
+};
+
 export type AppEnv = {
-  Bindings: Env;
+  Bindings: Env & OidcBindings;
   Variables: {
     user: SessionUser;
   };

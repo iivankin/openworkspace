@@ -36,4 +36,10 @@ export const authenticationResponseSchema =
   );
 
 export const mockBootstrapSchema = bootstrapInputSchema;
-export const mockLoginSchema = z.object({ userId: z.string().min(1) });
+export const loginOptionsSchema = z.object({
+  oidcRequestId: z.string().min(1).optional(),
+});
+export const mockLoginSchema = z.object({
+  userId: z.string().min(1),
+  oidcRequestId: z.string().min(1).optional(),
+});

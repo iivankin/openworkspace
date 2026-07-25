@@ -12,7 +12,7 @@ import { and, eq, gt, lte } from "drizzle-orm";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Database } from "../db/client";
-import { authChallenges, passkeyCredentials } from "../db/schema";
+import { authChallenges, passkeyCredentials, users } from "../db/schema";
 import type { AppEnv } from "../env";
 import { base64UrlToBytes, bytesToBase64Url } from "../lib/crypto";
 import { createId } from "../lib/ids";
@@ -196,7 +196,11 @@ export async function finishRegistration(
   };
 }
 
-export async function beginAuthentication(db: Database, request: Request) {
+export async function beginAuthentication(
+  db: Database,
+  request: Request,
+  payload?: ChallengePayload,
+) {
   const { rpId } = getRelyingParty(request);
   const options = await generateAuthenticationOptions({
     rpID: rpId,
@@ -205,6 +209,7 @@ export async function beginAuthentication(db: Database, request: Request) {
   const saved = await saveChallenge(db, request, {
     challenge: options.challenge,
     kind: "authentication",
+    payload,
   });
   return { options, challenge: saved };
 }
@@ -215,11 +220,25 @@ export async function finishAuthentication(
   response: AuthenticationResponseJSON,
 ) {
   const [stored] = await db
-    .select()
+    .select({
+      credentialId: passkeyCredentials.credentialId,
+      userId: passkeyCredentials.userId,
+      publicKey: passkeyCredentials.publicKey,
+      counter: passkeyCredentials.counter,
+      transports: passkeyCredentials.transports,
+    })
     .from(passkeyCredentials)
-    .where(eq(passkeyCredentials.credentialId, response.id))
+    .innerJoin(users, eq(passkeyCredentials.userId, users.id))
+    .where(
+      and(
+        eq(passkeyCredentials.credentialId, response.id),
+        eq(users.status, "active"),
+      ),
+    )
     .limit(1);
-  if (!stored) throw new Error("This passkey is not registered");
+  if (!stored) {
+    throw new Error("This passkey is unavailable or the account is disabled");
+  }
 
   const verification = await verifyAuthenticationResponse({
     response,

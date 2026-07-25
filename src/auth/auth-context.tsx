@@ -16,6 +16,7 @@ type AuthContextValue = AuthState & {
   loading: boolean;
   bootstrap: (input: { name: string; email: string }, mock?: boolean) => Promise<void>;
   login: (mock?: boolean) => Promise<void>;
+  reauthenticate: (oidcRequestId: string, mock?: boolean) => Promise<string>;
   logout: () => Promise<void>;
   completeAccessLink: (
     kind: AccessLinkKind,
@@ -70,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       } else {
         const options = await responseJson(
-          await api.api.auth.login.options.$post(),
+          await api.api.auth.login.options.$post({ query: {} }),
         );
         const { startAuthentication } = await import("@simplewebauthn/browser");
         const response = await startAuthentication({ optionsJSON: options.options });
@@ -79,6 +80,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       }
       await refresh();
+    },
+    [refresh],
+  );
+
+  const reauthenticate = useCallback(
+    async (oidcRequestId: string, mock = false) => {
+      let result: { redirectTo: string | null };
+      if (mock) {
+        result = await responseJson(
+          await api.api.auth.mock.login.$post({
+            json: {
+              userId: "usr_demo_admin",
+              oidcRequestId,
+            },
+          }),
+        );
+      } else {
+        const options = await responseJson(
+          await api.api.auth.login.options.$post({
+            query: { oidcRequestId },
+          }),
+        );
+        const { startAuthentication } = await import("@simplewebauthn/browser");
+        const response = await startAuthentication({ optionsJSON: options.options });
+        result = await responseJson(
+          await api.api.auth.login.verify.$post({ json: response }),
+        );
+      }
+      await refresh();
+      if (!result.redirectTo) {
+        throw new Error("OIDC re-authentication did not return a continuation");
+      }
+      return result.redirectTo;
     },
     [refresh],
   );
@@ -128,6 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading: state.isLoading,
     bootstrap,
     login,
+    reauthenticate,
     logout,
     completeAccessLink,
   };

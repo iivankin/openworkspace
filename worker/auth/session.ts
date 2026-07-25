@@ -34,11 +34,26 @@ export async function createSession(
     userId,
     expiresAt,
     userAgent: c.req.header("user-agent") ?? null,
+    createdAt: now,
   });
   setCookie(c, SESSION_COOKIE, token, cookieOptions(c.req.raw, expiresAt));
 }
 
-export async function readSessionUserFromContext(c: Context<AppEnv>) {
+export async function replaceSession(
+  db: Database,
+  c: Context<AppEnv>,
+  userId: string,
+) {
+  const currentToken = getCookie(c, SESSION_COOKIE);
+  if (currentToken) {
+    await db
+      .delete(sessions)
+      .where(eq(sessions.tokenHash, await hashToken(currentToken)));
+  }
+  await createSession(db, c, userId);
+}
+
+export async function readSessionFromContext(c: Context<AppEnv>) {
   const token = getCookie(c, SESSION_COOKIE);
   if (!token) return null;
 
@@ -51,6 +66,7 @@ export async function readSessionUserFromContext(c: Context<AppEnv>) {
       avatarUrl: users.avatarUrl,
       role: users.role,
       status: users.status,
+      authTime: sessions.createdAt,
     })
     .from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id))
@@ -63,7 +79,13 @@ export async function readSessionUserFromContext(c: Context<AppEnv>) {
     )
     .limit(1);
 
-  return row ?? null;
+  if (!row) return null;
+  const { authTime, ...user } = row;
+  return { user, authTime };
+}
+
+export async function readSessionUserFromContext(c: Context<AppEnv>) {
+  return (await readSessionFromContext(c))?.user ?? null;
 }
 
 export async function destroySession(db: Database, c: Context<AppEnv>) {

@@ -37,6 +37,40 @@ Cloudflare provisions D1 and R2 from `wrangler.jsonc`. Domain mail setup is manu
 
 Unknown catch-all recipients are rejected permanently. Only addresses you create in the app accept mail.
 
+### Enable the OIDC identity provider
+
+Each deployment can act as one OpenID Connect issuer for its existing users.
+Configure the canonical public origin and an RSA signing key:
+
+```bash
+bun run oidc:keygen
+wrangler secret put OIDC_ISSUER
+wrangler secret put OIDC_SIGNING_PRIVATE_JWK
+```
+
+Use the exact HTTPS origin (for example `https://mail.example.com`) as
+`OIDC_ISSUER`, and paste the generated JSON as `OIDC_SIGNING_PRIVATE_JWK`.
+Then open **Administration → SSO applications** to register each relying
+party's exact redirect URI, scopes, client type, and assigned users. A
+confidential client secret is displayed once.
+
+Clients discover the provider at:
+
+```text
+https://mail.example.com/.well-known/openid-configuration
+```
+
+The provider supports Authorization Code with mandatory PKCE S256, public and
+confidential clients, `openid profile email groups offline_access`, rotating
+refresh tokens, revocation, UserInfo, and RP-initiated logout. Group membership
+never grants application access; the client only receives group slugs selected
+in its claim allowlist.
+
+For signing-key rotation, retain the previous public JWK in a
+`{"keys":[...]}` value under `OIDC_PREVIOUS_PUBLIC_JWKS`, deploy the new private
+key, and keep the previous public key published until old ID tokens and JWKS
+caches have expired.
+
 Docs: [Deploy buttons](https://developers.cloudflare.com/workers/platform/deploy-buttons/) · [Catch-all](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/#catch-all-rule) · [Email Sending](https://developers.cloudflare.com/email-service/get-started/send-emails/) · [Event subscriptions](https://developers.cloudflare.com/email-service/platform/event-subscriptions/)
 
 ## Local development

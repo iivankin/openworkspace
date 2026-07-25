@@ -4,12 +4,14 @@ import {
   Check,
   Copy,
   Inbox,
+  KeyRound,
   MailPlus,
   Settings2,
   SlidersHorizontal,
   type LucideIcon,
   UserPlus,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { Fragment, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -49,9 +51,25 @@ import type {
   UpdateUserInput,
 } from "./types";
 import { UserAccessEditor } from "./user-access-editor";
+import { GroupsManager } from "./groups-manager";
+import { SsoApplications } from "./sso-applications";
 
-type AdminView = "people" | "mailboxes" | "invite" | "new-mailbox" | "user" | "mailbox";
-type AdminSection = "people" | "mailboxes" | "invite" | "new-mailbox";
+type AdminView =
+  | "people"
+  | "mailboxes"
+  | "sso-applications"
+  | "groups"
+  | "invite"
+  | "new-mailbox"
+  | "user"
+  | "mailbox";
+type AdminSection =
+  | "people"
+  | "mailboxes"
+  | "sso-applications"
+  | "groups"
+  | "invite"
+  | "new-mailbox";
 
 const adminSections: Array<{
   id: AdminSection;
@@ -61,6 +79,8 @@ const adminSections: Array<{
 }> = [
   { id: "people", label: "People", Icon: Users },
   { id: "mailboxes", label: "Mailboxes", Icon: Settings2 },
+  { id: "sso-applications", label: "SSO applications", Icon: KeyRound, separatorBefore: true },
+  { id: "groups", label: "Identity groups", Icon: UsersRound },
   { id: "invite", label: "Invite person", Icon: UserPlus, separatorBefore: true },
   { id: "new-mailbox", label: "New shared mailbox", Icon: MailPlus },
 ];
@@ -68,6 +88,8 @@ const adminSections: Array<{
 const viewCopy: Record<AdminView, { title: string; description: string }> = {
   people: { title: "People", description: "Workspace members and their mailbox access." },
   mailboxes: { title: "Mailboxes", description: "Personal and shared addresses provisioned for this workspace." },
+  "sso-applications": { title: "SSO applications", description: "OIDC clients, callbacks, user assignments, and released claims." },
+  groups: { title: "Identity groups", description: "Reusable memberships exposed to approved OIDC applications." },
   invite: { title: "Invite person", description: "Create a personal mailbox and a one-time registration link." },
   "new-mailbox": { title: "New shared mailbox", description: "Choose the address and exactly who can read or send from it." },
   user: { title: "Person", description: "Profile details and passkey recovery." },
@@ -207,6 +229,21 @@ export function AdminPage() {
                 mailboxes={state.data?.mailboxes}
                 loading={state.isLoading}
                 onManage={(id) => go("mailbox", id)}
+              />
+            )}
+            {view === "sso-applications" && (
+              <SsoApplications
+                clients={state.data?.oidcClients ?? []}
+                users={state.data?.users ?? []}
+                groups={state.data?.groups ?? []}
+                loading={state.isLoading}
+              />
+            )}
+            {view === "groups" && (
+              <GroupsManager
+                groups={state.data?.groups ?? []}
+                users={state.data?.users ?? []}
+                loading={state.isLoading}
               />
             )}
             {view === "invite" && (

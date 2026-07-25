@@ -91,9 +91,17 @@ export async function finishBootstrap(
   return challenge.userId;
 }
 
-export async function beginLogin(db: Database, request: Request) {
+export async function beginLogin(
+  db: Database,
+  request: Request,
+  oidcRequestId?: string,
+) {
   if (!(await hasInstallation(db))) throw new Error("Set up the first account first");
-  return beginAuthentication(db, request);
+  return beginAuthentication(
+    db,
+    request,
+    oidcRequestId ? { oidcRequestId } : undefined,
+  );
 }
 
 export async function finishLogin(
@@ -102,7 +110,14 @@ export async function finishLogin(
   response: AuthenticationResponseJSON,
 ) {
   const challenge = await consumeChallenge(db, challengeId, "authentication");
-  return finishAuthentication(db, challenge, response);
+  const userId = await finishAuthentication(db, challenge, response);
+  return {
+    userId,
+    oidcRequestId:
+      typeof challenge.payload?.oidcRequestId === "string"
+        ? challenge.payload.oidcRequestId
+        : undefined,
+  };
 }
 
 async function findAccessLink(

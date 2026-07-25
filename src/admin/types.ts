@@ -14,10 +14,12 @@ export type InvitationInput = {
   avatarUrl: string | null;
 };
 
-export type UpdateUserInput = Pick<
-  AdminUser,
-  "name" | "avatarUrl"
->;
+export type UpdateUserInput = Pick<AdminUser, "name" | "avatarUrl"> & {
+  status?: "active" | "disabled";
+};
+
+export type AdminGroup = AdminStateResponse["groups"][number];
+export type AdminOidcClient = AdminStateResponse["oidcClients"][number];
 
 export type CreateMailboxInput = {
   displayName: string;

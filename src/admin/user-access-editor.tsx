@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import type { AdminUser, UpdateUserInput } from "./types";
 
 export function UserAccessEditor({
@@ -21,12 +22,16 @@ export function UserAccessEditor({
 }) {
   const [name, setName] = useState(user.name);
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl ?? "");
+  const [active, setActive] = useState(user.status === "active");
 
   function submit(event: FormEvent) {
     event.preventDefault();
     onSubmit({
       name,
       avatarUrl: avatarUrl.trim() || null,
+      ...(user.status === "invited"
+        ? {}
+        : { status: active ? "active" as const : "disabled" as const }),
     });
   }
 
@@ -67,15 +72,30 @@ export function UserAccessEditor({
           />
         </div>
       </div>
+      {user.status !== "invited" && (
+        <label className="mt-4 flex items-center justify-between gap-4 border-y py-3">
+          <span>
+            <span className="block text-sm font-medium">Account access</span>
+            <span className="block text-xs text-muted-foreground">
+              Disabling ends sessions and revokes every OIDC token.
+            </span>
+          </span>
+          <Switch checked={active} onCheckedChange={setActive} />
+        </label>
+      )}
       <div className="mt-4 flex items-center justify-between gap-3">
         <Button
           type="button"
           variant="outline"
-          disabled={accessLinkPending}
+          disabled={accessLinkPending || user.status === "disabled"}
           onClick={onCreateAccessLink}
         >
           {accessLinkPending ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
-          {user.status === "invited" ? "New invitation link" : "Recovery link"}
+          {user.status === "invited"
+            ? "New invitation link"
+            : user.status === "disabled"
+              ? "Enable account for recovery"
+              : "Recovery link"}
         </Button>
         <Button disabled={pending}>
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}

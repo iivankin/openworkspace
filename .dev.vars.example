@@ -1,3 +1,7 @@
 # Development-only authentication helper. Never configure this in production.
 ALLOW_MOCK_AUTH=true
 
+OIDC_ISSUER=http://localhost:5173
+# Generate with `bun run oidc:keygen`. Configure the production value with
+# `wrangler secret put OIDC_SIGNING_PRIVATE_JWK`.
+OIDC_SIGNING_PRIVATE_JWK=

@@ -12,6 +12,13 @@ import { consumeDeliveryEvents } from "./mail/delivery-events";
 import { inboundDeliveryId } from "./mail/inbound-delivery";
 import { mailRoutes } from "./mail/routes";
 import { mailboxStub } from "./mailbox";
+import {
+  oidcConsentRoutes,
+  oidcLoginRoutes,
+  oidcLogoutRoutes,
+  oidcRoutes,
+  wellKnownRoutes,
+} from "./oidc/routes";
 export { MailboxDO } from "./mailbox";
 import { normalizeMailboxAddress } from "./lib/ids";
 
@@ -20,9 +27,14 @@ const app = new Hono<AppEnv>()
   .get("/api/health", (c) => c.json({ ok: true as const }))
   .route("/api/auth", authRoutes)
   .route("/api/auth/mock", mockAuthRoutes)
+  .route("/api/oidc/consent", oidcConsentRoutes)
+  .route("/api/oidc/login", oidcLoginRoutes)
+  .route("/api/oidc/logout", oidcLogoutRoutes)
   .route("/api/downloads", mailDownloadRoutes)
   .route("/api/mail", mailRoutes)
   .route("/api/admin", adminRoutes)
+  .route("/.well-known", wellKnownRoutes)
+  .route("/oauth", oidcRoutes)
   .notFound((c) =>
     c.json(
       { ok: false as const, error: { code: "NOT_FOUND", message: "Not found" } },

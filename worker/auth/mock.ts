@@ -1,5 +1,5 @@
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { createDb } from "../db/client";
 import { users } from "../db/schema";
@@ -14,7 +14,12 @@ import {
 import { mailboxStub } from "../mailbox";
 import { provisionInstallationAccount } from "./personal-account";
 import { mockBootstrapSchema, mockLoginSchema } from "./schemas";
-import { createSession } from "./session";
+import { createSession, replaceSession } from "./session";
+import {
+  authenticateLoginTransaction,
+  browserLoginTransaction,
+  clearLoginTransactionCookie,
+} from "../oidc/transaction";
 
 function assertMockEnabled(c: { env: Env }) {
   return c.env.ALLOW_MOCK_AUTH === "true";
@@ -52,10 +57,19 @@ export const mockAuthRoutes = new Hono<AppEnv>()
       return apiError(c, 404, "NOT_FOUND", "Not found");
     }
     const db = createDb(c.env.DB);
+    const input = c.req.valid("json");
+    if (input.oidcRequestId) {
+      await browserLoginTransaction(db, c, input.oidcRequestId);
+    }
     const [user] = await db
       .select({ id: users.id })
       .from(users)
-      .where(eq(users.id, c.req.valid("json").userId))
+      .where(
+        and(
+          eq(users.id, c.req.valid("json").userId),
+          eq(users.status, "active"),
+        ),
+      )
       .limit(1);
     if (!user) return apiError(c, 404, "NOT_FOUND", "User not found");
     if (user.id === "usr_demo_admin") {
@@ -69,6 +83,16 @@ export const mockAuthRoutes = new Hono<AppEnv>()
         ),
       );
     }
+    if (input.oidcRequestId) {
+      const transaction = await authenticateLoginTransaction(
+        db,
+        input.oidcRequestId,
+        user.id,
+      );
+      await replaceSession(db, c, user.id);
+      clearLoginTransactionCookie(c, input.oidcRequestId);
+      return c.json({ ok: true as const, ...transaction });
+    }
     await createSession(db, c, user.id);
-    return c.json({ ok: true as const });
+    return c.json({ ok: true as const, redirectTo: null });
   });
