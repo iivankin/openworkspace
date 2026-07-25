@@ -85,7 +85,9 @@ async function saveChallenge(
     id,
     challenge: input.challenge,
     kind: input.kind,
-    userId: input.userId,
+    // Bootstrap allocates a user id before the users row exists; D1 enforces the
+    // FK, so keep the column null and carry the id in payload instead.
+    userId: input.kind === "bootstrap" ? undefined : input.userId,
     accessLinkId: input.accessLinkId,
     payload: input.payload,
     rpId,

@@ -42,6 +42,8 @@ export async function beginBootstrap(
 ) {
   if (await hasInstallation(db)) throw new Error("Installation is already set up");
   const userId = createId("usr");
+  // userId lives in payload only — the users row is created on verify, so the
+  // auth_challenges.user_id FK must stay null during bootstrap.
   return beginRegistration(db, request, {
     kind: "bootstrap",
     userId,
@@ -50,6 +52,7 @@ export async function beginBootstrap(
     payload: {
       name: input.name.trim(),
       email: normalizeMailboxAddress(input.email),
+      userId,
     },
   });
 }
@@ -60,9 +63,15 @@ export async function finishBootstrap(
   response: RegistrationResponseJSON,
 ) {
   const challenge = await consumeChallenge(db, challengeId, "bootstrap");
-  const payload = challenge.payload as { name?: unknown; email?: unknown };
+  const payload = challenge.payload as {
+    name?: unknown;
+    email?: unknown;
+    userId?: unknown;
+  };
+  const userId =
+    typeof payload.userId === "string" ? payload.userId : challenge.userId;
   if (
-    !challenge.userId ||
+    !userId ||
     typeof payload.name !== "string" ||
     typeof payload.email !== "string"
   ) {
@@ -72,23 +81,23 @@ export async function finishBootstrap(
   const mailboxId = createId("mbx");
   const now = new Date();
   await provisionInstallationAccount(db, {
-    userId: challenge.userId,
+    userId,
     mailboxId,
     name: payload.name,
     email: payload.email,
     role: "admin",
     status: "active",
-    createdByUserId: challenge.userId,
+    createdByUserId: userId,
     now,
     credential: {
       ...credential,
-      userId: challenge.userId,
+      userId,
       label: "Primary passkey",
       createdAt: now,
     },
   });
 
-  return challenge.userId;
+  return userId;
 }
 
 export async function beginLogin(

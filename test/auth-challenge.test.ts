@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,6 +20,33 @@ function challenge(id: string, expiresAt: Date) {
 }
 
 describe("WebAuthn challenges", () => {
+  it("stores bootstrap challenges without a users FK row", async () => {
+    const response = await exports.default.fetch(
+      new Request("http://example.test/api/auth/bootstrap/options", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Bootstrap Admin",
+          email: "bootstrap@example.test",
+        }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: true };
+    expect(body.ok).toBe(true);
+
+    const db = createDb(env.DB);
+    const rows = await db.select().from(authChallenges);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind).toBe("bootstrap");
+    expect(rows[0]?.userId).toBeNull();
+    expect(rows[0]?.payload).toMatchObject({
+      name: "Bootstrap Admin",
+      email: "bootstrap@example.test",
+      userId: expect.stringMatching(/^usr_/),
+    });
+  });
+
   it("atomically consumes and deletes a valid challenge", async () => {
     const db = createDb(env.DB);
     const id = "chl_delete_after_consume";
