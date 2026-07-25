@@ -102,7 +102,7 @@ export function UserAccessEditor({
               ? "Enable account for recovery"
               : "Recovery link"}
         </Button>
-        <Button disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}
           Save changes
         </Button>

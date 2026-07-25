@@ -272,7 +272,7 @@ function GroupEditor({
             <Trash2 /> Delete
           </Button>
         )}
-        <Button disabled={save.isPending || !name || !slug}>
+        <Button type="submit" disabled={save.isPending || !name || !slug}>
           {save.isPending ? <LoaderCircle className="animate-spin" /> : <Save />}
           {group ? "Save group" : "Create group"}
         </Button>

@@ -8,8 +8,8 @@ import { useAuth } from "./auth-context";
 
 export function AuthScreen() {
   const auth = useAuth();
-  const [name, setName] = useState("Ilya");
-  const [email, setEmail] = useState("ilya@example.com");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function run(action: () => Promise<void>) {
@@ -65,7 +65,7 @@ export function AuthScreen() {
                 <Label htmlFor="email">Personal mailbox</Label>
                 <Input id="email" className="h-11" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
               </div>
-              <Button className="w-full" size="lg" disabled={busy}>
+              <Button className="w-full" type="submit" size="lg" disabled={busy}>
                 {busy ? <LoaderCircle className="animate-spin" /> : <Fingerprint />}
                 Create with passkey
               </Button>

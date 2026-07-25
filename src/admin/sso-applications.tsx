@@ -515,7 +515,7 @@ function ClientEditor({
             </Button>
           )}
         </div>
-        <Button disabled={save.isPending || !input.name || !redirectUris.trim()}>
+        <Button type="submit" disabled={save.isPending || !input.name || !redirectUris.trim()}>
           {save.isPending ? <LoaderCircle className="animate-spin" /> : <Save />}
           {client ? "Save application" : "Create application"}
         </Button>

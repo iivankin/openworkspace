@@ -58,7 +58,7 @@ export function MailboxAccessEditor({
         </fieldset>
       </AdminPanelBody>
       <AdminPanelFooter>
-        <Button disabled={pending || members.length === 0}>
+        <Button type="submit" disabled={pending || members.length === 0}>
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}
           Save access
         </Button>

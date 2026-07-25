@@ -88,7 +88,7 @@ export function InviteForm({
       </FieldGroup>
       </AdminPanelBody>
       <AdminPanelFooter>
-        <Button disabled={pending}>
+        <Button type="submit" disabled={pending}>
           {pending ? <LoaderCircle className="animate-spin" /> : <UserPlus />}
           Invite
         </Button>
@@ -131,7 +131,7 @@ export function MailboxForm({
         </FieldSet>
       </AdminPanelBody>
       <AdminPanelFooter>
-        <Button disabled={pending || members.length === 0}>
+        <Button type="submit" disabled={pending || members.length === 0}>
           {pending ? <LoaderCircle className="animate-spin" /> : <MailPlus />}
           Create
         </Button>
