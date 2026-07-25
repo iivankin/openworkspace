@@ -25,12 +25,9 @@ const mailboxMembersSchema = z
     { message: "A user may only be assigned once" },
   );
 
-const avatarUrlSchema = z.url().max(2048).nullable();
-
 export const createInvitationSchema = z.object({
   name: z.string().trim().min(2).max(80),
   email: emailSchema,
-  avatarUrl: avatarUrlSchema.default(null),
 });
 
 export const createMailboxSchema = z.object({
@@ -46,7 +43,6 @@ export const updateMailboxSchema = z.object({
 
 export const updateUserSchema = z.object({
   name: z.string().trim().min(2).max(80),
-  avatarUrl: avatarUrlSchema,
   status: z.enum(["active", "disabled"]).optional(),
 });
 

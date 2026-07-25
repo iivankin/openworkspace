@@ -3,14 +3,13 @@ import {
   ChevronsUpDown,
   Inbox,
   Mail,
-  Monitor,
-  Moon,
   PenLine,
   Search,
   Settings2,
-  Sun,
+  Settings,
   UserRound,
 } from "lucide-react";
+import { useNavigate } from "react-router";
 import { useAuth } from "@/auth/auth-context";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -25,14 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useTheme, type Theme } from "@/hooks/use-theme";
 import type { Mailbox } from "./types";
-
-const themeOptions: Array<{ value: Theme; label: string; Icon: typeof Sun }> = [
-  { value: "light", label: "Light", Icon: Sun },
-  { value: "dark", label: "Dark", Icon: Moon },
-  { value: "system", label: "System", Icon: Monitor },
-];
 
 export function MailHeader({
   mailbox,
@@ -56,7 +48,7 @@ export function MailHeader({
   onAdministration: () => void;
 }) {
   const auth = useAuth();
-  const { theme, setTheme } = useTheme();
+  const navigate = useNavigate();
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/80 px-3 backdrop-blur-xl sm:px-5">
@@ -154,30 +146,9 @@ export function MailHeader({
             </DropdownMenuGroup>
 
             <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Appearance</DropdownMenuLabel>
-            </DropdownMenuGroup>
-            <div className="flex gap-1 px-2 pb-1.5">
-              {themeOptions.map(({ value, label, Icon }) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={theme === value}
-                  onClick={() => setTheme(value)}
-                  className={cn(
-                    "flex flex-1 flex-col items-center gap-1 rounded-lg border py-2 text-[11px] font-medium transition-colors",
-                    theme === value
-                      ? "border-primary/40 bg-primary/12 text-foreground"
-                      : "border-transparent bg-surface-sunken text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Icon className="size-4" />
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => navigate("/settings")}>
+              <Settings />Settings
+            </DropdownMenuItem>
             {auth.user?.role === "admin" && (
               <DropdownMenuItem onClick={onAdministration}><Settings2 />Administration</DropdownMenuItem>
             )}

@@ -11,10 +11,9 @@ export type MailboxMemberPermission = AdminMailbox["members"][number];
 export type InvitationInput = {
   name: string;
   email: string;
-  avatarUrl: string | null;
 };
 
-export type UpdateUserInput = Pick<AdminUser, "name" | "avatarUrl"> & {
+export type UpdateUserInput = Pick<AdminUser, "name"> & {
   status?: "active" | "disabled";
 };
 

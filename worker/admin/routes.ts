@@ -133,6 +133,7 @@ export const adminRoutes = new Hono<AppEnv>()
   .get("/state", async (c) => {
     const db = createDb(c.env.DB);
     const [
+      installation,
       userRows,
       mailboxRows,
       memberships,
@@ -142,6 +143,11 @@ export const adminRoutes = new Hono<AppEnv>()
       groupMemberships,
       clientGroupClaims,
     ] = await Promise.all([
+      db
+        .select({ domain: installations.domain })
+        .from(installations)
+        .where(eq(installations.id, INSTALLATION_ID))
+        .limit(1),
       db
         .select({
           id: users.id,
@@ -206,6 +212,7 @@ export const adminRoutes = new Hono<AppEnv>()
     );
     return c.json({
       ok: true as const,
+      domain: installation[0]?.domain ?? null,
       users: userRows,
       mailboxes: mailboxRows.map((mailbox) => ({
         ...mailbox,
@@ -322,7 +329,7 @@ export const adminRoutes = new Hono<AppEnv>()
         mailboxId,
         name: input.name,
         email: input.email,
-        avatarUrl: input.avatarUrl,
+        avatarUrl: null,
         role: "member",
         status: "invited",
         createdByUserId: admin.id,
@@ -432,7 +439,6 @@ export const adminRoutes = new Hono<AppEnv>()
           .update(users)
           .set({
             name: input.name,
-            avatarUrl: input.avatarUrl,
             status: input.status ?? target.status,
             updatedAt: now,
           })

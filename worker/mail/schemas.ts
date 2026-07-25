@@ -25,6 +25,10 @@ export const mailboxQuerySchema = z.object({
   mailboxId: z.string().min(1),
 });
 
+export const remoteProxyQuerySchema = mailboxQuerySchema.extend({
+  url: z.string().trim().min(1).max(4_096),
+});
+
 export const conversationListQuerySchema = mailboxQuerySchema.extend({
   folder: folderSchema.default("inbox"),
   limit: z.coerce.number().int().min(1).max(50).default(25),

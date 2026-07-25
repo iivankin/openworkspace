@@ -35,7 +35,6 @@ describe("OIDC user lifecycle", () => {
           body: JSON.stringify({
             name: "Lifecycle User",
             email: "lifecycle-user@example.test",
-            avatarUrl: null,
           }),
         }),
       ),
@@ -131,7 +130,6 @@ describe("OIDC user lifecycle", () => {
           },
           body: JSON.stringify({
             name: "Lifecycle User",
-            avatarUrl: null,
             status: "disabled",
           }),
         }),

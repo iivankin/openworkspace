@@ -113,7 +113,6 @@ describe("mail worker", () => {
         body: JSON.stringify({
           name: "Invited User",
           email: "invited@example.test",
-          avatarUrl: "https://images.example.test/avatar.png",
         }),
       }),
     );
@@ -161,7 +160,6 @@ describe("mail worker", () => {
           },
           body: JSON.stringify({
             name: "Invited User Updated",
-            avatarUrl: null,
           }),
         },
       ),
@@ -364,6 +362,21 @@ describe("mail worker", () => {
     expect(htmlBody.status).toBe(200);
     expect(htmlBody.headers.get("content-type")).toContain("text/plain");
     expect(await htmlBody.text()).toContain("<strong>482901</strong>");
+
+    const blockedRemote = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/remote?mailboxId=${personalMailboxId}&url=${encodeURIComponent("http://127.0.0.1/secret.png")}`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    expect(blockedRemote.status).toBe(400);
+    await blockedRemote.json();
+
+    const anonymousRemote = await exports.default.fetch(
+      `http://example.test/api/mail/remote?mailboxId=${personalMailboxId}&url=${encodeURIComponent("https://cdn.example/a.png")}`,
+    );
+    expect(anonymousRemote.status).toBe(401);
+    await anonymousRemote.json();
 
     const retriedDeliveryId = "inbound-alarm-retry";
     const retriedObjectKey = "test/inbound-alarm-retry.eml";

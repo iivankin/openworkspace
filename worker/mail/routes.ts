@@ -37,9 +37,15 @@ import {
   conversationListQuerySchema,
   forwardSchema,
   mailboxQuerySchema,
+  remoteProxyQuerySchema,
   replySchema,
   updateConversationSchema,
 } from "./schemas";
+import {
+  assertProxyableRemoteUrl,
+  fetchProxiedRemoteMedia,
+} from "./remote-proxy";
+import { checkRateLimit } from "../lib/rate-limit";
 
 const SAFE_INLINE_IMAGE_TYPES = new Set([
   "image/gif",
@@ -260,6 +266,59 @@ export const mailRoutes = new Hono<AppEnv>()
       );
       if (!updated) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
       return c.json({ ok: true as const });
+    },
+  )
+  .get(
+    "/remote",
+    zValidator("query", remoteProxyQuerySchema),
+    async (c) => {
+      const { mailboxId, url } = c.req.valid("query");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      try {
+        assertProxyableRemoteUrl(url);
+      } catch (error) {
+        return apiError(
+          c,
+          400,
+          "BAD_REQUEST",
+          error instanceof Error ? error.message : "Remote URL is invalid",
+        );
+      }
+      const limited = await checkRateLimit(c.env.DB, {
+        action: "mail-remote-proxy",
+        identifier: c.get("user").id,
+        limit: 120,
+        windowMs: 60_000,
+      });
+      if (!limited.allowed) {
+        return apiError(
+          c,
+          429,
+          "RATE_LIMITED",
+          "Too many remote content requests. Try again shortly.",
+        );
+      }
+      try {
+        const remote = await fetchProxiedRemoteMedia(url);
+        return new Response(remote.body, {
+          headers: {
+            "cache-control": "private, max-age=3600",
+            "content-type": remote.contentType,
+            "content-disposition": "inline",
+            "cross-origin-resource-policy": "same-origin",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } catch (error) {
+        return apiError(
+          c,
+          502,
+          "BAD_GATEWAY",
+          error instanceof Error ? error.message : "Remote content unavailable",
+        );
+      }
     },
   )
   .get(

@@ -10,7 +10,7 @@ One Worker, your domain, your data. Invite people with a link, grant mailbox acc
 - **Personal and shared mailboxes** — read-only or read-and-send access per member
 - **Catch-all routing** — accept every address at your domain; only provisioned mailboxes receive mail
 - **Delivery status** — bounces, deferrals, and complaints surface in the app
-- **Runs on Cloudflare** — Workers, D1, Durable Objects, R2, Email Service, and Queues
+- **Runs on Cloudflare** — Workers, D1, Durable Objects, R2, Images, Email Service, and Queues
 
 ## Deploy to Cloudflare
 
@@ -25,7 +25,7 @@ bun install
 bun run deploy
 ```
 
-Cloudflare provisions D1 and R2 from `wrangler.jsonc`. Domain mail setup is manual — complete it once after the first deploy.
+Cloudflare provisions D1, R2, and the Images binding from `wrangler.jsonc`. Domain mail setup is manual — complete it once after the first deploy.
 
 ### Pull updates from upstream
 
@@ -45,6 +45,7 @@ The script merges upstream (`main` or `master`) and keeps your Cloudflare-provis
 3. **Outbound sending** — Under **Email Sending**, onboard the same domain. Cloudflare adds SPF, DKIM, return-path, and DMARC records.
 4. **Delivery events** — Open **Queues → openworkspace-delivery-events → Subscriptions**, subscribe to **Email Sending** for that domain, and select all six `message.*` events.
 5. **First admin** — Open the app. With an empty database, the first-run screen creates your personal mailbox and registers you as administrator with a passkey.
+6. **Profile photos** — Enable **Images** for the account if prompted. Create a public delivery variant named `public` (or `avatar`). Uploaded avatars use custom ids `avatars/<userId>` and are served from `https://imagedelivery.net/<account_hash>/avatars/<userId>/public` (not your Worker domain). Optional later: a custom Images delivery hostname in the dashboard.
 
 Unknown catch-all recipients are rejected permanently. Only addresses you create in the app accept mail.
 
@@ -114,6 +115,7 @@ Outbound mail is logged locally instead of sent. Useful checks: `bun run typeche
 - **Empty install** — first visitor sets a name and personal email, registers a passkey, and becomes admin.
 - **Invite users** — admin creates a person with a personal mailbox and shares the one-time invitation link. They register a passkey to join.
 - **Recover access** — admin issues a one-hour recovery link; redeeming it replaces all passkeys and ends existing sessions.
+- **Settings** — each person uploads or removes their avatar under **Settings → Profile**, and chooses light/dark/system under **Appearance**.
 - **Shared mailboxes** — admin adds members with read-only or read-and-send access. Everyone who is a member can read; there is no send-only mode.
 
 ## License

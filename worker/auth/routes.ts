@@ -38,6 +38,7 @@ import {
   browserLoginTransaction,
   clearLoginTransactionCookie,
 } from "../oidc/transaction";
+import { deleteAvatar, uploadAvatar } from "./avatar";
 
 function authFailure(c: Parameters<typeof apiError>[0], error: unknown) {
   const message = error instanceof Error ? error.message : "Passkey request failed";
@@ -226,6 +227,8 @@ export const authRoutes = new Hono<AppEnv>()
   )
   .route("/invitation", accessLinkRoutes("invitation"))
   .route("/recovery", accessLinkRoutes("recovery"))
+  .post("/avatar", requireAuth, (c) => uploadAvatar(c))
+  .delete("/avatar", requireAuth, (c) => deleteAvatar(c))
   .post("/logout", requireAuth, async (c) => {
     await destroySession(createDb(c.env.DB), c);
     return c.json({ ok: true as const });

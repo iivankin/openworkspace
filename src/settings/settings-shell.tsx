@@ -1,0 +1,161 @@
+import {
+  ArrowLeft,
+  Inbox,
+  Palette,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
+import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { AppearanceSettings } from "./appearance-page";
+import { ProfileSettings } from "./profile-page";
+
+type SettingsSection = "profile" | "appearance";
+
+const settingsSections: Array<{
+  id: SettingsSection;
+  label: string;
+  description: string;
+  Icon: LucideIcon;
+  path: string;
+}> = [
+  {
+    id: "profile",
+    label: "Profile",
+    description: "Your photo and account details.",
+    Icon: UserRound,
+    path: "/settings/profile",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Light, dark, or match the system.",
+    Icon: Palette,
+    path: "/settings/appearance",
+  },
+];
+
+function sectionFromPath(pathname: string): SettingsSection {
+  if (pathname.startsWith("/settings/appearance")) return "appearance";
+  return "profile";
+}
+
+function SettingsNavigation({ value }: { value: SettingsSection }) {
+  return (
+    <nav className="flex flex-1 flex-col gap-0.5 p-3">
+      {settingsSections.map(({ id, label, Icon, path }) => (
+        <NavLink
+          key={id}
+          to={path}
+          className={cn(
+            "flex items-center gap-2.5 rounded-xl px-3 py-2 text-[0.8125rem] font-medium transition-colors",
+            value === id
+              ? "bg-primary/14 text-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          )}
+        >
+          <Icon className="size-4 shrink-0" />
+          {label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+function MobileSettingsNavigation({ value }: { value: SettingsSection }) {
+  const navigate = useNavigate();
+  return (
+    <Select value={value} onValueChange={(next) => navigate(`/settings/${next}`)}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectGroup>
+          {settingsSections.map(({ id, label }) => (
+            <SelectItem key={id} value={id}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function SettingsShell() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const section = sectionFromPath(location.pathname);
+  const copy = settingsSections.find((item) => item.id === section)!;
+
+  return (
+    <main className="flex h-dvh min-h-0 bg-background">
+      <aside className="hidden w-68 shrink-0 flex-col border-r border-border/70 bg-sidebar md:flex">
+        <div className="flex h-18 shrink-0 items-center gap-2.5 border-b border-border/70 px-5">
+          <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+            <Inbox className="size-4.5" strokeWidth={2.25} />
+          </span>
+          <div>
+            <p className="font-display text-[0.9375rem] leading-tight font-semibold">
+              OpenWorkspace
+            </p>
+            <p className="text-[11px] leading-tight text-muted-foreground">Settings</p>
+          </div>
+        </div>
+        <SettingsNavigation value={section} />
+        <div className="mt-auto border-t border-border/70 p-3">
+          <Button className="w-full justify-start" variant="ghost" onClick={() => navigate("/")}>
+            <ArrowLeft /> Back to mail
+          </Button>
+        </div>
+      </aside>
+
+      <section className="paper-grain flex min-w-0 flex-1 flex-col">
+        <header className="flex h-18 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+          <Button className="md:hidden" variant="ghost" size="icon-sm" onClick={() => navigate("/")}>
+            <ArrowLeft />
+            <span className="sr-only">Back to mail</span>
+          </Button>
+          <div className="min-w-0">
+            <h1 className="truncate font-display text-xl font-semibold">{copy.label}</h1>
+            <p className="hidden truncate text-xs text-muted-foreground sm:block">
+              {copy.description}
+            </p>
+          </div>
+        </header>
+
+        <div className="border-b border-border/70 p-2 md:hidden">
+          <MobileSettingsNavigation value={section} />
+        </div>
+
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 lg:p-8">
+            <Outlet />
+          </div>
+        </ScrollArea>
+      </section>
+    </main>
+  );
+}
+
+export function SettingsIndexRedirect() {
+  return <Navigate to="/settings/profile" replace />;
+}
+
+export function SettingsAppearancePage() {
+  return <AppearanceSettings />;
+}
+
+export function SettingsProfilePage() {
+  return <ProfileSettings />;
+}

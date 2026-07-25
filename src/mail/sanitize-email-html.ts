@@ -1,8 +1,11 @@
+import {
+  isRemoteHttpUrl,
+  mailRemoteProxyPath,
+} from "../../shared/mail-remote";
 import type { MessageAttachment } from "./types";
 
 const FORBIDDEN_TAGS = [
   "script",
-  "style",
   "form",
   "input",
   "button",
@@ -23,10 +26,7 @@ const FORBIDDEN_TAGS = [
 ];
 
 const FORBIDDEN_ATTRIBUTES = [
-  "style",
-  "srcset",
   "poster",
-  "background",
   "action",
   "formaction",
 ];
@@ -37,6 +37,34 @@ const SAFE_INLINE_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+
+const DANGEROUS_CSS =
+  /expression\s*\(|-moz-binding|behavior\s*:|@import|javascript\s*:|vbscript\s*:|data\s*:\s*text\/html/giu;
+
+/**
+ * Keep email layout CSS while blocking scriptable CSS.
+ * Remote `url(...)` values are rewritten through the Worker proxy when provided.
+ */
+export function sanitizeEmailCss(
+  css: string,
+  rewriteRemoteUrl?: (url: string) => string | null,
+) {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//gu, "");
+  const withoutDanger = withoutComments.replace(DANGEROUS_CSS, "/* blocked */");
+  return withoutDanger.replace(
+    /url\s*\(\s*(['"]?)([^)'"]*?)\1\s*\)/giu,
+    (match, _quote: string, rawUrl: string) => {
+      const url = rawUrl.trim();
+      if (/^data:image\/(?:gif|jpeg|jpg|png|webp)/iu.test(url)) return match;
+      if (/^cid:/iu.test(url)) return match;
+      if (isRemoteHttpUrl(url) && rewriteRemoteUrl) {
+        const proxied = rewriteRemoteUrl(url);
+        if (proxied) return `url("${proxied}")`;
+      }
+      return "/* remote url blocked */";
+    },
+  );
+}
 
 function mediaType(contentType: string) {
   return contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -86,9 +114,48 @@ function inlineAttachmentUrls(
   return values;
 }
 
+function rewriteSrcset(
+  value: string,
+  rewriteRemoteUrl: (url: string) => string | null,
+) {
+  return value
+    .split(",")
+    .map((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return "";
+      const match = /^(\S+)(\s+.+)?$/u.exec(trimmed);
+      if (!match) return "";
+      const [, source = "", descriptor = ""] = match;
+      if (!isRemoteHttpUrl(source)) return trimmed;
+      const proxied = rewriteRemoteUrl(source);
+      return proxied ? `${proxied}${descriptor}` : "";
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function scrubStyles(
+  root: ParentNode,
+  rewriteRemoteUrl: (url: string) => string | null,
+) {
+  for (const element of root.querySelectorAll("[style]")) {
+    const style = element.getAttribute("style");
+    if (!style) continue;
+    const next = sanitizeEmailCss(style, rewriteRemoteUrl);
+    if (next.trim()) element.setAttribute("style", next);
+    else element.removeAttribute("style");
+  }
+  for (const styleTag of root.querySelectorAll("style")) {
+    styleTag.textContent = sanitizeEmailCss(
+      styleTag.textContent ?? "",
+      rewriteRemoteUrl,
+    );
+  }
+}
+
 export type SafeEmailDocument = {
   srcDoc: string;
-  blockedRemoteImages: number;
+  proxiedRemoteImages: number;
 };
 
 export async function sanitizeEmailHtml(input: {
@@ -97,19 +164,35 @@ export async function sanitizeEmailHtml(input: {
   messageId: string;
   attachments: MessageAttachment[];
 }): Promise<SafeEmailDocument> {
+  const rewriteRemoteUrl = (url: string) =>
+    mailRemoteProxyPath(input.mailboxId, url);
+
   const { default: DOMPurify } = await import("dompurify");
   const sanitized = DOMPurify.sanitize(input.html, {
     USE_PROFILES: { html: true },
+    ADD_TAGS: ["style"],
+    ADD_ATTR: [
+      "style",
+      "bgcolor",
+      "color",
+      "width",
+      "height",
+      "align",
+      "valign",
+      "background",
+      "srcset",
+    ],
     FORBID_TAGS: FORBIDDEN_TAGS,
     FORBID_ATTR: FORBIDDEN_ATTRIBUTES,
   });
   const document = new DOMParser().parseFromString(sanitized, "text/html");
+  scrubStyles(document, rewriteRemoteUrl);
   const inlineUrls = inlineAttachmentUrls(
     input.mailboxId,
     input.messageId,
     input.attachments,
   );
-  let blockedRemoteImages = 0;
+  let proxiedRemoteImages = 0;
 
   for (const image of document.querySelectorAll("img")) {
     const source = image.getAttribute("src")?.trim() ?? "";
@@ -121,16 +204,33 @@ export async function sanitizeEmailHtml(input: {
     if (inlineUrl) {
       image.setAttribute("src", inlineUrl);
       image.setAttribute("loading", "lazy");
-      continue;
+    } else if (safeDataImage) {
+      // keep as-is
+    } else if (isRemoteHttpUrl(source)) {
+      image.setAttribute("src", rewriteRemoteUrl(source));
+      image.setAttribute("loading", "lazy");
+      image.setAttribute("referrerpolicy", "no-referrer");
+      proxiedRemoteImages += 1;
+    } else if (source) {
+      image.removeAttribute("src");
     }
-    if (safeDataImage) continue;
 
-    if (source) blockedRemoteImages += 1;
-    const placeholder = document.createElement("span");
-    placeholder.className = "blocked-image";
-    placeholder.textContent = image.getAttribute("alt")?.trim()
-      || "External image blocked";
-    image.replaceWith(placeholder);
+    const srcset = image.getAttribute("srcset")?.trim() ?? "";
+    if (srcset) {
+      const rewritten = rewriteSrcset(srcset, rewriteRemoteUrl);
+      if (rewritten) image.setAttribute("srcset", rewritten);
+      else image.removeAttribute("srcset");
+    }
+  }
+
+  for (const element of document.querySelectorAll("[background]")) {
+    const background = element.getAttribute("background")?.trim() ?? "";
+    if (isRemoteHttpUrl(background)) {
+      element.setAttribute("background", rewriteRemoteUrl(background));
+      proxiedRemoteImages += 1;
+    } else {
+      element.removeAttribute("background");
+    }
   }
 
   for (const link of document.querySelectorAll("a")) {
@@ -145,6 +245,9 @@ export async function sanitizeEmailHtml(input: {
     }
   }
 
+  const headStyles = [...document.querySelectorAll("head style")]
+    .map((node) => node.outerHTML)
+    .join("\n");
   const body = document.body.innerHTML;
   const srcDoc = `<!doctype html>
 <html>
@@ -153,33 +256,23 @@ export async function sanitizeEmailHtml(input: {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; font-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root { color-scheme: light dark; }
-    * { box-sizing: border-box; max-width: 100%; }
-    html, body { margin: 0; padding: 0; background: transparent; }
+    :root { color-scheme: light only; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #111111;
+    }
     body {
       overflow-wrap: anywhere;
-      color: CanvasText;
-      font: 400 15px/1.55 Figtree, ui-sans-serif, sans-serif;
+      font: 400 15px/1.55 system-ui, -apple-system, sans-serif;
     }
-    p, h1, h2, h3, h4, h5, h6 { margin: 0 0 .75em; }
-    table { width: auto; border-collapse: collapse; }
-    td, th { padding: .2rem .35rem; vertical-align: top; }
+    img { max-width: 100%; height: auto; }
     pre { overflow: auto; white-space: pre-wrap; }
-    blockquote { margin: .75rem 0; padding-left: .75rem; border-left: 2px solid color-mix(in srgb, CanvasText 18%, transparent); }
-    a { color: LinkText; text-decoration: underline; text-underline-offset: 2px; }
-    img { height: auto; }
-    .blocked-image {
-      display: inline-block;
-      margin: .25rem 0;
-      padding: .2rem .45rem;
-      border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
-      border-radius: .35rem;
-      color: GrayText;
-      font-size: .75rem;
-    }
   </style>
+  ${headStyles}
 </head>
 <body>${body}</body>
 </html>`;
-  return { srcDoc, blockedRemoteImages };
+  return { srcDoc, proxiedRemoteImages };
 }

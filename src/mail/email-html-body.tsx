@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ImageOff } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { sanitizeEmailHtml } from "./sanitize-email-html";
 import type { MessageDetail } from "./types";
 
@@ -16,6 +16,7 @@ export function EmailHtmlBody({
 }) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(MIN_FRAME_HEIGHT);
+  const [frameReady, setFrameReady] = useState(false);
   const html = useQuery({
     queryKey: ["message-html", mailboxId, message.id],
     queryFn: async () => {
@@ -33,6 +34,11 @@ export function EmailHtmlBody({
     staleTime: Number.POSITIVE_INFINITY,
   });
 
+  useEffect(() => {
+    setFrameReady(false);
+    setHeight(MIN_FRAME_HEIGHT);
+  }, [mailboxId, message.id]);
+
   function resizeFrame() {
     const frame = iframe.current;
     const contentHeight = frame?.contentDocument?.documentElement.scrollHeight
@@ -41,28 +47,29 @@ export function EmailHtmlBody({
       MAX_FRAME_HEIGHT,
       Math.max(MIN_FRAME_HEIGHT, contentHeight),
     ));
+    setFrameReady(true);
   }
 
-  if (!html.data) {
-    return (
-      <div className="whitespace-pre-wrap text-[15px] leading-6">
-        {message.bodyText || message.preview || "No text body"}
-      </div>
-    );
-  }
+  const fallback = (
+    <div className="whitespace-pre-wrap text-[15px] leading-6">
+      {message.bodyText || message.preview || "No text body"}
+    </div>
+  );
+
+  if (!html.data) return fallback;
 
   return (
-    <div>
-      {html.data.blockedRemoteImages > 0 ? (
-        <p className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <ImageOff className="size-3.5" />
-          External images blocked
-        </p>
-      ) : null}
+    <div className="relative">
+      {!frameReady ? fallback : null}
       <iframe
         ref={iframe}
-        className="block w-full border-0 bg-transparent"
-        style={{ height }}
+        className={cn(
+          "block w-full overflow-hidden rounded-md border border-black/8 bg-white",
+          frameReady
+            ? "relative opacity-100"
+            : "pointer-events-none absolute inset-x-0 top-0 h-0 opacity-0",
+        )}
+        style={frameReady ? { height } : undefined}
         title={`HTML body of ${message.subject}`}
         sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
         referrerPolicy="no-referrer"

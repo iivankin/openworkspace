@@ -38,6 +38,9 @@
       "bucket_name": "openworkspace"
     }
   ],
+  "images": {
+    "binding": "IMAGES"
+  },
   "send_email": [
     {
       "name": "EMAIL"

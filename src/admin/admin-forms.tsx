@@ -10,6 +10,12 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group";
+import {
   adminPanelClass,
   AdminPanelBody,
   AdminPanelFooter,
@@ -21,25 +27,64 @@ import type {
   InvitationInput,
   MailboxMemberPermission,
 } from "./types";
+import { mailboxAddress, mailboxLocalPart } from "./mailbox-address";
 import { SharedUserAccess } from "./shared-user-access";
+
+function DomainAddressField({
+  id,
+  domain,
+  placeholder,
+  value,
+  onChange,
+  required,
+}: {
+  id: string;
+  domain: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <InputGroup className="h-9">
+      <InputGroupInput
+        id={id}
+        type="text"
+        inputMode="email"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(mailboxLocalPart(event.target.value))}
+        required={required}
+        aria-label="Mailbox local part"
+      />
+      <InputGroupAddon align="inline-end">
+        <InputGroupText className="font-mono text-xs">@{domain}</InputGroupText>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+}
 
 export function InviteForm({
   pending,
+  domain,
   onSubmit,
 }: {
   pending: boolean;
+  domain: string;
   onSubmit: (input: InvitationInput) => void;
 }) {
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState("");
+  const [localPart, setLocalPart] = useState("");
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    const local = mailboxLocalPart(localPart);
+    if (!local) return;
     onSubmit({
       name,
-      email,
-      avatarUrl: avatarUrl.trim() || null,
+      email: mailboxAddress(local, domain),
     });
   }
 
@@ -66,29 +111,19 @@ export function InviteForm({
           <FieldLabel className="sr-only" htmlFor="invite-email">
             Personal mailbox
           </FieldLabel>
-          <Input
+          <DomainAddressField
             id="invite-email"
-            type="email"
-            placeholder="name@your-domain.com"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            domain={domain}
+            placeholder="name"
+            value={localPart}
+            onChange={setLocalPart}
             required
-          />
-        </Field>
-        <Field className="sm:col-span-2">
-          <FieldLabel className="sr-only" htmlFor="invite-avatar">Avatar URL</FieldLabel>
-          <Input
-            id="invite-avatar"
-            type="url"
-            placeholder="Avatar URL (optional)"
-            value={avatarUrl}
-            onChange={(event) => setAvatarUrl(event.target.value)}
           />
         </Field>
       </FieldGroup>
       </AdminPanelBody>
       <AdminPanelFooter>
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending || !mailboxLocalPart(localPart)}>
           {pending ? <LoaderCircle className="animate-spin" /> : <UserPlus />}
           Invite
         </Button>
@@ -99,19 +134,27 @@ export function InviteForm({
 
 export function MailboxForm({
   pending,
+  domain,
   users,
   onSubmit,
 }: {
   pending: boolean;
+  domain: string;
   users: AdminUser[];
   onSubmit: (input: CreateMailboxInput) => void;
 }) {
   const [displayName, setDisplayName] = useState("");
-  const [address, setAddress] = useState("");
+  const [localPart, setLocalPart] = useState("");
   const [members, setMembers] = useState<MailboxMemberPermission[]>([]);
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ displayName, address, members });
+    const local = mailboxLocalPart(localPart);
+    if (!local) return;
+    onSubmit({
+      displayName,
+      address: mailboxAddress(local, domain),
+      members,
+    });
   }
   return (
     <form className={adminPanelClass} onSubmit={submit}>
@@ -122,8 +165,27 @@ export function MailboxForm({
       />
       <AdminPanelBody className="space-y-6">
         <FieldGroup className="grid gap-4 sm:grid-cols-[1fr_1.3fr]">
-          <Field><FieldLabel className="sr-only" htmlFor="mailbox-display-name">Display name</FieldLabel><Input id="mailbox-display-name" placeholder="Support" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></Field>
-          <Field><FieldLabel className="sr-only" htmlFor="mailbox-address">Address</FieldLabel><Input id="mailbox-address" type="email" placeholder="support@your-domain.com" value={address} onChange={(event) => setAddress(event.target.value)} required /></Field>
+          <Field>
+            <FieldLabel className="sr-only" htmlFor="mailbox-display-name">Display name</FieldLabel>
+            <Input
+              id="mailbox-display-name"
+              placeholder="Support"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel className="sr-only" htmlFor="mailbox-address">Address</FieldLabel>
+            <DomainAddressField
+              id="mailbox-address"
+              domain={domain}
+              placeholder="support"
+              value={localPart}
+              onChange={setLocalPart}
+              required
+            />
+          </Field>
         </FieldGroup>
         <FieldSet>
           <FieldLegend variant="label">Mailbox access</FieldLegend>
@@ -131,7 +193,10 @@ export function MailboxForm({
         </FieldSet>
       </AdminPanelBody>
       <AdminPanelFooter>
-        <Button type="submit" disabled={pending || members.length === 0}>
+        <Button
+          type="submit"
+          disabled={pending || members.length === 0 || !mailboxLocalPart(localPart)}
+        >
           {pending ? <LoaderCircle className="animate-spin" /> : <MailPlus />}
           Create
         </Button>

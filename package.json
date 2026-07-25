@@ -31,6 +31,7 @@
       "D1",
       "Durable Objects",
       "R2",
+      "Images",
       "Email Service",
       "Queues"
     ],
@@ -43,6 +44,9 @@
       },
       "MAIL_STORAGE": {
         "description": "R2 stores raw MIME, HTML bodies, and attachments outside the relational hot path."
+      },
+      "IMAGES": {
+        "description": "Cloudflare Images stores profile avatars. Delivery URLs use imagedelivery.net with a public variant."
       },
       "EMAIL": {
         "description": "Email Service sends outbound mail. Onboard the sending domain after deployment."

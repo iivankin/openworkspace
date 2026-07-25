@@ -250,16 +250,28 @@ export function AdminPage() {
             )}
             {view === "invite" && (
               <div className="max-w-3xl">
-                <InviteForm pending={invite.isPending} onSubmit={(input) => invite.mutate(input)} />
+                {state.data?.domain ? (
+                  <InviteForm
+                    pending={invite.isPending}
+                    domain={state.data.domain}
+                    onSubmit={(input) => invite.mutate(input)}
+                  />
+                ) : null}
                 {generatedLink?.kind === "invitation" && <AccessLink kind="invitation" url={generatedLink.url} copied={copied} onCopied={() => markCopied(setCopied)} />}
               </div>
             )}
             {view === "new-mailbox" && (
               <div className="max-w-3xl">
-                <MailboxForm pending={createMailbox.isPending} users={state.data?.users ?? []} onSubmit={(input) => createMailbox.mutate(input)} />
+                {state.data?.domain ? (
+                  <MailboxForm
+                    pending={createMailbox.isPending}
+                    domain={state.data.domain}
+                    users={state.data?.users ?? []}
+                    onSubmit={(input) => createMailbox.mutate(input)}
+                  />
+                ) : null}
               </div>
-            )}
-            {view === "user" && selectedUser && (
+            )}            {view === "user" && selectedUser && (
               <div className="max-w-3xl">
                 <UserAccessEditor
                   key={selectedUser.id}
