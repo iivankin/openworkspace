@@ -33,10 +33,9 @@ The Deploy button creates a copy of this repo on your GitHub account. To take te
 
 ```bash
 bun run sync:upstream
-bun install
-git push
 ```
 
+The script asks whether to run `bun install` and push to `origin`.
 The script merges upstream (`main` or `master`) and keeps your Cloudflare-provisioned D1/R2 identifiers in `wrangler.jsonc`. Deploy-button copies often have no shared git history with this repo; the first sync allows unrelated histories and prefers upstream on conflicts, then restores your local D1/R2 ids. If a merge conflict remains, resolve it manually and keep your local `database_id` / `bucket_name`.
 
 ### Connect your domain

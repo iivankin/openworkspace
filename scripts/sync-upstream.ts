@@ -205,11 +205,35 @@ if (restored !== wranglerAfter) {
 
 console.log(`
 Synced with ${upstreamRef}.
+`);
 
-Next:
-  bun install
-  git push
+const install = prompt("Run bun install? [Y/n]");
+if (!install || !/^(n|no)$/i.test(install.trim())) {
+  console.log("Running bun install…");
+  const installResult = run(["bun", "install"], { allowFail: true });
+  if (installResult.exitCode !== 0) {
+    console.error(installResult.stderr || installResult.stdout);
+    process.exit(installResult.exitCode);
+  }
+}
 
-Workers Builds will redeploy on push. Run migrations if the release notes mention schema changes:
+const branch = run(["git", "branch", "--show-current"]).stdout || "HEAD";
+const push = prompt(`Push ${branch} to origin? [y/N]`);
+if (push && /^(y|yes)$/i.test(push.trim())) {
+  console.log(`Pushing ${branch} → origin…`);
+  const pushResult = run(["git", "push", "-u", "origin", "HEAD"], {
+    allowFail: true,
+  });
+  if (pushResult.exitCode !== 0) {
+    console.error(pushResult.stderr || pushResult.stdout);
+    process.exit(pushResult.exitCode);
+  }
+  console.log("Pushed. Workers Builds will redeploy if connected.");
+} else {
+  console.log("Skipped push. When ready: git push");
+}
+
+console.log(`
+If the release notes mention schema changes:
   bun run db:migrate:remote
 `);
