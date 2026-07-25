@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -35,6 +36,7 @@ import { buildReplyPlan, canReplyFrom } from "./reply-plan";
 import {
   composeSchema,
   conversationListQuerySchema,
+  createUploadSchema,
   forwardSchema,
   mailboxQuerySchema,
   remoteProxyQuerySchema,
@@ -46,6 +48,11 @@ import {
   fetchProxiedRemoteMedia,
 } from "./remote-proxy";
 import { checkRateLimit } from "../lib/rate-limit";
+import {
+  createComposerUploadIntent,
+  storeComposerUploadContent,
+  UploadValidationError,
+} from "./uploads";
 
 const SAFE_INLINE_IMAGE_TYPES = new Set([
   "image/gif",
@@ -148,7 +155,10 @@ function outgoingFailure(
   c: Parameters<typeof apiError>[0],
   error: unknown,
 ) {
-  if (error instanceof ComposerAttachmentLimitError) {
+  if (
+    error instanceof ComposerAttachmentLimitError
+    || error instanceof UploadValidationError
+  ) {
     return apiError(c, 400, "BAD_REQUEST", error.message);
   }
   if (error instanceof OutgoingRequestConflictError) {
@@ -175,6 +185,77 @@ export const mailRoutes = new Hono<AppEnv>()
 
     return c.json({ ok: true as const, mailboxes: rows });
   })
+  .post(
+    "/uploads",
+    zValidator("query", mailboxQuerySchema),
+    zValidator("json", createUploadSchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const body = c.req.valid("json");
+      const user = c.get("user");
+      const access = await accessibleMailbox(c.env, user.id, mailboxId, "send");
+      if (!access) return apiError(c, 403, "FORBIDDEN", "Send access is required");
+
+      const rate = await checkRateLimit(c.env.DB, {
+        action: "mail-upload",
+        identifier: user.id,
+        limit: 30,
+        windowMs: 60_000,
+      });
+      if (!rate.allowed) {
+        c.header("retry-after", String(rate.retryAfterSeconds));
+        return apiError(c, 429, "RATE_LIMITED", "Too many attachment uploads");
+      }
+
+      try {
+        const upload = await createComposerUploadIntent({
+          env: c.env,
+          requestOrigin: new URL(c.req.url).origin,
+          mailboxId,
+          userId: user.id,
+          filename: body.filename,
+          contentType: body.contentType,
+          size: body.size,
+        });
+        return c.json({ ok: true as const, upload }, 201);
+      } catch (error) {
+        return outgoingFailure(c, error);
+      }
+    },
+  )
+  .put(
+    "/uploads/content",
+    zValidator(
+      "query",
+      mailboxQuerySchema.extend({
+        uploadId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(80)
+          .regex(/^upl_[a-f0-9]{32}$/u),
+      }),
+    ),
+    async (c) => {
+      const { mailboxId, uploadId } = c.req.valid("query");
+      const user = c.get("user");
+      const access = await accessibleMailbox(c.env, user.id, mailboxId, "send");
+      if (!access) return apiError(c, 403, "FORBIDDEN", "Send access is required");
+      try {
+        await storeComposerUploadContent({
+          env: c.env,
+          mailboxId,
+          userId: user.id,
+          uploadId,
+          body: c.req.raw.body,
+          contentType: c.req.header("content-type") ?? undefined,
+        });
+        return c.json({ ok: true as const });
+      } catch (error) {
+        return outgoingFailure(c, error);
+      }
+    },
+  )
   .get("/mailboxes/:id/folders", async (c) => {
     const mailboxId = c.req.param("id");
     const access = await accessibleMailbox(
@@ -465,7 +546,10 @@ export const mailRoutes = new Hono<AppEnv>()
       const submission = await submitOutgoing({
         env: c.env,
         requestUrl: c.req.url,
-        compose: input,
+        compose: {
+          ...input,
+          userId: c.get("user").id,
+        },
         conversationId: createId("conv"),
         related: null,
         forwarded: null,
@@ -545,6 +629,7 @@ export const mailRoutes = new Hono<AppEnv>()
           compose: {
             requestId: input.requestId,
             mailboxId: input.mailboxId,
+            userId: c.get("user").id,
             ...recipients,
             subject: replySubject(parent.subject),
             bodyText: input.bodyText,
@@ -592,6 +677,7 @@ export const mailRoutes = new Hono<AppEnv>()
           requestUrl: c.req.url,
           compose: {
             ...input,
+            userId: c.get("user").id,
             subject: forwardSubject(source.subject),
           },
           conversationId: createId("conv"),

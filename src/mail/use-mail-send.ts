@@ -47,20 +47,26 @@ export type MailSendInput =
     replyTo?: string;
   };
 
-function fileToBase64(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () =>
-      reject(reader.error ?? new Error("Could not read attachment"));
-    reader.onload = () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error("Could not read attachment"));
-        return;
-      }
-      resolve(reader.result.slice(reader.result.indexOf(",") + 1));
-    };
-    reader.readAsDataURL(file);
+async function uploadAttachment(mailboxId: string, file: File) {
+  const intent = await responseJson(
+    await api.api.mail.uploads.$post({
+      query: { mailboxId },
+      json: {
+        filename: file.name || "attachment",
+        contentType: file.type || "application/octet-stream",
+        size: file.size,
+      },
+    }),
+  );
+  const put = await fetch(intent.upload.uploadUrl, {
+    method: "PUT",
+    headers: intent.upload.headers,
+    body: file,
   });
+  if (!put.ok) {
+    throw new Error(`Attachment upload failed (${put.status})`);
+  }
+  return intent.upload;
 }
 
 export function useMailSend() {
@@ -80,11 +86,10 @@ export function useMailSend() {
   const send = useMutation({
     mutationFn: async (input: MailSendInput) => {
       const attachments = await Promise.all(
-        files.map(async (file) => ({
-          filename: file.name,
-          contentType: file.type || "application/octet-stream",
-          contentBase64: await fileToBase64(file),
-        })),
+        files.map(async (file) => {
+          const upload = await uploadAttachment(input.mailboxId, file);
+          return { uploadId: upload.id };
+        }),
       );
       const request = {
         requestId: requestId.current,
@@ -149,7 +154,9 @@ export function useMailSend() {
       next.reduce((total, file) => total + file.size, 0)
         > MAX_COMPOSER_ATTACHMENT_BYTES
     ) {
-      toast.error("Attachments are limited to 20 MB per message");
+      toast.error(
+        `Attachments are limited to ${Math.floor(MAX_COMPOSER_ATTACHMENT_BYTES / 1_000_000)} MB per message`,
+      );
       return;
     }
     setFiles(next);

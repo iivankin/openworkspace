@@ -15,23 +15,33 @@ import {
   replyThreadHeaders,
 } from "./rfc";
 import type { composeSchema } from "./schemas";
+import {
+  copyComposerUploadToMessage,
+  loadComposerUpload,
+  UploadValidationError,
+} from "./uploads";
 
 const EMAIL_SERVICE_MAX_BYTES = 5 * 1024 * 1024;
 const MIME_FIXED_OVERHEAD_BYTES = 128 * 1024;
 const DOWNLOAD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type OutgoingMessageInput = z.infer<typeof composeSchema>;
+export type OutgoingMessageInput = z.infer<typeof composeSchema> & {
+  /** Set by the route from the authenticated session. */
+  userId: string;
+};
 type AttachmentSize = Pick<StoredAttachment, "id" | "size">;
 
 type PreparedAttachment = StoredAttachment & {
   content?: Uint8Array;
   downloadUrl: string | null;
+  sourceUploadKey?: string;
 };
 
 export class ComposerAttachmentLimitError extends Error {}
 
 export async function outgoingRequestFingerprint(compose: OutgoingMessageInput) {
-  return hashToken(`outgoing-request-v1\0${JSON.stringify(compose)}`);
+  const { userId: _, ...payload } = compose;
+  return hashToken(`outgoing-request-v2\0${JSON.stringify(payload)}`);
 }
 
 function byteLength(value: string | undefined) {
@@ -71,11 +81,6 @@ export function attachmentsRequiringDownloadLinks(input: {
     if (estimatedBytes <= EMAIL_SERVICE_MAX_BYTES) break;
   }
   return linked;
-}
-
-function decodeBase64(value: string) {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function withDownloadLinks(
@@ -131,28 +136,46 @@ export async function prepareOutgoingEmail(input: {
   const storageAttempt = randomToken();
   const storagePrefix = `mailboxes/${compose.mailboxId}/messages/${id}/attempts/${storageAttempt}`;
   const expiresAt = new Date(input.now.getTime() + DOWNLOAD_TTL_MS);
-  const decoded: PreparedAttachment[] = compose.attachments.map((file, index) => {
-    const content = decodeBase64(file.contentBase64);
-    return {
-      id: `att_${index + 1}`,
-      content,
-      r2Key: `${storagePrefix}/attachments/att_${index + 1}`,
-      filename: file.filename,
-      contentType: file.contentType,
-      size: content.byteLength,
-      contentId: null,
-      disposition: "attachment" as const,
-      delivery: "attached" as const,
-      downloadTokenHash: null,
-      downloadExpiresAt: null,
-      downloadUrl: null,
-    };
-  });
+
+  const uploaded = await Promise.all(
+    compose.attachments.map(async (file, index) => {
+      try {
+        const upload = await loadComposerUpload({
+          env: input.env,
+          mailboxId: compose.mailboxId,
+          userId: compose.userId,
+          uploadId: file.uploadId,
+        });
+        return {
+          id: `att_${index + 1}`,
+          sourceUploadKey: upload.r2Key,
+          r2Key: `${storagePrefix}/attachments/att_${index + 1}`,
+          filename: upload.filename,
+          contentType: upload.contentType,
+          size: upload.size,
+          contentId: null,
+          disposition: "attachment" as const,
+          delivery: "attached" as const,
+          downloadTokenHash: null,
+          downloadExpiresAt: null,
+          downloadUrl: null,
+        } satisfies PreparedAttachment;
+      } catch (error) {
+        if (error instanceof UploadValidationError) {
+          throw new ComposerAttachmentLimitError(error.message);
+        }
+        throw error;
+      }
+    }),
+  );
+
   if (
-    decoded.reduce((total, file) => total + file.size, 0)
+    uploaded.reduce((total, file) => total + file.size, 0)
       > MAX_COMPOSER_ATTACHMENT_BYTES
   ) {
-    throw new ComposerAttachmentLimitError("Attachments exceed the 20 MB composer limit");
+    throw new ComposerAttachmentLimitError(
+      `Attachments exceed the ${Math.floor(MAX_COMPOSER_ATTACHMENT_BYTES / 1_000_000)} MB composer limit`,
+    );
   }
 
   // A forwarded attachment can reuse its immutable R2 object. Delivery mode
@@ -169,7 +192,7 @@ export async function prepareOutgoingEmail(input: {
     downloadExpiresAt: null,
     downloadUrl: null,
   }));
-  const allFiles = [...decoded, ...forwardedAttachments];
+  const allFiles = [...uploaded, ...forwardedAttachments];
   const forwardedContent = appendForwardedMessage(
     compose.bodyText,
     compose.bodyHtml,
@@ -214,12 +237,21 @@ export async function prepareOutgoingEmail(input: {
   const bodyHtmlR2Key = finalBodyHtml
     ? `${storagePrefix}/body.html`
     : null;
+
+  const copiedUploadKeys: string[] = [];
   await Promise.all([
-    ...attachments.flatMap((file) => file.content ? [
-      input.env.MAIL_STORAGE.put(file.r2Key, file.content, {
-        httpMetadata: { contentType: file.contentType },
-      }),
-    ] : []),
+    ...attachments.flatMap((file) => {
+      if (!file.sourceUploadKey) return [];
+      copiedUploadKeys.push(file.sourceUploadKey);
+      return [
+        copyComposerUploadToMessage({
+          env: input.env,
+          sourceKey: file.sourceUploadKey,
+          destinationKey: file.r2Key,
+          contentType: file.contentType,
+        }),
+      ];
+    }),
     ...(bodyHtmlR2Key && finalBodyHtml
       ? [input.env.MAIL_STORAGE.put(bodyHtmlR2Key, finalBodyHtml, {
           httpMetadata: { contentType: "text/html; charset=utf-8" },
@@ -259,7 +291,9 @@ export async function prepareOutgoingEmail(input: {
     bodyText: content.bodyText,
     quotedText,
     bodyHtmlR2Key,
-    attachmentsJson: attachments.map(({ content: _, downloadUrl: __, ...file }) => file),
+    attachmentsJson: attachments.map(
+      ({ content: _, downloadUrl: __, sourceUploadKey: ___, ...file }) => file,
+    ),
     listId: continuedList?.listId ?? null,
     listPostAddress: continuedList?.listPostAddress ?? null,
     timelineAt: input.now,
@@ -269,9 +303,14 @@ export async function prepareOutgoingEmail(input: {
   return {
     email,
     externalizedAttachments: linkedIds.size,
+    // Only attempt-scoped objects may be deleted on rollback. Forwarded
+    // attachments reuse immutable source keys and must not be removed.
     storageKeys: [
-      ...attachments.flatMap((file) => file.content ? [file.r2Key] : []),
+      ...attachments.flatMap((file) =>
+        file.sourceUploadKey ? [file.r2Key] : [],
+      ),
       ...(bodyHtmlR2Key ? [bodyHtmlR2Key] : []),
     ],
+    stagingUploadKeys: copiedUploadKeys,
   };
 }

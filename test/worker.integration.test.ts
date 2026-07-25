@@ -848,6 +848,54 @@ describe("mail worker", () => {
     await invalidCursor.json();
 
     const concurrentRequestId = crypto.randomUUID();
+    async function uploadAttachment(filename: string, body: string) {
+      const intentResponse = await exports.default.fetch(
+        new Request(
+          `http://example.test/api/mail/uploads?mailboxId=${personalMailboxId}`,
+          {
+            method: "POST",
+            headers: {
+              cookie: cookie!,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              filename,
+              contentType: "text/plain",
+              size: new TextEncoder().encode(body).byteLength,
+            }),
+          },
+        ),
+      );
+      expect(intentResponse.status).toBe(201);
+      const intent = await intentResponse.json() as {
+        upload: {
+          id: string;
+          uploadUrl: string;
+          headers: Record<string, string>;
+        };
+      };
+      const put = await exports.default.fetch(
+        new Request(intent.upload.uploadUrl, {
+          method: "PUT",
+          headers: {
+            cookie: cookie!,
+            ...intent.upload.headers,
+          },
+          body,
+        }),
+      );
+      expect(put.status).toBe(200);
+      await put.json();
+      return intent.upload.id;
+    }
+    const uploadA = await uploadAttachment(
+      "request-a.txt",
+      "attachment from request A",
+    );
+    const uploadB = await uploadAttachment(
+      "request-b.txt",
+      "attachment from request B",
+    );
     const concurrentPayloads = [
       {
         requestId: concurrentRequestId,
@@ -855,11 +903,7 @@ describe("mail worker", () => {
         to: ["CaseSensitive@Example.NET"],
         subject: "Concurrent request A",
         bodyText: "Body from request A",
-        attachments: [{
-          filename: "request-a.txt",
-          contentType: "text/plain",
-          contentBase64: btoa("attachment from request A"),
-        }],
+        attachments: [{ uploadId: uploadA }],
       },
       {
         requestId: concurrentRequestId,
@@ -867,11 +911,7 @@ describe("mail worker", () => {
         to: ["CaseSensitive@Example.NET"],
         subject: "Concurrent request B",
         bodyText: "Body from request B",
-        attachments: [{
-          filename: "request-b.txt",
-          contentType: "text/plain",
-          contentBase64: btoa("attachment from request B"),
-        }],
+        attachments: [{ uploadId: uploadB }],
       },
     ];
     const concurrentResponses = await Promise.all(concurrentPayloads.map((payload) =>

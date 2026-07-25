@@ -69,19 +69,29 @@ describe("outbound email limits", () => {
     expect(normalizeMailboxAddress("Person@Example.NET")).toBe("person@example.net");
   });
 
-  it("accepts one attachment above the former 14 MB base64 cap", () => {
+  it("accepts attachment upload refs without base64 payloads", () => {
     const result = composeSchema.safeParse({
       requestId: crypto.randomUUID(),
       mailboxId: "mailbox",
       to: ["recipient@example.test"],
       attachments: [{
-        filename: "large.bin",
-        contentType: "application/octet-stream",
-        contentBase64: "AAAA".repeat(3_500_001),
+        uploadId: "upl_0123456789abcdef0123456789abcdef",
       }],
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("rejects duplicate attachment upload refs", () => {
+    const uploadId = "upl_0123456789abcdef0123456789abcdef";
+    const result = composeSchema.safeParse({
+      requestId: crypto.randomUUID(),
+      mailboxId: "mailbox",
+      to: ["recipient@example.test"],
+      attachments: [{ uploadId }, { uploadId }],
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("keeps only the newest References within provider limits", () => {

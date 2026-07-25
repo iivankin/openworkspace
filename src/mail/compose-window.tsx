@@ -230,7 +230,7 @@ export function ComposeWindow({
           <span className="text-[11px] text-muted-foreground">
             {files.length > 0
               ? `${files.length} files · ${formatBytes(totalAttachmentBytes)} · large files become 30-day links`
-              : "Up to 20 MB"}
+              : "Up to 500 MB"}
           </span>
           <Button
             className="ml-auto"

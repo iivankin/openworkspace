@@ -6,6 +6,7 @@ import {
   prepareOutgoingEmail,
   type OutgoingMessageInput,
 } from "./outbound";
+import { discardComposerUploadStaging } from "./uploads";
 
 export class OutgoingRequestConflictError extends Error {}
 
@@ -76,6 +77,11 @@ export async function submitOutgoing(input: {
         "Request identifier is already in use with different content",
       );
     }
+  } else if (prepared.stagingUploadKeys.length) {
+    await discardComposerUploadStaging({
+      env: input.env,
+      keys: prepared.stagingUploadKeys,
+    });
   }
   return {
     email: submission.email,

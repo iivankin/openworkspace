@@ -50,7 +50,7 @@ export type RecipientDeliveryStatus = {
   detail: string | null;
 };
 
-export const MAX_COMPOSER_ATTACHMENT_BYTES = 20_000_000;
+export const MAX_COMPOSER_ATTACHMENT_BYTES = 500_000_000;
 export const MAX_COMPOSER_ATTACHMENT_COUNT = 10;
 export const MAX_MAIL_RECIPIENTS = 50;
 

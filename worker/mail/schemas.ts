@@ -9,16 +9,6 @@ import {
 import { emailSchema } from "../auth/schemas";
 import { dedupeRecipientFields, recipientCount } from "./recipients";
 
-export const MAX_ATTACHMENT_BASE64_LENGTH = 4 * Math.ceil(
-  MAX_COMPOSER_ATTACHMENT_BYTES / 3,
-);
-
-export function decodedBase64Size(value: string) {
-  if (!value.length) return 0;
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  return (value.length / 4) * 3 - padding;
-}
-
 export const folderSchema = z.string().trim().min(1).max(80);
 
 export const mailboxQuerySchema = z.object({
@@ -38,17 +28,19 @@ export const conversationListQuerySchema = mailboxQuerySchema.extend({
 
 export const mailboxStateSchema = z.enum(mailboxStates);
 
-const outboundAttachmentSchema = z.object({
+export const createUploadSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.string().trim().min(1).max(255),
-  contentBase64: z
+  size: z.number().int().positive().max(MAX_COMPOSER_ATTACHMENT_BYTES),
+});
+
+const outboundAttachmentSchema = z.object({
+  uploadId: z
     .string()
-    .max(MAX_ATTACHMENT_BASE64_LENGTH)
-    .refine(
-      (value) =>
-        value.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/u.test(value),
-      { message: "Attachment content is not valid base64" },
-    ),
+    .trim()
+    .min(1)
+    .max(80)
+    .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid"),
 });
 
 const outboundRequestFields = {
@@ -59,7 +51,12 @@ const outboundRequestFields = {
   attachments: z
     .array(outboundAttachmentSchema)
     .max(MAX_COMPOSER_ATTACHMENT_COUNT)
-    .default([]),
+    .default([])
+    .refine(
+      (attachments) =>
+        new Set(attachments.map((file) => file.uploadId)).size === attachments.length,
+      { message: "Duplicate attachment uploads are not allowed" },
+    ),
 };
 
 const recipientFields = {
@@ -67,15 +64,6 @@ const recipientFields = {
   cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
   bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
 };
-
-function attachmentBytes(input: {
-  attachments: Array<{ contentBase64: string }>;
-}) {
-  return input.attachments.reduce(
-    (total, attachment) => total + decodedBase64Size(attachment.contentBase64),
-    0,
-  );
-}
 
 export const composeSchema = z
   .object({
@@ -95,23 +83,14 @@ export const composeSchema = z
   .refine(
     (value) => recipientCount(value) <= MAX_MAIL_RECIPIENTS,
     { message: `An email can have at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc` },
-  )
-  .refine(
-    (value) => attachmentBytes(value) <= MAX_COMPOSER_ATTACHMENT_BYTES,
-    { message: "Attachments exceed the 20 MB composer limit" },
   );
 
-export const replySchema = z
-  .object({
-    ...outboundRequestFields,
-    mode: z.enum(replyActionModes),
-    cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).optional(),
-    bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
-  })
-  .refine(
-    (value) => attachmentBytes(value) <= MAX_COMPOSER_ATTACHMENT_BYTES,
-    { message: "Attachments exceed the 20 MB composer limit" },
-  );
+export const replySchema = z.object({
+  ...outboundRequestFields,
+  mode: z.enum(replyActionModes),
+  cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).optional(),
+  bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
+});
 
 export const forwardSchema = z
   .object({
@@ -130,10 +109,6 @@ export const forwardSchema = z
   .refine(
     (value) => recipientCount(value) <= MAX_MAIL_RECIPIENTS,
     { message: `An email can have at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc` },
-  )
-  .refine(
-    (value) => attachmentBytes(value) <= MAX_COMPOSER_ATTACHMENT_BYTES,
-    { message: "Attachments exceed the 20 MB composer limit" },
   );
 
 export const updateConversationSchema = z
