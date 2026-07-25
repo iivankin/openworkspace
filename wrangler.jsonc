@@ -34,7 +34,8 @@
   ],
   "r2_buckets": [
     {
-      "binding": "MAIL_STORAGE"
+      "binding": "MAIL_STORAGE",
+      "bucket_name": "openworkspace"
     }
   ],
   "send_email": [

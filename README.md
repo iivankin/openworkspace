@@ -27,6 +27,18 @@ bun run deploy
 
 Cloudflare provisions D1 and R2 from `wrangler.jsonc`. Domain mail setup is manual — complete it once after the first deploy.
 
+### Pull updates from upstream
+
+The Deploy button creates a copy of this repo on your GitHub account. To take template updates later:
+
+```bash
+bun run sync:upstream
+bun install
+git push
+```
+
+The script merges upstream (`main` or `master`) and keeps your Cloudflare-provisioned D1/R2 identifiers in `wrangler.jsonc`. If a merge conflict appears, resolve it manually and keep your local `database_id` / `bucket_name`.
+
 ### Connect your domain
 
 1. **Email Routing** — In **Compute → Email Service → Email Routing**, enable Email Routing for your domain.
@@ -80,11 +92,16 @@ Requires [Bun](https://bun.sh).
 ```bash
 bun install
 cp .dev.vars.example .dev.vars
+```
+
+Uncomment `ALLOW_MOCK_AUTH=true` in `.dev.vars` (dev only), then:
+
+```bash
 bun run db:setup:local
 bun run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). Local seed includes an admin, a member, mailboxes, and sample messages. With `ALLOW_MOCK_AUTH=true` (dev only), **Open seeded local demo** skips WebAuthn.
+Open [http://localhost:5173](http://localhost:5173). Local seed includes an admin, a member, mailboxes, and sample messages. With mock auth enabled, **Open seeded local demo** skips WebAuthn.
 
 | Fixture | Path |
 | --- | --- |

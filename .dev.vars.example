@@ -1,7 +1,12 @@
-# Development-only authentication helper. Never configure this in production.
-ALLOW_MOCK_AUTH=true
+# Deploy to Cloudflare prompts for every UNCOMMENTED entry as a Worker secret.
+# Keep local-only and optional values commented so production is not pre-filled.
 
-OIDC_ISSUER=http://localhost:5173
-# Generate with `bun run oidc:keygen`. Configure the production value with
-# `wrangler secret put OIDC_SIGNING_PRIVATE_JWK`.
-OIDC_SIGNING_PRIVATE_JWK=
+# Local only — never set in production. Uncomment for `bun run dev`:
+# ALLOW_MOCK_AUTH=true
+
+# Optional OIDC IdP. Set after deploy (see README), not via Deploy button defaults:
+# OIDC_ISSUER=https://mail.example.com
+# Generate with `bun run oidc:keygen`, then:
+#   wrangler secret put OIDC_ISSUER
+#   wrangler secret put OIDC_SIGNING_PRIVATE_JWK
+# OIDC_SIGNING_PRIVATE_JWK=
