@@ -1,6 +1,9 @@
 /**
  * Pull OpenWorkspace template updates into a Deploy-button / fork clone.
  * Preserves Cloudflare-provisioned D1/R2 identifiers in wrangler.jsonc.
+ *
+ * Deploy-to-Cloudflare copies often share no git ancestry with the template,
+ * so the first sync uses --allow-unrelated-histories.
  */
 
 const UPSTREAM = "https://github.com/iivankin/openworkspace.git";
@@ -138,28 +141,51 @@ if (head === upstreamTip) {
   process.exit(0);
 }
 
-const behind = run([
-  "git",
-  "merge-base",
-  "--is-ancestor",
-  upstreamTip,
-  head,
-], { allowFail: true });
-if (behind.exitCode === 0) {
-  console.log("Local branch already contains upstream. Nothing to merge.");
-  process.exit(0);
+const mergeBase = run(["git", "merge-base", head, upstreamTip], {
+  allowFail: true,
+});
+const unrelated = mergeBase.exitCode !== 0;
+
+if (!unrelated) {
+  const alreadyContains = run(
+    ["git", "merge-base", "--is-ancestor", upstreamTip, head],
+    { allowFail: true },
+  );
+  if (alreadyContains.exitCode === 0) {
+    console.log("Local branch already contains upstream. Nothing to merge.");
+    process.exit(0);
+  }
 }
 
-console.log(`Merging ${upstreamRef}…`);
-const merge = run(["git", "merge", "--no-edit", upstreamRef], { allowFail: true });
+const mergeArgs = ["git", "merge", "--no-edit"];
+if (unrelated) {
+  console.log(
+    `Deploy-button clone detected (no shared history). Merging ${upstreamRef} with --allow-unrelated-histories…`,
+  );
+  mergeArgs.push("--allow-unrelated-histories", "-X", "theirs", upstreamRef);
+} else {
+  console.log(`Merging ${upstreamRef}…`);
+  mergeArgs.push(upstreamRef);
+}
+
+const merge = run(mergeArgs, { allowFail: true });
 if (merge.exitCode !== 0) {
-  console.error(merge.stderr || merge.stdout);
-  console.error(`
+  const detail = merge.stderr || merge.stdout;
+  console.error(detail);
+  if (detail.includes("unrelated histories")) {
+    console.error(`
+Git refused unrelated histories. Retry after updating this script, or run:
+
+  git merge --allow-unrelated-histories -X theirs --no-edit ${upstreamRef}
+`);
+  } else {
+    console.error(`
 Merge conflict. Resolve files, then:
   - In ${WRANGLER}, keep your local database_id / database_name / bucket_name
   - git add -A && git commit
   - git push
 `);
+  }
   process.exit(merge.exitCode);
 }
 
