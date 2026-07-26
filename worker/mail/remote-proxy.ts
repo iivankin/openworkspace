@@ -9,6 +9,8 @@ const PRIVATE_IPV4 =
   /^(?:0\.|10\.|127\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/u;
 
 export const PROXYABLE_REMOTE_MEDIA_TYPES = new Set([
+  "image/apng",
+  "image/avif",
   "image/gif",
   "image/jpeg",
   "image/jpg",

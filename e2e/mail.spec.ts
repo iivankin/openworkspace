@@ -17,9 +17,17 @@ test("opens the seeded inbox and reads a message", async ({ page }) => {
   await expect(page.getByText("Replying to Karri Saarinen", { exact: false })).toBeVisible();
 });
 
-test("renders sanitized HTML without loading remote images", async ({ page }, testInfo) => {
+test("renders only meaningful sanitized HTML without loading remote images", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "HTML isolation is covered once");
   let trackingRequested = false;
+  let messageBodyText = "Your one-time code is 482901";
+  let messageHtml = [
+    '<table width="600" style="width:600px"><tbody><tr><td style="padding:32px">',
+    "<p>Your one-time code is <strong>482901</strong></p>",
+    '<img src="https://tracking.example.test/open.gif" alt="Tracking image">',
+    "<script>parent.document.body.dataset.emailScriptRan = 'yes'</script>",
+    "</td></tr></tbody></table>",
+  ].join("");
   await page.route("https://tracking.example.test/**", async (route) => {
     trackingRequested = true;
     await route.abort();
@@ -31,12 +39,14 @@ test("renders sanitized HTML without loading remote images", async ({ page }, te
     const body = await response.json() as {
       messages: Array<{
         id: string;
+        bodyText: string;
         hasHtmlBody: boolean;
         quotedText: string | null;
       }>;
     };
     const message = body.messages.find((item) => item.id === "msg_demo_01");
     if (message) {
+      message.bodyText = messageBodyText;
       message.hasHtmlBody = true;
       message.quotedText = null;
     }
@@ -45,20 +55,38 @@ test("renders sanitized HTML without loading remote images", async ({ page }, te
   await page.route("**/api/mail/messages/msg_demo_01/html?*", async (route) => {
     await route.fulfill({
       contentType: "text/plain",
-      body: [
-        "<p>Your one-time code is <strong>482901</strong></p>",
-        '<img src="https://tracking.example.test/open.gif" alt="Tracking image">',
-        "<script>parent.document.body.dataset.emailScriptRan = 'yes'</script>",
-      ].join(""),
+      body: messageHtml,
     });
   });
 
   await page.getByText("The craft behind fast software", { exact: true }).click();
   const frame = page.frameLocator('iframe[title^="HTML body of"]');
   await expect(frame.getByText("482901", { exact: false })).toBeVisible();
-  await expect(frame.getByText("Tracking image", { exact: true })).toBeVisible();
+  await expect(frame.getByRole("img", { name: "Tracking image" })).toHaveCount(1);
   expect(await page.locator("body").getAttribute("data-email-script-ran")).toBeNull();
   expect(trackingRequested).toBe(false);
+
+  const iframe = page.locator('iframe[title^="HTML body of"]');
+  await expect.poll(() => iframe.evaluate((element) => element.clientWidth))
+    .toBeGreaterThan(300);
+  const documentWidth = await frame.locator("html").evaluate((element) => ({
+    client: element.clientWidth,
+    scroll: element.scrollWidth,
+  }));
+  expect(documentWidth.scroll).toBeLessThanOrEqual(documentWidth.client);
+
+  messageBodyText = "hello";
+  messageHtml = '<div dir="ltr">hello</div>';
+  await page.reload();
+
+  const plainMessage = page.locator('[data-message-id="msg_demo_01"]');
+  await expect(plainMessage.getByText("hello", { exact: true })).toBeVisible();
+  await expect(plainMessage.locator("iframe")).toHaveCount(0);
+  await expect.poll(() =>
+    plainMessage.locator('[data-slot="bubble-content"]').evaluate(
+      (element) => element.clientWidth,
+    )
+  ).toBeLessThan(300);
 });
 
 test("opens outbound delivery details without crashing", async ({ page }, testInfo) => {

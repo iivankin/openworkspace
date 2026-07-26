@@ -245,6 +245,7 @@ function MessageBubble({
 }) {
   const outgoing = message.direction === "outgoing";
   const sender = message.fromName || message.fromAddress;
+  const [rendersHtml, setRendersHtml] = useState(false);
 
   return (
     <section
@@ -267,7 +268,10 @@ function MessageBubble({
       <Bubble
         align={outgoing ? "end" : "start"}
         variant={outgoing ? "tinted" : "outline"}
-        className="max-w-[calc(100%-2.75rem)] sm:max-w-[82%]"
+        className={cn(
+          "max-w-[calc(100%-2.75rem)] sm:max-w-[82%]",
+          rendersHtml && "w-full",
+        )}
       >
         <MessageMetadata
           message={message}
@@ -277,7 +281,11 @@ function MessageBubble({
         />
         <BubbleContent className="w-full min-w-36 px-4 py-3">
           {message.hasHtmlBody && !message.quotedText && mailboxId ? (
-            <EmailHtmlBody mailboxId={mailboxId} message={message} />
+            <EmailHtmlBody
+              mailboxId={mailboxId}
+              message={message}
+              onRenderModeChange={setRendersHtml}
+            />
           ) : (
             <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
               {message.bodyText || (message.quotedText ? "No new text" : message.preview || "No text body")}
@@ -479,4 +487,3 @@ function initials(value: string) {
     .join("")
     .toUpperCase();
 }
-

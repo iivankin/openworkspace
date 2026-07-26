@@ -10,9 +10,11 @@ const MAX_FRAME_HEIGHT = 720;
 export function EmailHtmlBody({
   mailboxId,
   message,
+  onRenderModeChange,
 }: {
   mailboxId: string;
   message: MessageDetail;
+  onRenderModeChange: (renderAsHtml: boolean) => void;
 }) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(MIN_FRAME_HEIGHT);
@@ -39,6 +41,10 @@ export function EmailHtmlBody({
     setHeight(MIN_FRAME_HEIGHT);
   }, [mailboxId, message.id]);
 
+  useEffect(() => {
+    onRenderModeChange(html.data?.renderAsHtml ?? false);
+  }, [html.data?.renderAsHtml, onRenderModeChange]);
+
   function resizeFrame() {
     const frame = iframe.current;
     const contentHeight = frame?.contentDocument?.documentElement.scrollHeight
@@ -56,7 +62,7 @@ export function EmailHtmlBody({
     </div>
   );
 
-  if (!html.data) return fallback;
+  if (!html.data?.renderAsHtml) return fallback;
 
   return (
     <div className="relative">

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeEmailCss } from "../src/mail/sanitize-email-html";
 import { mailRemoteProxyPath } from "../shared/mail-remote";
-import { assertProxyableRemoteUrl } from "../worker/mail/remote-proxy";
+import {
+  assertProxyableRemoteUrl,
+  isProxyableRemoteMediaType,
+} from "../worker/mail/remote-proxy";
 
 describe("sanitizeEmailCss", () => {
   it("keeps ordinary email layout declarations", () => {
@@ -52,5 +55,12 @@ describe("assertProxyableRemoteUrl", () => {
     expect(() => assertProxyableRemoteUrl("http://192.168.0.1/x")).toThrow();
     expect(() => assertProxyableRemoteUrl("http://localhost/x")).toThrow();
     expect(() => assertProxyableRemoteUrl("file:///etc/passwd")).toThrow();
+  });
+});
+
+describe("isProxyableRemoteMediaType", () => {
+  it("accepts every image format requested from remote servers", () => {
+    expect(isProxyableRemoteMediaType("image/avif")).toBe(true);
+    expect(isProxyableRemoteMediaType("image/apng")).toBe(true);
   });
 });

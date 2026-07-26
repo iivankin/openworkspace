@@ -153,9 +153,50 @@ function scrubStyles(
   }
 }
 
+function isRichEmailDocument(document: Document) {
+  const richElement = document.querySelector([
+    "a[href]",
+    "img",
+    "table",
+    "ul",
+    "ol",
+    "blockquote",
+    "pre",
+    "code",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "strong",
+    "b",
+    "em",
+    "i",
+    "u",
+    "s",
+    "mark",
+    "sub",
+    "sup",
+    "hr",
+    "[style]",
+    "[class]",
+    "[bgcolor]",
+    "[background]",
+    "[color]",
+    "[width]",
+    "[height]",
+    "[align]",
+  ].join(","));
+  if (richElement) return true;
+  return [...document.querySelectorAll("style")]
+    .some((style) => Boolean(style.textContent?.trim()));
+}
+
 export type SafeEmailDocument = {
   srcDoc: string;
   proxiedRemoteImages: number;
+  renderAsHtml: boolean;
 };
 
 export async function sanitizeEmailHtml(input: {
@@ -187,6 +228,7 @@ export async function sanitizeEmailHtml(input: {
   });
   const document = new DOMParser().parseFromString(sanitized, "text/html");
   scrubStyles(document, rewriteRemoteUrl);
+  const renderAsHtml = isRichEmailDocument(document);
   const inlineUrls = inlineAttachmentUrls(
     input.mailboxId,
     input.messageId,
@@ -249,6 +291,8 @@ export async function sanitizeEmailHtml(input: {
     .map((node) => node.outerHTML)
     .join("\n");
   const body = document.body.innerHTML;
+  // Keep the layout guard after sender styles: email templates commonly use
+  // fixed 600px tables that otherwise overflow a narrow message iframe.
   const srcDoc = `<!doctype html>
 <html>
 <head>
@@ -271,8 +315,18 @@ export async function sanitizeEmailHtml(input: {
     pre { overflow: auto; white-space: pre-wrap; }
   </style>
   ${headStyles}
+  <style>
+    html, body {
+      width: 100% !important;
+      max-width: 100% !important;
+      overflow-x: hidden !important;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    table { max-width: 100% !important; }
+    img { max-width: 100% !important; height: auto !important; }
+  </style>
 </head>
 <body>${body}</body>
 </html>`;
-  return { srcDoc, proxiedRemoteImages };
+  return { srcDoc, proxiedRemoteImages, renderAsHtml };
 }
