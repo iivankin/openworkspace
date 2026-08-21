@@ -140,14 +140,14 @@ export function ComposerRecipientFields({
           onChange={onReplyToChange}
         />
       ) : null}
-      <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
+      <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none has-[[data-slot=input-group-control]:focus-visible]:border-0 has-[[data-slot=input-group-control]:focus-visible]:ring-0 dark:bg-transparent">
         <InputGroupAddon className="w-11 justify-start pl-0">
           <InputGroupText className="text-xs font-medium">
             Subject
           </InputGroupText>
         </InputGroupAddon>
         <InputGroupInput
-          className="px-2"
+          className="px-2 dark:hover:bg-transparent"
           value={subject}
           readOnly={subjectReadOnly}
           disabled={disabled}
