@@ -4,9 +4,7 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
   baseSubject,
-  forwardSubject,
-  MAX_MAIL_RECIPIENTS,
-  replySubject,
+  isComposerInlineImageContentType,
 } from "../../shared/mail";
 import { requireAuth } from "../auth/middleware";
 import { createDb } from "../db/client";
@@ -21,26 +19,32 @@ import {
   decodeConversationCursor,
   encodeConversationCursor,
 } from "./conversation-cursor";
-import { ComposerAttachmentLimitError } from "./outbound";
+import {
+  ComposerAttachmentLimitError,
+  preflightOutgoingAttachments,
+} from "./outbound";
 import {
   OutgoingRequestConflictError,
   submitOutgoing,
 } from "./outbound-service";
 import {
-  hasNewRecipients,
-  shouldDetachOutboundReply,
-} from "./outbound-threading";
+  OutgoingContextError,
+  resolveForwardContext,
+  resolveReplyContext,
+} from "./outgoing-context";
 import { participantLabels } from "./participants";
-import { dedupeRecipientFields, recipientCount } from "./recipients";
-import { buildReplyPlan, canReplyFrom } from "./reply-plan";
+import { buildReplyPlan } from "./reply-plan";
 import {
+  attachmentPreflightSchema,
   composeSchema,
   conversationListQuerySchema,
   createUploadSchema,
   forwardSchema,
   mailboxQuerySchema,
+  recipientSuggestionQuerySchema,
   remoteProxyQuerySchema,
   replySchema,
+  uploadIdSchema,
   updateConversationSchema,
 } from "./schemas";
 import {
@@ -50,19 +54,18 @@ import {
 import { checkRateLimit } from "../lib/rate-limit";
 import {
   createComposerUploadIntent,
+  discardComposerUploads,
+  finalizeComposerUpload,
   storeComposerUploadContent,
   UploadValidationError,
 } from "./uploads";
 
-const SAFE_INLINE_IMAGE_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
-
 function mediaType(contentType: string) {
   return contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function requestContentLength(value: string | undefined) {
+  return value === undefined ? undefined : Number(value);
 }
 
 function toMessageSummary(email: Email) {
@@ -86,12 +89,16 @@ function toMessageSummary(email: Email) {
   };
 }
 
-function toMessageDetail(email: Email, ownAddress: string) {
+function toMessageDetail(
+  email: Email,
+  ownAddress: string,
+  bodyHtml: string | null,
+) {
   return {
     ...toMessageSummary(email),
     bodyText: email.bodyText,
     quotedText: email.quotedText,
-    hasHtmlBody: Boolean(email.bodyHtmlR2Key),
+    bodyHtml,
     hasOriginal: Boolean(email.rawMimeR2Key),
     attachments: email.attachmentsJson.map((file) => ({
       id: file.id,
@@ -164,6 +171,9 @@ function outgoingFailure(
   if (error instanceof OutgoingRequestConflictError) {
     return apiError(c, 409, "CONFLICT", error.message);
   }
+  if (error instanceof OutgoingContextError) {
+    return apiError(c, error.status, error.code, error.message);
+  }
   throw error;
 }
 
@@ -228,12 +238,7 @@ export const mailRoutes = new Hono<AppEnv>()
     zValidator(
       "query",
       mailboxQuerySchema.extend({
-        uploadId: z
-          .string()
-          .trim()
-          .min(1)
-          .max(80)
-          .regex(/^upl_[a-f0-9]{32}$/u),
+        uploadId: uploadIdSchema,
       }),
     ),
     async (c) => {
@@ -249,11 +254,86 @@ export const mailRoutes = new Hono<AppEnv>()
           uploadId,
           body: c.req.raw.body,
           contentType: c.req.header("content-type") ?? undefined,
+          contentLength: requestContentLength(
+            c.req.header("content-length") ?? undefined,
+          ),
         });
         return c.json({ ok: true as const });
       } catch (error) {
         return outgoingFailure(c, error);
       }
+    },
+  )
+  .post(
+    "/uploads/:id/complete",
+    zValidator("param", z.object({ id: uploadIdSchema })),
+    zValidator("query", mailboxQuerySchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const { id: uploadId } = c.req.valid("param");
+      const user = c.get("user");
+      const access = await accessibleMailbox(c.env, user.id, mailboxId, "send");
+      if (!access) {
+        return apiError(c, 403, "FORBIDDEN", "Send access is required");
+      }
+      try {
+        const upload = await finalizeComposerUpload({
+          env: c.env,
+          mailboxId,
+          userId: user.id,
+          uploadId,
+          defer: (task) => c.executionCtx.waitUntil(task),
+        });
+        return c.json({ ok: true as const, upload });
+      } catch (error) {
+        return outgoingFailure(c, error);
+      }
+    },
+  )
+  .delete(
+    "/uploads/:id",
+    zValidator("param", z.object({ id: uploadIdSchema })),
+    zValidator("query", mailboxQuerySchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const user = c.get("user");
+      const access = await accessibleMailbox(c.env, user.id, mailboxId, "send");
+      if (!access) {
+        return apiError(c, 403, "FORBIDDEN", "Send access is required");
+      }
+      const { id: uploadId } = c.req.valid("param");
+      await discardComposerUploads({
+        env: c.env,
+        mailboxId,
+        userId: user.id,
+        uploadIds: [uploadId],
+      });
+      return c.json({ ok: true as const });
+    },
+  )
+  .get(
+    "/mailboxes/:id/recipient-suggestions",
+    zValidator("query", recipientSuggestionQuerySchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+      const access = await accessibleMailbox(
+        c.env,
+        c.get("user").id,
+        mailboxId,
+        "read",
+      );
+      if (!access) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const query = c.req.valid("query");
+      return c.json({
+        ok: true as const,
+        suggestions: await mailboxStub(c.env, mailboxId).suggestRecipients(
+          access.address,
+          query.q,
+          query.limit,
+        ),
+      });
     },
   )
   .get("/mailboxes/:id/folders", async (c) => {
@@ -320,11 +400,21 @@ export const mailRoutes = new Hono<AppEnv>()
       const snapshot = await mailboxStub(c.env, mailboxId)
         .getConversationSnapshot(c.req.param("id"));
       if (!snapshot) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
+      const messages = await Promise.all(snapshot.messages.map(async (email) => {
+        const object = email.bodyHtmlR2Key
+          ? await c.env.MAIL_STORAGE.get(email.bodyHtmlR2Key)
+          : null;
+        return toMessageDetail(
+          email,
+          access.address,
+          object ? await object.text() : null,
+        );
+      }));
       return c.json({
         ok: true as const,
         mailboxState: snapshot.mailboxState,
         folderId: snapshot.folderId,
-        messages: snapshot.messages.map((email) => toMessageDetail(email, access.address)),
+        messages,
       });
     },
   )
@@ -403,30 +493,6 @@ export const mailRoutes = new Hono<AppEnv>()
     },
   )
   .get(
-    "/messages/:messageId/html",
-    zValidator("query", mailboxQuerySchema),
-    async (c) => {
-      const { mailboxId } = c.req.valid("query");
-      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
-      const message = await mailboxStub(c.env, mailboxId)
-        .getEmail(c.req.param("messageId"));
-      if (!message?.bodyHtmlR2Key) {
-        return apiError(c, 404, "NOT_FOUND", "HTML body not found");
-      }
-      const object = await c.env.MAIL_STORAGE.get(message.bodyHtmlR2Key);
-      if (!object) return apiError(c, 404, "NOT_FOUND", "HTML body is missing");
-      return new Response(object.body, {
-        headers: {
-          "cache-control": "private, no-store",
-          "content-type": "text/plain; charset=utf-8",
-          "x-content-type-options": "nosniff",
-        },
-      });
-    },
-  )
-  .get(
     "/messages/:messageId/original",
     zValidator("query", mailboxQuerySchema),
     async (c) => {
@@ -493,7 +559,7 @@ export const mailRoutes = new Hono<AppEnv>()
       const contentType = file ? mediaType(file.contentType) : "";
       if (
         !file?.contentId
-        || !SAFE_INLINE_IMAGE_TYPES.has(contentType)
+        || !isComposerInlineImageContentType(contentType)
       ) {
         return apiError(c, 404, "NOT_FOUND", "Inline image not found");
       }
@@ -538,6 +604,84 @@ export const mailRoutes = new Hono<AppEnv>()
       });
     },
   )
+  .post(
+    "/attachment-preflight",
+    zValidator("json", attachmentPreflightSchema),
+    async (c) => {
+      const input = c.req.valid("json");
+      const user = c.get("user");
+      const access = await accessibleMailbox(
+        c.env,
+        user.id,
+        input.mailboxId,
+        "send",
+      );
+      if (!access) {
+        return apiError(c, 403, "FORBIDDEN", "Send access is required");
+      }
+      const rate = await checkRateLimit(c.env.DB, {
+        action: "mail-attachment-preflight",
+        identifier: `${user.id}:${input.mailboxId}`,
+        limit: 120,
+        windowMs: 60_000,
+      });
+      if (!rate.allowed) {
+        c.header("retry-after", String(rate.retryAfterSeconds));
+        return apiError(
+          c,
+          429,
+          "RATE_LIMITED",
+          "Too many attachment checks",
+        );
+      }
+
+      try {
+        let subject = input.kind === "compose" ? input.subject : "";
+        let related: Email | null = null;
+        let forwarded: Email | null = null;
+        let includeRelatedContext = false;
+        if (input.kind === "forward") {
+          const context = await resolveForwardContext({
+            env: c.env,
+            mailboxId: input.mailboxId,
+            sourceEmailId: input.sourceEmailId,
+          });
+          forwarded = context.source;
+          subject = context.subject;
+        } else if (input.kind === "reply") {
+          const context = await resolveReplyContext({
+            env: c.env,
+            mailboxId: input.mailboxId,
+            ownAddress: access.address,
+            sourceEmailId: input.sourceEmailId,
+            mode: input.mode,
+            cc: input.cc,
+            bcc: input.bcc,
+          });
+          related = context.source;
+          subject = context.subject;
+          includeRelatedContext = context.includeRelatedContext;
+        }
+        const result = await preflightOutgoingAttachments({
+          env: c.env,
+          compose: {
+            mailboxId: input.mailboxId,
+            userId: user.id,
+            subject,
+            bodyText: input.bodyText,
+            bodyHtml: input.bodyHtml,
+            attachments: input.attachments,
+          },
+          related,
+          forwarded,
+          includeRelatedContext,
+        });
+        return c.json({ ok: true as const, ...result });
+      } catch (error) {
+        return outgoingFailure(c, error);
+      }
+    },
+  )
   .post("/messages", zValidator("json", composeSchema), async (c) => {
     const input = c.req.valid("json");
     const access = await accessibleMailbox(c.env, c.get("user").id, input.mailboxId, "send");
@@ -556,6 +700,7 @@ export const mailRoutes = new Hono<AppEnv>()
         includeRelatedContext: false,
         fromAddress: access.address,
         fromName: access.displayName,
+        defer: (task) => c.executionCtx.waitUntil(task),
       });
       return c.json(
         outgoingResponse(submission.email, false),
@@ -579,50 +724,16 @@ export const mailRoutes = new Hono<AppEnv>()
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Send access is required");
       }
-      const stub = mailboxStub(c.env, input.mailboxId);
-      const parent = await stub.getEmail(c.req.param("id"));
-      if (!parent) {
-        return apiError(c, 404, "NOT_FOUND", "Reply source was not found");
-      }
-      if (!canReplyFrom(parent)) {
-        return apiError(
-          c,
-          409,
-          "NOT_READY",
-          "Wait until the parent message has a confirmed Message-ID",
-        );
-      }
-      const plan = buildReplyPlan(access.address, parent);
-      const action = plan.actions.find((candidate) => candidate.mode === input.mode);
-      if (!action) {
-        return apiError(c, 400, "BAD_REQUEST", "Reply mode is not available");
-      }
-      const recipients = dedupeRecipientFields({
-        to: action.to,
-        cc: input.cc ?? action.cc,
-        bcc: input.bcc,
-      });
-      if (recipientCount(recipients) > MAX_MAIL_RECIPIENTS) {
-        return apiError(
-          c,
-          400,
-          "BAD_REQUEST",
-          `An email can have at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc`,
-        );
-      }
-      const detached = shouldDetachOutboundReply({
-        ownAddress: access.address,
-        plan,
-        to: recipients.to,
-        cc: recipients.cc,
-      });
-      const history = await stub.getConversation(parent.conversationId);
-      const includeRelatedContext = hasNewRecipients({
-        ownAddress: access.address,
-        history,
-        ...recipients,
-      });
       try {
+        const context = await resolveReplyContext({
+          env: c.env,
+          mailboxId: input.mailboxId,
+          ownAddress: access.address,
+          sourceEmailId: c.req.param("id"),
+          mode: input.mode,
+          cc: input.cc,
+          bcc: input.bcc,
+        });
         const submission = await submitOutgoing({
           env: c.env,
           requestUrl: c.req.url,
@@ -630,21 +741,24 @@ export const mailRoutes = new Hono<AppEnv>()
             requestId: input.requestId,
             mailboxId: input.mailboxId,
             userId: c.get("user").id,
-            ...recipients,
-            subject: replySubject(parent.subject),
+            ...context.recipients,
+            subject: context.subject,
             bodyText: input.bodyText,
             bodyHtml: input.bodyHtml,
             attachments: input.attachments,
           },
-          conversationId: detached ? createId("conv") : parent.conversationId,
-          related: parent,
+          conversationId: context.detached
+            ? createId("conv")
+            : context.source.conversationId,
+          related: context.source,
           forwarded: null,
-          includeRelatedContext,
+          includeRelatedContext: context.includeRelatedContext,
           fromAddress: access.address,
           fromName: access.displayName,
+          defer: (task) => c.executionCtx.waitUntil(task),
         });
         return c.json(
-          outgoingResponse(submission.email, detached),
+          outgoingResponse(submission.email, context.detached),
           submission.inserted ? 201 : 200,
         );
       } catch (error) {
@@ -666,26 +780,27 @@ export const mailRoutes = new Hono<AppEnv>()
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Send access is required");
       }
-      const source = await mailboxStub(c.env, input.mailboxId)
-        .getEmail(c.req.param("id"));
-      if (!source) {
-        return apiError(c, 404, "NOT_FOUND", "Forwarded message was not found");
-      }
       try {
+        const context = await resolveForwardContext({
+          env: c.env,
+          mailboxId: input.mailboxId,
+          sourceEmailId: c.req.param("id"),
+        });
         const submission = await submitOutgoing({
           env: c.env,
           requestUrl: c.req.url,
           compose: {
             ...input,
             userId: c.get("user").id,
-            subject: forwardSubject(source.subject),
+            subject: context.subject,
           },
           conversationId: createId("conv"),
           related: null,
-          forwarded: source,
+          forwarded: context.source,
           includeRelatedContext: false,
           fromAddress: access.address,
           fromName: access.displayName,
+          defer: (task) => c.executionCtx.waitUntil(task),
         });
         return c.json(
           outgoingResponse(submission.email, false),

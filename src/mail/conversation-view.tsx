@@ -8,7 +8,6 @@ import {
   FileText,
   Forward,
   Inbox,
-  LoaderCircle,
   RotateCw,
   Trash2,
 } from "lucide-react";
@@ -35,11 +34,12 @@ import {
   ReplyActionIcon,
   type SentReply,
 } from "./conversation-reply";
+import { ConversationLoadingSkeleton } from "./conversation-loading-skeleton";
 import { DeliveryIndicator } from "./delivery-indicator";
 import { EmailHtmlBody } from "./email-html-body";
+import { formatBytes } from "./format-bytes";
 import { notifyOutboundResult } from "./outbound-notification";
 import { useResendMessage } from "./use-mail-data";
-import { formatBytes } from "./use-mail-send";
 import type {
   Mailbox,
   MessageDetail,
@@ -83,7 +83,7 @@ export function ConversationView({
   const resendMessage = useResendMessage();
 
   if (loading) {
-    return <div className="grid min-h-72 place-items-center"><LoaderCircle className="animate-spin text-muted-foreground" /></div>;
+    return <ConversationLoadingSkeleton />;
   }
   if (error) {
     return (
@@ -280,8 +280,9 @@ function MessageBubble({
           outgoing={outgoing}
         />
         <BubbleContent className="w-full min-w-36 px-4 py-3">
-          {message.hasHtmlBody && !message.quotedText && mailboxId ? (
+          {message.bodyHtml && mailboxId ? (
             <EmailHtmlBody
+              bodyHtml={message.bodyHtml}
               mailboxId={mailboxId}
               message={message}
               onRenderModeChange={setRendersHtml}

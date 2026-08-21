@@ -1,5 +1,8 @@
 import type { Email } from "../mailbox/schema";
-import { textWithQuotedContext } from "./outbound-content";
+import {
+  htmlWithQuotedContext,
+  textWithQuotedContext,
+} from "./outbound-content";
 import { dedupeRecipientFields } from "./recipients";
 
 export function emailDestinations(
@@ -23,10 +26,13 @@ export function emailDestinations(
 }
 
 export async function prepareOutboundDelivery(env: Env, message: Email) {
-  const html = message.bodyHtmlR2Key
+  const storedHtml = message.bodyHtmlR2Key
     ? await env.MAIL_STORAGE.get(message.bodyHtmlR2Key).then(
         (object) => object?.text(),
       )
+    : undefined;
+  const html = storedHtml
+    ? htmlWithQuotedContext(storedHtml, message.quotedText)
     : undefined;
   const attachments: EmailAttachment[] = await Promise.all(
     message.attachmentsJson

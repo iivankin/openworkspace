@@ -1,32 +1,50 @@
 import {
-  ChevronUp,
-  LoaderCircle,
-  Minus,
-  Paperclip,
-  Send,
-  X,
-} from "lucide-react";
-import { useRef, useState, type FormEvent } from "react";
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
 import { toast } from "sonner";
-import { forwardSubject, MAX_MAIL_RECIPIENTS } from "../../shared/mail";
-import { Button } from "@/components/ui/button";
 import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-  InputGroupText,
-} from "@/components/ui/input-group";
-import { Textarea } from "@/components/ui/textarea";
+  forwardSubject,
+} from "../../shared/mail";
+import { ComposerAttachmentList } from "./composer-attachment-list";
 import {
-  dedupeRecipientInputs,
-  parseRecipientInput,
-  recipientInputCount,
-} from "./recipient-input";
-import { RecipientFieldRow } from "./recipient-field-row";
-import { notifyOutboundResult } from "./outbound-notification";
+  ComposerEditor,
+  type ComposerContent,
+  type ComposerEditorHandle,
+} from "./composer-editor";
+import { ComposerRecipientFields } from "./composer-recipient-fields";
+import {
+  validateComposerRecipients,
+  type RecipientFieldValue,
+} from "./composer-recipients";
 import type { Mailbox, MessageDetail } from "./types";
-import { formatBytes, useMailSend, type MailSendInput } from "./use-mail-send";
+import {
+  useComposerSession,
+} from "./composer-session";
+import { isInlineComposerImage } from "./composer-upload-client";
+import { useComposerAttachmentPreflight } from "./use-composer-attachment-preflight";
+import {
+  ComposeWindowFooter,
+  ComposeWindowHeader,
+  ForwardedMessageNotice,
+  MinimizedComposer,
+} from "./compose-window-chrome";
+import { useComposeSubmission } from "./use-compose-submission";
+
+const EMPTY_RECIPIENT_FIELD: RecipientFieldValue = {
+  recipients: [],
+  input: "",
+};
+
+const EMPTY_CONTENT: ComposerContent = {
+  bodyHtml: "",
+  bodyText: "",
+  inlineAssetIds: [],
+  linkedAssetIds: [],
+};
 
 export function ComposeWindow({
   mailbox,
@@ -36,105 +54,146 @@ export function ComposeWindow({
   mailbox: Mailbox;
   forwardedMessage?: Pick<
     MessageDetail,
-    "id" | "subject" | "fromAddress" | "fromName" | "preview"
+    "id" | "subject" | "fromAddress" | "fromName" | "preview" | "attachments"
   >;
   onClose: () => void;
 }) {
+  const form = useRef<HTMLFormElement>(null);
+  const editor = useRef<ComposerEditorHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [bcc, setBcc] = useState("");
+  const inlineFileInput = useRef<HTMLInputElement>(null);
+  const [to, setTo] = useState<RecipientFieldValue>(EMPTY_RECIPIENT_FIELD);
+  const [cc, setCc] = useState<RecipientFieldValue>(EMPTY_RECIPIENT_FIELD);
+  const [bcc, setBcc] = useState<RecipientFieldValue>(EMPTY_RECIPIENT_FIELD);
   const [replyTo, setReplyTo] = useState("");
   const [subject, setSubject] = useState(
     () => forwardedMessage ? forwardSubject(forwardedMessage.subject) : "",
   );
-  const [body, setBody] = useState("");
-  const [showCc, setShowCc] = useState(false);
-  const [showBcc, setShowBcc] = useState(false);
-  const [showReplyTo, setShowReplyTo] = useState(false);
+  const [content, setContent] = useState<ComposerContent>(EMPTY_CONTENT);
+  const [documentAssetIds, setDocumentAssetIds] = useState<string[]>([]);
   const [minimized, setMinimized] = useState(false);
-  const {
-    send,
-    files,
-    totalAttachmentBytes,
-    addFiles,
-    removeFile,
-  } = useMailSend();
+  const [dragging, setDragging] = useState(false);
+  const { session, snapshot } = useComposerSession(
+    mailbox.id,
+    forwardedMessage?.attachments,
+  );
 
-  const recipients = dedupeRecipientInputs({
-    to: parseRecipientInput(to),
-    cc: parseRecipientInput(cc),
-    bcc: parseRecipientInput(bcc),
+  const recipients = validateComposerRecipients({
+    to,
+    cc,
+    bcc,
+    replyTo,
   });
-  const recipientCount = recipientInputCount(recipients);
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (send.isPending) return;
-    if (recipientCount === 0) {
-      toast.error("Add at least one recipient in To, Cc, or Bcc");
-      return;
-    }
-    if (recipientCount > MAX_MAIL_RECIPIENTS) {
-      toast.error(`Use at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc`);
-      return;
-    }
-    if (!mailbox.canSend) {
-      toast.error("This mailbox is read-only");
-      return;
-    }
-    const common = {
-      mailboxId: mailbox.id,
-      bodyText: body,
-    };
-    const command: MailSendInput = forwardedMessage
+  const recipientCount = recipients.count;
+  const documentAssetIdSet = useMemo(
+    () => new Set(documentAssetIds),
+    [documentAssetIds],
+  );
+  const activeAssets = useMemo(
+    () => snapshot.assets.filter((asset) => documentAssetIdSet.has(asset.id)),
+    [documentAssetIdSet, snapshot.assets],
+  );
+  useComposerAttachmentPreflight(
+    session,
+    forwardedMessage
       ? {
-          ...common,
           kind: "forward",
+          mailboxId: mailbox.id,
           sourceEmailId: forwardedMessage.id,
-          to: recipients.to,
-          cc: recipients.cc,
-          bcc: recipients.bcc,
-          replyTo: replyTo.trim() || undefined,
+          bodyText: content.bodyText,
+          bodyHtml: content.bodyHtml || undefined,
         }
       : {
-          ...common,
           kind: "compose",
-          to: recipients.to,
-          cc: recipients.cc,
-          bcc: recipients.bcc,
-          replyTo: replyTo.trim() || undefined,
+          mailboxId: mailbox.id,
           subject,
-        };
-    send.mutate(command, {
-      onSuccess: (result) => {
-        notifyOutboundResult(result, "message");
-        onClose();
-      },
-      onError: (error) => toast.error(error.message),
-    });
+          bodyText: content.bodyText,
+          bodyHtml: content.bodyHtml || undefined,
+    },
+    activeAssets,
+    snapshot.phase === "editing",
+  );
+  const linkedIds = snapshot.linkedAssetIds;
+  const attachmentError = session.limitError();
+  const uploadsPending = activeAssets.some(
+    (asset) => asset.status === "uploading",
+  );
+  const uploadsFailed = activeAssets.some(
+    (asset) => asset.status === "error",
+  );
+  const submission = useComposeSubmission({
+    session,
+    phase: snapshot.phase,
+    mailbox,
+    forwardedMessage,
+    recipients,
+    subject,
+    content,
+    editor,
+    activeAssets,
+    uploadLimitError: attachmentError,
+    uploadsPending,
+    uploadsFailed,
+    onClose,
+  });
+  const busy = submission.busy;
+
+  useEffect(() => {
+    if (busy) setDragging(false);
+  }, [busy]);
+
+  function addInlineFiles(files: File[], position?: number) {
+    const assets = session.addFiles(files, "inline");
+    if (!assets) return;
+    editor.current?.insertAssets(assets, position);
+  }
+
+  function addAttachmentFiles(files: File[], position?: number) {
+    const assets = session.addFiles(files, "attachment");
+    if (!assets) return;
+    editor.current?.insertAssets(assets, position);
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLFormElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setDragging(false);
+    if (busy) return;
+
+    // ProseMirror owns editor-body drops so it can preserve the insertion
+    // position. The form catches files dropped on every other composer area.
+    if (
+      event.target instanceof Element
+      && event.target.closest("[data-composer-editor-content]")
+    ) {
+      return;
+    }
+
+    const inline: File[] = [];
+    const attachments: File[] = [];
+    for (const file of Array.from(event.dataTransfer.files)) {
+      (isInlineComposerImage(file) ? inline : attachments).push(file);
+    }
+    if (inline.length) addInlineFiles(inline);
+    if (attachments.length) addAttachmentFiles(attachments);
+  }
+
+  function closeComposer() {
+    if (busy) {
+      toast.error("Wait for the message to finish sending");
+      return;
+    }
+    session.close();
+    onClose();
   }
 
   if (minimized) {
     return (
-      <section
-        aria-label="Minimized message composer"
-        className="fixed right-4 bottom-4 z-50 flex h-13 w-[min(360px,calc(100vw-2rem))] animate-rise items-center gap-1 rounded-xl bg-surface pr-1.5 pl-4 shadow-2xl ring-1 ring-border"
-      >
-        <button
-          type="button"
-          className="min-w-0 flex-1 truncate text-left text-sm font-semibold"
-          onClick={() => setMinimized(false)}
-        >
-          {subject || "New message"}
-        </button>
-        <Button variant="ghost" size="icon-sm" onClick={() => setMinimized(false)}>
-          <ChevronUp /><span className="sr-only">Restore composer</span>
-        </Button>
-        <Button variant="ghost" size="icon-sm" onClick={onClose}>
-          <X /><span className="sr-only">Close composer</span>
-        </Button>
-      </section>
+      <MinimizedComposer
+        subject={subject}
+        onRestore={() => setMinimized(false)}
+        onClose={closeComposer}
+      />
     );
   }
 
@@ -142,105 +201,118 @@ export function ComposeWindow({
     <section
       role="dialog"
       aria-label="New message"
-      className="fixed inset-0 z-50 flex animate-rise flex-col bg-surface shadow-2xl ring-1 ring-border sm:inset-auto sm:right-5 sm:bottom-5 sm:h-[min(480px,calc(100dvh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))] sm:rounded-2xl"
+      className="fixed inset-0 z-50 flex animate-rise flex-col bg-surface shadow-2xl ring-1 ring-border sm:inset-auto sm:right-5 sm:bottom-5 sm:h-[min(600px,calc(100dvh-2.5rem))] sm:w-[min(560px,calc(100vw-2.5rem))] sm:rounded-xl"
     >
-      <form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
-        <header className="flex h-13 shrink-0 items-center gap-1 border-b border-border/70 bg-surface-sunken/70 pr-1.5 pl-4 sm:rounded-t-2xl">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">New message</p>
-            <p className="truncate text-[11px] text-muted-foreground">From {mailbox.address}</p>
-          </div>
-          <Button className="hidden sm:inline-flex" type="button" variant="ghost" size="icon-sm" onClick={() => setMinimized(true)}>
-            <Minus /><span className="sr-only">Minimize composer</span>
-          </Button>
-          <Button type="button" variant="ghost" size="icon-sm" onClick={onClose}>
-            <X /><span className="sr-only">Close composer</span>
-          </Button>
-        </header>
+      <form
+        ref={form}
+        className="flex min-h-0 flex-1 flex-col"
+        aria-busy={busy}
+        onSubmit={submission.submit}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          if (!busy) setDragging(true);
+        }}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = busy ? "none" : "copy";
+        }}
+        onDragLeave={(event) => {
+          if (
+            !event.currentTarget.contains(event.relatedTarget as Node | null)
+          ) {
+            setDragging(false);
+          }
+        }}
+        onDragEnd={() => setDragging(false)}
+        onDrop={handleComposerDrop}
+      >
+        <ComposeWindowHeader
+          from={mailbox.address}
+          onMinimize={() => setMinimized(true)}
+          onClose={closeComposer}
+        />
 
-        <div className="shrink-0 divide-y divide-border/70 border-b border-border/70 px-4">
-          <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
-            <InputGroupAddon className="w-14 justify-start pl-0">
-              <InputGroupText className="text-xs font-medium">To</InputGroupText>
-            </InputGroupAddon>
-            <InputGroupInput className="px-3" value={to} onChange={(event) => setTo(event.target.value)} placeholder="name@example.com" />
-            <InputGroupAddon align="inline-end" className="gap-0 pr-0">
-              <InputGroupButton onClick={() => setShowCc(true)}>Cc</InputGroupButton>
-              <InputGroupButton onClick={() => setShowBcc(true)}>Bcc</InputGroupButton>
-              <InputGroupButton onClick={() => setShowReplyTo(true)}>Reply-to</InputGroupButton>
-            </InputGroupAddon>
-          </InputGroup>
-          {showCc && <RecipientFieldRow label="Cc" value={cc} onChange={setCc} />}
-          {showBcc && <RecipientFieldRow label="Bcc" value={bcc} onChange={setBcc} />}
-          {showReplyTo && <RecipientFieldRow label="Reply-to" value={replyTo} onChange={setReplyTo} />}
-          <InputGroup className="h-11 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
-            <InputGroupAddon className="w-14 justify-start pl-0">
-              <InputGroupText className="text-xs font-medium">Subject</InputGroupText>
-            </InputGroupAddon>
-            <InputGroupInput
-              className="px-3"
-              value={subject}
-              readOnly={Boolean(forwardedMessage)}
-              onChange={(event) => setSubject(event.target.value)}
-              placeholder="Subject"
-            />
-          </InputGroup>
-        </div>
+        <ComposerRecipientFields
+          mailboxId={mailbox.id}
+          to={to}
+          cc={cc}
+          bcc={bcc}
+          replyTo={replyTo}
+          subject={subject}
+          subjectReadOnly={Boolean(forwardedMessage)}
+          disabled={busy}
+          onToChange={setTo}
+          onCcChange={setCc}
+          onBccChange={setBcc}
+          onReplyToChange={setReplyTo}
+          onSubjectChange={setSubject}
+        />
 
-        {forwardedMessage && (
-          <div className="shrink-0 border-b border-border/70 bg-primary/8 px-4 py-2.5 text-xs">
-            <p className="font-semibold">Forwarding {forwardedMessage.fromName || forwardedMessage.fromAddress}</p>
-            <p className="mt-0.5 truncate text-muted-foreground">
-              {forwardedMessage.subject} · {forwardedMessage.preview}
-            </p>
-          </div>
-        )}
+        {forwardedMessage ? (
+          <ForwardedMessageNotice message={forwardedMessage} />
+        ) : null}
 
-        <Textarea className="min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent px-4 py-4 text-[0.9375rem] leading-[1.65] shadow-none hover:border-transparent focus-visible:ring-0 dark:bg-transparent" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write a message" />
+        <ComposerEditor
+          ref={editor}
+          session={session}
+          onChange={setContent}
+          onAssetsChange={setDocumentAssetIds}
+          onAddInlineFiles={(files, position) => {
+            addInlineFiles(files, position);
+          }}
+          onAddAttachmentFiles={(files, position) => {
+            addAttachmentFiles(files, position);
+          }}
+          onChooseInlineImage={() => inlineFileInput.current?.click()}
+          onSubmitShortcut={() => form.current?.requestSubmit()}
+          dragging={dragging}
+          disabled={busy}
+        />
 
-        {files.length > 0 && (
-          <div className="max-h-28 shrink-0 overflow-y-auto border-t border-border/70 px-4 py-2">
-            {files.map((file, index) => (
-              <div key={`${file.name}-${index}`} className="flex items-center gap-2 py-1 text-xs">
-                <Paperclip className="size-3.5 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
-                <span className="text-muted-foreground tabular-nums">{formatBytes(file.size)}</span>
-                <Button type="button" variant="ghost" size="icon-xs" onClick={() => removeFile(index)}>
-                  <X /><span className="sr-only">Remove {file.name}</span>
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
+        <ComposerAttachmentList
+          uploads={activeAssets.filter(
+            (asset) =>
+              !linkedIds.has(asset.id)
+              || asset.status !== "uploaded",
+          )}
+          linkedIds={linkedIds}
+          progress={session.progress}
+          disabled={busy}
+          onRemove={(asset) => {
+            if (editor.current?.removeAsset(asset.id)) return;
+            session.remove(asset.id);
+          }}
+          onRetry={(asset) => {
+            void session.retry(asset.id);
+          }}
+        />
 
-        <footer className="flex h-15 shrink-0 items-center gap-2 border-t border-border/70 bg-surface-sunken/70 px-3 sm:rounded-b-2xl">
-          <input
-            ref={fileInput}
-            className="sr-only"
-            type="file"
-            multiple
-            onChange={(event) => {
-              addFiles(event.target.files);
-              event.target.value = "";
-            }}
-          />
-          <Button type="button" variant="ghost" size="icon-sm" onClick={() => fileInput.current?.click()}>
-            <Paperclip /><span className="sr-only">Add attachments</span>
-          </Button>
-          <span className="text-[11px] text-muted-foreground">
-            {files.length > 0
-              ? `${files.length} files · ${formatBytes(totalAttachmentBytes)} · large files become 30-day links`
-              : "Up to 500 MB"}
-          </span>
-          <Button
-            className="ml-auto"
-            type="submit"
-            disabled={send.isPending || recipientCount === 0 || !mailbox.canSend}
-          >
-            {send.isPending ? <LoaderCircle className="animate-spin" /> : <Send />}
-            Send
-          </Button>
-        </footer>
+        <ComposeWindowFooter
+          fileInput={fileInput}
+          inlineFileInput={inlineFileInput}
+          uploads={activeAssets}
+          error={
+            attachmentError
+            ?? (activeAssets.length > 0 && snapshot.planError
+              ? "Could not check attachment delivery"
+              : null)
+          }
+          sending={busy}
+          sendDisabled={
+            busy
+            || recipientCount === 0
+            || !mailbox.canSend
+            || Boolean(attachmentError)
+            || uploadsPending
+            || uploadsFailed
+          }
+          onAddAttachments={addAttachmentFiles}
+          onAddInlineImages={(files) => {
+            addInlineFiles(files);
+          }}
+        />
       </form>
     </section>
   );

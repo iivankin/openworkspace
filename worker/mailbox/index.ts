@@ -11,6 +11,10 @@ import {
   UnprocessableInboundEmailError,
 } from "../mail/inbound";
 import { prepareOutboundDelivery } from "../mail/outbound-delivery";
+import {
+  suggestParticipants,
+  type ParticipantSource,
+} from "../mail/participants";
 import { buildEmailSearchQuery } from "../mail/search";
 import {
   customFolderVisibilityPredicate,
@@ -125,6 +129,7 @@ export class MailboxDO extends DurableObject<Env> {
   private readonly db: MailboxDatabase;
   private readonly state: DurableObjectState;
   private readonly bindings: Env;
+  private recentParticipantSources: ParticipantSource[] | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -255,6 +260,26 @@ export class MailboxDO extends DurableObject<Env> {
     return email?.attachmentsJson.find((file) => file.id === attachmentId) ?? null;
   }
 
+  suggestRecipients(ownAddress: string, query: string, limit: number) {
+    this.recentParticipantSources ??= this.db
+      .select({
+        fromJson: emails.fromJson,
+        toJson: emails.toJson,
+        ccJson: emails.ccJson,
+        bccJson: emails.bccJson,
+      })
+      .from(emails)
+      .orderBy(desc(emails.timelineAt), desc(emails.id))
+      .limit(500)
+      .all();
+    return suggestParticipants(
+      this.recentParticipantSources,
+      ownAddress,
+      query,
+      limit,
+    );
+  }
+
   listFolders(): FolderListItem[] {
     const customFolders = this.db
       .select()
@@ -318,6 +343,7 @@ export class MailboxDO extends DurableObject<Env> {
 
   insertEmail(email: NewEmail) {
     this.db.insert(emails).values(email).onConflictDoNothing().run();
+    this.recentParticipantSources = null;
     return this.getEmail(email.id);
   }
 
@@ -354,6 +380,7 @@ export class MailboxDO extends DurableObject<Env> {
         return { outcome: "inserted", email: inserted };
       });
       if (submission.outcome !== "inserted") return submission;
+      this.recentParticipantSources = null;
       return {
         ...submission,
         email: await this.deliverOutgoing(submission.email.id),
@@ -409,6 +436,7 @@ export class MailboxDO extends DurableObject<Env> {
           .run();
       }
     });
+    this.recentParticipantSources = null;
     return { folders: folderValues.length, emails: emailValues.length };
   }
 

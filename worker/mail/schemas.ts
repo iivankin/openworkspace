@@ -15,6 +15,11 @@ export const mailboxQuerySchema = z.object({
   mailboxId: z.string().min(1),
 });
 
+export const recipientSuggestionQuerySchema = z.object({
+  q: z.string().trim().max(200).default(""),
+  limit: z.coerce.number().int().min(1).max(12).default(8),
+});
+
 export const remoteProxyQuerySchema = mailboxQuerySchema.extend({
   url: z.string().trim().min(1).max(4_096),
 });
@@ -34,17 +39,41 @@ export const createUploadSchema = z.object({
   size: z.number().int().positive().max(MAX_COMPOSER_ATTACHMENT_BYTES),
 });
 
+export const uploadIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid");
+
 const outboundAttachmentSchema = z.object({
-  uploadId: z
+  uploadId: uploadIdSchema,
+  disposition: z.enum(["attachment", "inline"]).default("attachment"),
+  contentId: z
     .string()
     .trim()
     .min(1)
-    .max(80)
-    .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid"),
+    .max(255)
+    .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid")
+    .optional(),
+}).superRefine((attachment, context) => {
+  if (attachment.disposition === "inline" && !attachment.contentId) {
+    context.addIssue({
+      code: "custom",
+      path: ["contentId"],
+      message: "Inline attachments require a content ID",
+    });
+  }
+  if (attachment.disposition === "attachment" && attachment.contentId) {
+    context.addIssue({
+      code: "custom",
+      path: ["contentId"],
+      message: "Regular attachments cannot have a content ID",
+    });
+  }
 });
 
-const outboundRequestFields = {
-  requestId: z.uuid(),
+const outboundContentFields = {
   mailboxId: z.string().min(1),
   bodyText: z.string().max(500_000).default(""),
   bodyHtml: z.string().max(1_000_000).optional(),
@@ -56,7 +85,21 @@ const outboundRequestFields = {
       (attachments) =>
         new Set(attachments.map((file) => file.uploadId)).size === attachments.length,
       { message: "Duplicate attachment uploads are not allowed" },
+    )
+    .refine(
+      (attachments) => {
+        const contentIds = attachments.flatMap((file) =>
+          file.contentId ? [file.contentId.toLocaleLowerCase("en-US")] : []
+        );
+        return new Set(contentIds).size === contentIds.length;
+      },
+      { message: "Duplicate attachment content IDs are not allowed" },
     ),
+};
+
+const outboundRequestFields = {
+  requestId: z.uuid(),
+  ...outboundContentFields,
 };
 
 const recipientFields = {
@@ -110,6 +153,27 @@ export const forwardSchema = z
     (value) => recipientCount(value) <= MAX_MAIL_RECIPIENTS,
     { message: `An email can have at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc` },
   );
+
+export const attachmentPreflightSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...outboundContentFields,
+    kind: z.literal("compose"),
+    subject: z.string().trim().max(998).default(""),
+  }),
+  z.object({
+    ...outboundContentFields,
+    kind: z.literal("forward"),
+    sourceEmailId: z.string().trim().min(1).max(255),
+  }),
+  z.object({
+    ...outboundContentFields,
+    kind: z.literal("reply"),
+    sourceEmailId: z.string().trim().min(1).max(255),
+    mode: z.enum(replyActionModes),
+    cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).optional(),
+    bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
+  }),
+]);
 
 export const updateConversationSchema = z
   .object({

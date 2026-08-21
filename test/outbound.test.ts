@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   attachmentsRequiringDownloadLinks,
   messageIdForRequest,
+  withDownloadLinks,
 } from "../worker/mail/outbound";
+import {
+  composerAttachmentLimitError,
+  linkedAttachmentTextToken,
+} from "../shared/mail";
 import { composeSchema } from "../worker/mail/schemas";
 import { normalizeEmail, normalizeMailboxAddress } from "../worker/lib/ids";
 import { boundedMessageIds, replyThreadHeaders } from "../worker/mail/rfc";
@@ -20,6 +25,45 @@ describe("outbound email limits", () => {
     });
 
     expect([...linked]).toEqual(["largest"]);
+  });
+
+  it("counts forwarded and newly uploaded attachments in one composer limit", () => {
+    expect(composerAttachmentLimitError([
+      ...Array.from({ length: 10 }, () => ({ size: 1 })),
+      { size: 1 },
+    ])).toBe("Use at most 10 attachments");
+  });
+
+  it("keeps a positioned download link out of the appended fallback list", () => {
+    const uploadId = "upl_0123456789abcdef0123456789abcdef";
+    const downloadUrl = "https://mail.example.test/download/report";
+    const result = withDownloadLinks(
+      `Before\n\n${linkedAttachmentTextToken(uploadId)}\n\nAfter`,
+      `<p>Before<span data-linked-attachment="${uploadId}">report.pdf</span>After</p>`,
+      [{
+        id: "att_1",
+        r2Key: "messages/one/attachments/att_1",
+        filename: "report.pdf",
+        contentType: "application/pdf",
+        size: 4_000_000,
+        contentId: null,
+        disposition: "attachment",
+        delivery: "download_link",
+        downloadTokenHash: "hash",
+        downloadExpiresAt: Date.UTC(2026, 7, 26),
+        downloadUrl,
+        sourceUploadId: uploadId,
+      }],
+      new Date("2026-07-27T00:00:00Z"),
+    );
+
+    expect(result.bodyText).toContain(`report.pdf: ${downloadUrl}`);
+    expect(result.bodyText).not.toContain("Attachments (download links");
+    expect(
+      result.bodyHtml?.match(
+        /https:\/\/mail\.example\.test\/download\/report/gu,
+      ),
+    ).toHaveLength(1);
   });
 
   it("enforces the provider's combined 50-recipient limit", () => {
@@ -80,6 +124,31 @@ describe("outbound email limits", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("requires a content ID only for inline uploads", () => {
+    const valid = composeSchema.safeParse({
+      requestId: crypto.randomUUID(),
+      mailboxId: "mailbox",
+      to: ["recipient@example.test"],
+      attachments: [{
+        uploadId: "upl_0123456789abcdef0123456789abcdef",
+        disposition: "inline",
+        contentId: "inline-image@example.test",
+      }],
+    });
+    const missing = composeSchema.safeParse({
+      requestId: crypto.randomUUID(),
+      mailboxId: "mailbox",
+      to: ["recipient@example.test"],
+      attachments: [{
+        uploadId: "upl_0123456789abcdef0123456789abcdef",
+        disposition: "inline",
+      }],
+    });
+
+    expect(valid.success).toBe(true);
+    expect(missing.success).toBe(false);
   });
 
   it("rejects duplicate attachment upload refs", () => {

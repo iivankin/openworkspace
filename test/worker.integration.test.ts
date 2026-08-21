@@ -3,9 +3,14 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import worker from "../worker";
 import { hashToken } from "../worker/lib/crypto";
+import { prepareOutboundDelivery } from "../worker/mail/outbound-delivery";
+import {
+  composerUploadMetaKey,
+  discardComposerUploads,
+} from "../worker/mail/uploads";
 
 describe("mail worker", () => {
   it("bootstraps the only initial admin and protects mailbox data", async () => {
@@ -353,15 +358,19 @@ describe("mail worker", () => {
     );
     expect(htmlMessage?.bodyText).toContain("482901");
     expect(htmlMessage?.bodyHtmlR2Key).toBeTruthy();
-    const htmlBody = await exports.default.fetch(
+    const htmlConversation = await exports.default.fetch(
       new Request(
-        `http://example.test/api/mail/messages/${htmlMessage!.id}/html?mailboxId=${personalMailboxId}`,
+        `http://example.test/api/mail/conversations/${htmlMessage!.conversationId}?mailboxId=${personalMailboxId}`,
         { headers: { cookie: cookie! } },
       ),
     );
-    expect(htmlBody.status).toBe(200);
-    expect(htmlBody.headers.get("content-type")).toContain("text/plain");
-    expect(await htmlBody.text()).toContain("<strong>482901</strong>");
+    expect(htmlConversation.status).toBe(200);
+    expect(await htmlConversation.json()).toMatchObject({
+      messages: [{
+        id: htmlMessage!.id,
+        bodyHtml: expect.stringContaining("<strong>482901</strong>"),
+      }],
+    });
 
     const blockedRemote = await exports.default.fetch(
       new Request(
@@ -682,6 +691,7 @@ describe("mail worker", () => {
           cc: ["new-participant@example.net"],
           bcc: [],
           bodyText: "Adding someone who needs the context.",
+          bodyHtml: "<p><strong>Adding someone who needs the context.</strong></p>",
         }),
       }),
     );
@@ -700,6 +710,19 @@ describe("mail worker", () => {
       bodyText: "Adding someone who needs the context.",
       quotedText: expect.stringContaining("Persisted by the mailbox alarm."),
     });
+    const storedContextHtml = contextMessage?.bodyHtmlR2Key
+      ? await env.MAIL_STORAGE.get(contextMessage.bodyHtmlR2Key).then(
+          (object) => object?.text(),
+        )
+      : null;
+    expect(storedContextHtml).toBe(
+      "<p><strong>Adding someone who needs the context.</strong></p>",
+    );
+    const contextDelivery = await prepareOutboundDelivery(env, contextMessage!);
+    expect(contextDelivery.html).toContain(
+      "<strong>Adding someone who needs the context.</strong>",
+    );
+    expect(contextDelivery.html).toContain("Persisted by the mailbox alarm.");
 
     const groupParentId = "msg_group_parent";
     const groupParentAt = new Date();
@@ -886,6 +909,17 @@ describe("mail worker", () => {
       );
       expect(put.status).toBe(200);
       await put.json();
+      const complete = await exports.default.fetch(
+        new Request(
+          `http://example.test/api/mail/uploads/${intent.upload.id}/complete?mailboxId=${personalMailboxId}`,
+          {
+            method: "POST",
+            headers: { cookie: cookie! },
+          },
+        ),
+      );
+      expect(complete.status).toBe(200);
+      await complete.json();
       return intent.upload.id;
     }
     const uploadA = await uploadAttachment(
@@ -896,6 +930,27 @@ describe("mail worker", () => {
       "request-b.txt",
       "attachment from request B",
     );
+    const attachmentPreflight = await exports.default.fetch(
+      new Request("http://example.test/api/mail/attachment-preflight", {
+        method: "POST",
+        headers: {
+          cookie: cookie!,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "compose",
+          mailboxId: personalMailboxId,
+          subject: "Attachment preflight",
+          bodyText: "Small attachment",
+          attachments: [{ uploadId: uploadA }],
+        }),
+      }),
+    );
+    expect(attachmentPreflight.status).toBe(200);
+    expect(await attachmentPreflight.json()).toMatchObject({
+      linkedUploadIds: [],
+      externalizedAttachments: 0,
+    });
     const concurrentPayloads = [
       {
         requestId: concurrentRequestId,
@@ -942,6 +997,26 @@ describe("mail worker", () => {
     expect(await concurrentObject?.text()).toBe(
       `attachment from request ${winnerIndex === 0 ? "A" : "B"}`,
     );
+    const winnerUpload = winnerIndex === 0 ? uploadA : uploadB;
+    const losingUpload = winnerIndex === 0 ? uploadB : uploadA;
+    await vi.waitFor(async () => {
+      expect(
+        await env.MAIL_STORAGE.head(
+          composerUploadMetaKey(personalMailboxId, adminRow!.id, winnerUpload),
+        ),
+      ).toBeNull();
+    }, { timeout: 2_000 });
+    expect(
+      await env.MAIL_STORAGE.head(
+        composerUploadMetaKey(personalMailboxId, adminRow!.id, losingUpload),
+      ),
+    ).not.toBeNull();
+    await discardComposerUploads({
+      env,
+      mailboxId: personalMailboxId,
+      userId: adminRow!.id,
+      uploadIds: [losingUpload],
+    });
 
     const publicMessageId = "msg_public_download";
     const publicAttachmentId = "att_public_download";

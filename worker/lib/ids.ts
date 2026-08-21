@@ -1,3 +1,5 @@
+import { normalizeExternalEmailAddress } from "../../shared/mail";
+
 export function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }
@@ -8,10 +10,7 @@ export function createId(prefix: string): string {
  * here because they can change the destination of an external message.
  */
 export function normalizeEmail(value: string): string {
-  const trimmed = value.trim();
-  const separator = trimmed.lastIndexOf("@");
-  if (separator <= 0 || separator === trimmed.length - 1) return trimmed;
-  return `${trimmed.slice(0, separator)}@${trimmed.slice(separator + 1).toLocaleLowerCase("en-US")}`;
+  return normalizeExternalEmailAddress(value);
 }
 
 /**

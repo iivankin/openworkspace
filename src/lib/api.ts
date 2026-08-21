@@ -14,14 +14,25 @@ export type SuccessfulResponse<R extends ResponseLike> = Extract<
   { ok: true }
 >;
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function responseJson<R extends ResponseLike>(
   response: R,
 ): Promise<SuccessfulResponse<R>> {
   const body = await response.json();
   if (!response.ok) {
     const failure = body as { error?: { message?: string } };
-    throw new Error(
+    throw new ApiError(
       failure.error?.message ?? `Request failed (${response.status})`,
+      response.status,
     );
   }
   return body as SuccessfulResponse<R>;

@@ -1,23 +1,30 @@
 import { mailboxStub } from "../mailbox";
 import type { Email } from "../mailbox/schema";
 import {
+  discardPreparedObjects,
   messageIdForRequest,
   outgoingRequestFingerprint,
   prepareOutgoingEmail,
   type OutgoingMessageInput,
 } from "./outbound";
-import { discardComposerUploadStaging } from "./uploads";
+import { discardComposerUploads } from "./uploads";
 
 export class OutgoingRequestConflictError extends Error {}
 
-async function discardPreparedObjects(env: Env, storageKeys: string[]) {
-  if (!storageKeys.length) return;
-  try {
-    await env.MAIL_STORAGE.delete(storageKeys);
-  } catch (error) {
-    // Attempt-scoped keys cannot corrupt the winning idempotent request.
-    console.error("Could not remove unused outgoing mail objects", error);
-  }
+function deferComposerUploadCleanup(input: {
+  env: Env;
+  compose: OutgoingMessageInput;
+  uploadIds: string[];
+  defer: (task: Promise<unknown>) => void;
+}) {
+  const uploadIds = [...new Set(input.uploadIds)];
+  if (!uploadIds.length) return;
+  input.defer(discardComposerUploads({
+    env: input.env,
+    mailboxId: input.compose.mailboxId,
+    userId: input.compose.userId,
+    uploadIds,
+  }));
 }
 
 export async function submitOutgoing(input: {
@@ -30,6 +37,7 @@ export async function submitOutgoing(input: {
   related: Email | null;
   forwarded: Email | null;
   includeRelatedContext: boolean;
+  defer: (task: Promise<unknown>) => void;
 }) {
   const { compose } = input;
   const stub = mailboxStub(input.env, compose.mailboxId);
@@ -41,10 +49,16 @@ export async function submitOutgoing(input: {
       existing.direction !== "outgoing"
       || existing.requestFingerprint !== requestFingerprint
     ) {
+      // The conflicting request was not accepted, so its composer still owns
+      // these immutable uploads and may retry them with a fresh attempt id.
       throw new OutgoingRequestConflictError(
         "Request identifier is already in use with different content",
       );
     }
+    deferComposerUploadCleanup({
+      ...input,
+      uploadIds: compose.attachments.map((attachment) => attachment.uploadId),
+    });
     return { email: existing, inserted: false };
   }
 
@@ -73,16 +87,17 @@ export async function submitOutgoing(input: {
   if (submission.outcome !== "inserted") {
     await discardPreparedObjects(input.env, prepared.storageKeys);
     if (submission.outcome === "conflict") {
+      // Do not clean the losing request's composer uploads. Only prepared
+      // message-scoped copies belong to this failed submission attempt.
       throw new OutgoingRequestConflictError(
         "Request identifier is already in use with different content",
       );
     }
-  } else if (prepared.stagingUploadKeys.length) {
-    await discardComposerUploadStaging({
-      env: input.env,
-      keys: prepared.stagingUploadKeys,
-    });
   }
+  deferComposerUploadCleanup({
+    ...input,
+    uploadIds: prepared.composerUploadIds,
+  });
   return {
     email: submission.email,
     inserted: submission.outcome === "inserted",

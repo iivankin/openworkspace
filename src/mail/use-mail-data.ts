@@ -29,6 +29,25 @@ export function useFolders(mailboxId: string | undefined) {
   });
 }
 
+export function useRecipientSuggestions(
+  mailboxId: string | undefined,
+  query: string,
+  active: boolean,
+) {
+  return useQuery({
+    queryKey: ["recipient-suggestions", mailboxId, query],
+    queryFn: async () =>
+      responseJson(
+        await api.api.mail.mailboxes[":id"]["recipient-suggestions"].$get({
+          param: { id: mailboxId! },
+          query: { q: query, limit: "8" },
+        }),
+      ),
+    enabled: Boolean(mailboxId) && active,
+    staleTime: 30_000,
+  });
+}
+
 export function useConversations(
   mailboxId: string | undefined,
   folder: Folder,

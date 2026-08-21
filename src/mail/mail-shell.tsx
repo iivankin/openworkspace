@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { ComposeWindow } from "./compose-window";
 import { ConversationView } from "./conversation-view";
 import { MailHeader } from "./mail-header";
 import { FolderTabBar, folderDisplayName } from "./mail-navigation";
@@ -23,10 +28,15 @@ import {
   useUpdateConversation,
 } from "./use-mail-data";
 
+const ComposeWindow = lazy(async () => {
+  const module = await import("./compose-window");
+  return { default: module.ComposeWindow };
+});
+
 export function MailShell({ mailboxId }: { mailboxId?: string }) {
   const navigateRoute = useNavigate();
   const [params] = useSearchParams();
-  const [composeOpen, setComposeOpen] = useState(false);
+  const [composerMailboxId, setComposerMailboxId] = useState<string | null>(null);
   const [forwardedMessage, setForwardedMessage] = useState<MessageDetail | undefined>();
   const [search, setSearch] = useState("");
   const mailboxQuery = useMailboxes();
@@ -47,8 +57,20 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     ready: locationReady,
     canonicalParams,
   } = location;
+  const activeMailboxId = mailbox?.id;
+  const composeOpen = composerMailboxId === activeMailboxId;
   const currentSearch = params.toString();
   const canonicalSearch = canonicalParams.toString();
+  useEffect(() => {
+    if (
+      composerMailboxId
+      && activeMailboxId
+      && composerMailboxId !== activeMailboxId
+    ) {
+      setComposerMailboxId(null);
+      setForwardedMessage(undefined);
+    }
+  }, [activeMailboxId, composerMailboxId]);
   useEffect(() => {
     if (
       locationReady
@@ -107,17 +129,17 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
   function openCompose() {
     if (!mailbox?.canSend) return;
     setForwardedMessage(undefined);
-    setComposeOpen(true);
+    setComposerMailboxId(mailbox.id);
   }
 
   function openForward(message: MessageDetail) {
     if (!mailbox?.canSend) return;
     setForwardedMessage(message);
-    setComposeOpen(true);
+    setComposerMailboxId(mailbox.id);
   }
 
   function closeComposer() {
-    setComposeOpen(false);
+    setComposerMailboxId(null);
     setForwardedMessage(undefined);
   }
 
@@ -165,7 +187,10 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
         searchPlaceholder={`Search in ${folderName}`}
         showSearch={!conversationId}
         onSearchChange={setSearch}
-        onMailboxChange={(id) => navigate({ mailbox: id, folder: "inbox", conversation: null })}
+        onMailboxChange={(id) => {
+          closeComposer();
+          navigate({ mailbox: id, folder: "inbox", conversation: null });
+        }}
         onCompose={openCompose}
         onAdministration={() => navigateRoute("/admin")}
       />
@@ -231,12 +256,14 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
       </div>
 
       {composeOpen && mailbox && (
-        <ComposeWindow
-          key={`${mailbox.id}:${forwardedMessage?.id ?? "compose"}`}
-          mailbox={mailbox}
-          forwardedMessage={forwardedMessage}
-          onClose={closeComposer}
-        />
+        <Suspense fallback={null}>
+          <ComposeWindow
+            key={`${mailbox.id}:${forwardedMessage?.id ?? "compose"}`}
+            mailbox={mailbox}
+            forwardedMessage={forwardedMessage}
+            onClose={closeComposer}
+          />
+        </Suspense>
       )}
     </main>
   );

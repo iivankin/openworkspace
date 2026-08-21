@@ -7,13 +7,19 @@ import {
   ReplyAll,
   Send,
   Users,
-  X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { toast } from "sonner";
-import { MAX_MAIL_RECIPIENTS } from "../../shared/mail";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+} from "react";
+import { normalizeExternalEmailAddress } from "../../shared/mail";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ComposerAttachmentList } from "./composer-attachment-list";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,22 +35,48 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
+import { RecipientCombobox } from "./recipient-combobox";
 import {
-  dedupeRecipientInputs,
-  parseRecipientInput,
-  recipientInputCount,
-} from "./recipient-input";
-import { RecipientFieldRow } from "./recipient-field-row";
-import { notifyOutboundResult } from "./outbound-notification";
+  recipientsWithPendingInput,
+  validateComposerRecipients,
+  type RecipientFieldValue,
+} from "./composer-recipients";
+import {
+  useReplySubmission,
+  type SentReply,
+} from "./use-reply-submission";
 import type {
   Mailbox,
   MessageDetail,
   ReplyAction,
   ReplyActionMode,
 } from "./types";
-import { useMailSend, type SubmittedMessage } from "./use-mail-send";
+import { useComposerSession } from "./composer-session";
+import { useComposerAttachmentPreflight } from "./use-composer-attachment-preflight";
 
-export type SentReply = Pick<SubmittedMessage, "conversationId" | "detached">;
+export type { SentReply } from "./use-reply-submission";
+
+const EMPTY_RECIPIENT_FIELD: RecipientFieldValue = {
+  recipients: [],
+  input: "",
+};
+
+function recipientField(addresses: string[]): RecipientFieldValue {
+  return {
+    recipients: addresses.map((address) => ({ address, name: null })),
+    input: "",
+  };
+}
+
+function recipientAddresses(value: RecipientFieldValue) {
+  return recipientsWithPendingInput(value).map((recipient) => recipient.address);
+}
+
+function recipientAddressSet(value: RecipientFieldValue) {
+  return new Set(
+    recipientAddresses(value).map(normalizeExternalEmailAddress),
+  );
+}
 
 export function ConversationReply({
   mailbox,
@@ -62,75 +94,124 @@ export function ConversationReply({
   const fileInput = useRef<HTMLInputElement>(null);
   const initialAction = findAction(parent, mode);
   const [body, setBody] = useState("");
-  const [cc, setCc] = useState(initialAction?.cc.join(", ") ?? "");
-  const [bcc, setBcc] = useState("");
+  const [cc, setCc] = useState(
+    () => recipientField(initialAction?.cc ?? []),
+  );
+  const [bcc, setBcc] = useState<RecipientFieldValue>(EMPTY_RECIPIENT_FIELD);
   const [showCc, setShowCc] = useState(Boolean(initialAction?.cc.length));
   const [showBcc, setShowBcc] = useState(false);
-  const { send, files, addFiles, removeFile } = useMailSend();
+  const { session, snapshot } = useComposerSession(mailbox?.id ?? "");
+  const activeAssets = snapshot.assets;
+  const uploadLimitError = session.limitError();
+  const uploadsPending = activeAssets.some(
+    (asset) => asset.status === "uploading",
+  );
+  const uploadsFailed = activeAssets.some(
+    (asset) => asset.status === "error",
+  );
   const action = useMemo(
     () => findAction(parent, mode),
     [mode, parent],
   );
   useEffect(() => {
     const next = findAction(parent, mode);
-    setCc(next.cc.join(", "));
+    setCc(recipientField(next.cc));
     setShowCc(next.cc.length > 0);
   }, [mode, parent.id]);
-  const recipients = dedupeRecipientInputs({
-    to: action?.to ?? [],
-    cc: parseRecipientInput(cc),
-    bcc: parseRecipientInput(bcc),
+  const recipients = validateComposerRecipients({
+    to: recipientField(action?.to ?? []),
+    cc,
+    bcc,
   });
-
-  if (!mailbox?.canSend || !action || action.to.length === 0) return null;
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (send.isPending) return;
-    const recipientCount = recipientInputCount(recipients);
-    if (recipientCount > MAX_MAIL_RECIPIENTS) {
-      toast.error(`Use at most ${MAX_MAIL_RECIPIENTS} recipients across To, Cc, and Bcc`);
-      return;
-    }
-    queueReply();
-  }
-
-  function selectAction(next: ReplyAction) {
-    onModeChange(next.mode);
-    setCc(next.cc.join(", "));
-    setShowCc(next.cc.length > 0);
-  }
-
-  function queueReply() {
-    if (!mailbox || !action) return;
-    send.mutate({
+  useComposerAttachmentPreflight(
+    session,
+    {
       kind: "reply",
-      mailboxId: mailbox.id,
+      mailboxId: mailbox?.id ?? "",
+      sourceEmailId: parent.id,
+      mode: action?.mode ?? mode,
       cc: recipients.cc,
       bcc: recipients.bcc,
       bodyText: body,
-      parentEmailId: parent.id,
-      mode: action.mode,
-    }, {
-      onSuccess: (result) => {
-        notifyOutboundResult(result, "reply");
-        setBody("");
-        setBcc("");
-        onSent({
-          conversationId: result.conversationId,
-          detached: result.detached,
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    });
+    },
+    activeAssets,
+    snapshot.phase === "editing" && Boolean(mailbox && action),
+  );
+  const submission = useReplySubmission({
+    session,
+    phase: snapshot.phase,
+    mailbox,
+    parent,
+    action,
+    recipients,
+    body,
+    uploadLimitError,
+    uploadsPending,
+    uploadsFailed,
+    onSuccess: (result) => {
+      setBody("");
+      setBcc(EMPTY_RECIPIENT_FIELD);
+      onSent(result);
+    },
+  });
+  const busy = submission.busy;
+  const linkedIds = snapshot.linkedAssetIds;
+  const toAddresses = new Set(
+    (action?.to ?? []).map(normalizeExternalEmailAddress),
+  );
+  const ccExcludedAddresses = new Set([
+    ...toAddresses,
+    ...recipientAddressSet(bcc),
+  ]);
+  const bccExcludedAddresses = new Set([
+    ...toAddresses,
+    ...recipientAddressSet(cc),
+  ]);
+
+  if (!mailbox?.canSend || !action || action.to.length === 0) return null;
+
+  function selectAction(next: ReplyAction) {
+    onModeChange(next.mode);
+    setCc(recipientField(next.cc));
+    setShowCc(next.cc.length > 0);
+  }
+
+  function handleDrop(event: DragEvent<HTMLFormElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    if (busy) return;
+    session.addFiles(Array.from(event.dataTransfer.files), "attachment");
   }
 
   return (
     <div className="sticky bottom-16 z-20 -mx-3 bg-gradient-to-t from-background via-background to-transparent px-3 pt-10 pb-4 sm:-mx-6 sm:px-6 sm:pb-6 lg:bottom-0">
-      <form className="mx-auto max-w-2xl animate-rise overflow-hidden rounded-2xl bg-surface shadow-xl ring-1 ring-border" onSubmit={submit}>
+      <form
+        className="mx-auto max-w-2xl animate-rise overflow-hidden rounded-2xl bg-surface shadow-xl ring-1 ring-border"
+        aria-busy={busy}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = busy ? "none" : "copy";
+        }}
+        onDrop={handleDrop}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submission.submit();
+        }}
+      >
         <div className="flex min-h-11 items-center gap-2 border-b border-border/70 bg-surface-sunken/70 px-2.5">
           <DropdownMenu>
-            <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" className="h-7 px-2" />}>
+            <DropdownMenuTrigger
+              render={(
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2"
+                  disabled={busy}
+                />
+              )}
+            >
               <ReplyActionIcon mode={action.mode} />
               {action.label}
               <ChevronDown className="size-3.5" />
@@ -139,7 +220,11 @@ export function ConversationReply({
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Recipients from this message</DropdownMenuLabel>
                 {parent.replyPlan.actions.map((candidate) => (
-                  <DropdownMenuItem key={candidate.mode} onClick={() => selectAction(candidate)}>
+                  <DropdownMenuItem
+                    key={candidate.mode}
+                    disabled={busy}
+                    onClick={() => selectAction(candidate)}
+                  >
                     <ReplyActionIcon mode={candidate.mode} />
                     <span className="min-w-0 flex-1">
                       <span className="block">{candidate.label}</span>
@@ -160,8 +245,8 @@ export function ConversationReply({
             </Badge>
           )}
           <div className="ml-auto flex items-center">
-            <Button type="button" variant="ghost" size="xs" onClick={() => setShowCc(true)}>Cc</Button>
-            <Button type="button" variant="ghost" size="xs" onClick={() => setShowBcc(true)}>Bcc</Button>
+            <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => setShowCc(true)}>Cc</Button>
+            <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => setShowBcc(true)}>Bcc</Button>
           </div>
         </div>
 
@@ -171,26 +256,45 @@ export function ConversationReply({
         </div>
 
         {showCc && (
-          <RecipientFieldRow compact label="Cc" value={cc} onChange={setCc} />
+          <div className="border-b border-border/70 px-3">
+            <RecipientCombobox
+              mailboxId={mailbox.id}
+              label="Cc"
+              value={cc}
+              excludedAddresses={ccExcludedAddresses}
+              disabled={busy}
+              onChange={setCc}
+            />
+          </div>
         )}
         {showBcc && (
-          <RecipientFieldRow compact label="Bcc" value={bcc} onChange={setBcc} />
+          <div className="border-b border-border/70 px-3">
+            <RecipientCombobox
+              mailboxId={mailbox.id}
+              label="Bcc"
+              value={bcc}
+              excludedAddresses={bccExcludedAddresses}
+              disabled={busy}
+              onChange={setBcc}
+            />
+          </div>
         )}
 
         <InputGroup className="min-h-24 rounded-none border-0 bg-transparent shadow-none dark:bg-transparent">
           <InputGroupTextarea
             className="min-h-16 px-4 pt-3.5 text-[0.9375rem] leading-[1.65]"
             value={body}
+            disabled={busy}
             onChange={(event) => setBody(event.target.value)}
             onKeyDown={(event) => {
               if (
-                !send.isPending
+                !busy
                 && (event.metaKey || event.ctrlKey)
                 && event.key === "Enter"
-                && (body.trim() || files.length > 0)
+                && (body.trim() || activeAssets.length > 0)
               ) {
                 event.preventDefault();
-                queueReply();
+                void submission.submit();
               }
             }}
             placeholder={action.mode === "reply_all" ? "Reply to everyone" : `Reply to ${action.to.join(", ")}`}
@@ -201,41 +305,61 @@ export function ConversationReply({
               className="sr-only"
               type="file"
               multiple
+              disabled={busy}
               onChange={(event) => {
-                addFiles(event.target.files);
+                session.addFiles(
+                  Array.from(event.target.files ?? []),
+                  "attachment",
+                );
                 event.target.value = "";
               }}
             />
-            <InputGroupButton size="icon-sm" onClick={() => fileInput.current?.click()}>
+            <InputGroupButton
+              size="icon-sm"
+              disabled={busy}
+              onClick={() => fileInput.current?.click()}
+            >
               <Paperclip /><span className="sr-only">Add attachments</span>
             </InputGroupButton>
-            <InputGroupText className="min-w-0 flex-1 text-xs">
-              {files.length ? `${files.length} attachment${files.length === 1 ? "" : "s"}` : "Ctrl + Enter to send"}
+            <InputGroupText
+              className={cn(
+                "min-w-0 flex-1 text-xs",
+                (uploadLimitError || snapshot.planError) && "text-destructive",
+              )}
+            >
+              {uploadLimitError
+                ? uploadLimitError
+                : activeAssets.length > 0 && snapshot.planError
+                ? "Could not check attachment delivery"
+                : activeAssets.length
+                ? `${activeAssets.length} attachment${activeAssets.length === 1 ? "" : "s"}`
+                : "Ctrl + Enter to send"}
             </InputGroupText>
             <Button
               type="submit"
               size="sm"
-              disabled={send.isPending || (!body.trim() && files.length === 0)}
+              disabled={
+                busy
+                || Boolean(uploadLimitError)
+                || uploadsPending
+                || uploadsFailed
+                || (!body.trim() && activeAssets.length === 0)
+              }
             >
-              {send.isPending ? <LoaderCircle className="animate-spin" /> : <Send />}
+              {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
               Send
             </Button>
           </InputGroupAddon>
         </InputGroup>
 
-        {files.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 border-t border-border/70 px-3 py-2.5">
-            {files.map((file, index) => (
-              <Badge key={`${file.name}-${index}`} variant="outline" className="max-w-56 gap-1.5">
-                <Paperclip className="size-3" />
-                <span className="truncate">{file.name}</span>
-                <button type="button" onClick={() => removeFile(index)}>
-                  <X className="size-3" /><span className="sr-only">Remove {file.name}</span>
-                </button>
-              </Badge>
-            ))}
-          </div>
-        )}
+        <ComposerAttachmentList
+          uploads={activeAssets}
+          linkedIds={linkedIds}
+          progress={session.progress}
+          disabled={busy}
+          onRemove={(asset) => session.remove(asset.id)}
+          onRetry={(asset) => void session.retry(asset.id)}
+        />
       </form>
     </div>
   );
@@ -253,4 +377,3 @@ export function ReplyActionIcon({ mode }: { mode: ReplyActionMode }) {
   if (mode === "continue") return <Send />;
   return <Reply />;
 }
-

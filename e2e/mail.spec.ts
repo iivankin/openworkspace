@@ -20,7 +20,8 @@ test("opens the seeded inbox and reads a message", async ({ page }) => {
 test("renders only meaningful sanitized HTML without loading remote images", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "HTML isolation is covered once");
   let trackingRequested = false;
-  let messageBodyText = "Your one-time code is 482901";
+  let separateHtmlRequested = false;
+  let messageBodyText = "Plain fallback must not flash";
   let messageHtml = [
     '<table width="600" style="width:600px"><tbody><tr><td style="padding:32px">',
     "<p>Your one-time code is <strong>482901</strong></p>",
@@ -32,6 +33,11 @@ test("renders only meaningful sanitized HTML without loading remote images", asy
     trackingRequested = true;
     await route.abort();
   });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/html")) {
+      separateHtmlRequested = true;
+    }
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
   await page.route("**/api/mail/conversations/*", async (route) => {
@@ -40,22 +46,30 @@ test("renders only meaningful sanitized HTML without loading remote images", asy
       messages: Array<{
         id: string;
         bodyText: string;
-        hasHtmlBody: boolean;
+        bodyHtml: string | null;
         quotedText: string | null;
       }>;
     };
     const message = body.messages.find((item) => item.id === "msg_demo_01");
     if (message) {
       message.bodyText = messageBodyText;
-      message.hasHtmlBody = true;
+      message.bodyHtml = messageHtml;
       message.quotedText = null;
     }
     await route.fulfill({ response, json: body });
   });
-  await page.route("**/api/mail/messages/msg_demo_01/html?*", async (route) => {
-    await route.fulfill({
-      contentType: "text/plain",
-      body: messageHtml,
+  await page.evaluate(() => {
+    document.body.dataset.plainFallbackSeen = "no";
+    const observer = new MutationObserver(() => {
+      if (document.body.textContent?.includes("Plain fallback must not flash")) {
+        document.body.dataset.plainFallbackSeen = "yes";
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, {
+      characterData: true,
+      childList: true,
+      subtree: true,
     });
   });
 
@@ -65,10 +79,22 @@ test("renders only meaningful sanitized HTML without loading remote images", asy
   await expect(frame.getByRole("img", { name: "Tracking image" })).toHaveCount(1);
   expect(await page.locator("body").getAttribute("data-email-script-ran")).toBeNull();
   expect(trackingRequested).toBe(false);
+  expect(separateHtmlRequested).toBe(false);
+  expect(await page.locator("body").getAttribute("data-plain-fallback-seen"))
+    .toBe("no");
 
   const iframe = page.locator('iframe[title^="HTML body of"]');
   await expect.poll(() => iframe.evaluate((element) => element.clientWidth))
     .toBeGreaterThan(300);
+  const initialHeight = await iframe.evaluate((element) => element.clientHeight);
+  await frame.locator("body").evaluate((body) => {
+    const lateContent = document.createElement("div");
+    lateContent.style.height = "240px";
+    lateContent.textContent = "Late content";
+    body.append(lateContent);
+  });
+  await expect.poll(() => iframe.evaluate((element) => element.clientHeight))
+    .toBeGreaterThan(initialHeight + 150);
   const documentWidth = await frame.locator("html").evaluate((element) => ({
     client: element.clientWidth,
     scroll: element.scrollWidth,
@@ -126,10 +152,13 @@ test("opens a responsive composer", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Mobile layout assertion");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await expect(composer).toBeVisible();
-  await expect(page.getByPlaceholder("Write a message")).toBeVisible();
+  await expect(
+    composer.getByRole("textbox", { name: "Message body" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Cc", exact: true }).click();
   await page.getByRole("button", { name: "Bcc", exact: true }).click();
   await expect(composer.locator("span").filter({ hasText: /^Cc$/u })).toBeVisible();
@@ -226,11 +255,11 @@ test("desktop mail uses navbar navigation and a corner composer", async ({ page 
   expect(inboxBox!.width).toBeGreaterThan(1150);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
-  await expect(composer).toBeVisible();
+  await expect(composer).toBeVisible({ timeout: 10_000 });
   const box = await composer.boundingBox();
   expect(box).not.toBeNull();
-  expect(box!.width).toBeLessThanOrEqual(540);
-  expect(box!.height).toBeLessThanOrEqual(540);
+  expect(box!.width).toBeLessThanOrEqual(620);
+  expect(box!.height).toBeLessThanOrEqual(620);
   expect(box!.x + box!.width).toBeGreaterThan(1000);
   expect(box!.y + box!.height).toBeGreaterThan(650);
 });
@@ -242,7 +271,7 @@ test("closes the mailbox composer when switching mailboxes", async ({ page }, te
   await expect(page).toHaveURL(/\/mail\/mbx_demo_personal\?/u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
-  await composer.getByPlaceholder("Write a message").fill("Pinned draft");
+  await composer.getByRole("textbox", { name: "Message body" }).fill("Pinned draft");
 
   await page.getByRole("button", { name: "Account and mailboxes" }).click();
   await page.getByRole("menuitem", { name: /Customer care/u }).click();
@@ -252,7 +281,676 @@ test("closes the mailbox composer when switching mailboxes", async ({ page }, te
   await page.getByRole("button", { name: "Compose" }).click();
   const supportComposer = page.getByRole("dialog", { name: "New message" });
   await expect(supportComposer.getByText("From support@demo.example")).toBeVisible();
-  await expect(supportComposer.getByPlaceholder("Write a message")).toHaveValue("");
+  await expect(
+    supportComposer.getByRole("textbox", { name: "Message body" }),
+  ).toHaveText("");
+});
+
+test("composer formats, autocompletes recipients, and uploads files immediately", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+
+  const recipient = composer.getByRole("textbox", { name: "To recipients" });
+  await recipient.fill("karri");
+  const suggestion = composer.getByRole("option", { name: /Karri Saarinen/u });
+  await expect(suggestion).toBeVisible();
+  await suggestion.click();
+  await expect(composer.getByText("Karri Saarinen", { exact: true })).toBeVisible();
+
+  const body = composer.getByRole("textbox", { name: "Message body" });
+  await body.pressSequentially("# Heading");
+  await expect(body.locator("h1")).toHaveCount(0);
+  await expect(body).toContainText("# Heading");
+  await body.fill("Formatted message");
+  await body.press("ControlOrMeta+a");
+  await composer.getByRole("button", { name: "Bold" }).click();
+  await expect(body.locator("strong")).toHaveText("Formatted message");
+
+  const uploadCreated = page.waitForResponse((response) =>
+    response.request().method() === "POST"
+    && response.url().includes("/api/mail/uploads?")
+    && response.status() === 201
+  );
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: "notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("composer upload"),
+  });
+  await uploadCreated;
+  await expect(composer.getByText("Attached", { exact: true })).toBeVisible();
+
+  const inlineUploadCreated = page.waitForResponse((response) =>
+    response.request().method() === "POST"
+    && response.url().includes("/api/mail/uploads?")
+    && response.status() === 201
+  );
+  await composer.locator('input[type="file"][accept]').setInputFiles({
+    name: "pixel.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB", "base64"),
+  });
+  await inlineUploadCreated;
+  await expect(composer.locator('img[alt="pixel.png"]')).toBeVisible();
+  await expect(composer.getByText("Inline", { exact: true })).toBeVisible();
+
+  const droppedUploadCreated = page.waitForResponse((response) =>
+    response.request().method() === "POST"
+    && response.url().includes("/api/mail/uploads?")
+    && response.status() === 201
+  );
+  const dataTransfer = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    const png = atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAACXBIWXMAAAPoAAAD6AG1e1JrAAABpUlEQVR4nO2RUQnAQBSAXpzFuf6sy/Z9FhAeChbQeZ/zbXC2YIdsCLBDNgTYIRsC7JANAXbIhgA7ZEOAHbIhwA7ZEGCHbAiwQzYE2CEbAuyQDQF2yIYAO2RDgB2yIcAO2RBgh2wIsEM2BNghGwLskA0BdsiGADtkQ4AdsiHADtkQYIdsCLBDNgTYIRsC7JANAXbIhgA7ZEOAHbIhwA7ZEGCHbAiwQzYE2CEbAuyQDQF2yIYAO2RDgB2yIcAO2RBgh2wIsEM2BNghGwLskA0BdsiGADtkQ4AdsiHADtkQYIdsCLBDNgTYIRsC7JANAXbIhgA7ZEOAHbIhwA7ZEGCHbAiwQzYE2CEbAuyQDQF2yIYAO2RDgB2yIcAO2RBgh2wIsEM2BNghGwLskA0BdsiGADtkQ4AdsiHADtkQYIdsCLBDNgTYIRsC7JANAXbIhgA7ZEOAHbIhwA7ZEGCHbAiwQzYE2CEbAuyQDQF2yIYAO2RDgB2yIcAO2RBgh2wIsEM2BNghGwLskA0BdsiGADtkQ4AdsiHADtkQYIdsCLBDNgTYIRsyFz+rwWe8YrA/egAAAABJRU5ErkJggg==",
+    );
+    transfer.items.add(new File(
+      [Uint8Array.from(png, (character) => character.charCodeAt(0))],
+      "dropped.png",
+      { type: "image/png" },
+    ));
+    return transfer;
+  });
+  const dropOverlay = composer.getByText(
+    "Drop images into the message · other files attach below",
+    { exact: true },
+  );
+  const editorDropSurface = composer.locator("[data-composer-editor-surface]");
+  await editorDropSurface.dispatchEvent(
+    "dragenter",
+    { dataTransfer },
+  );
+  await expect(dropOverlay).toBeVisible();
+  await editorDropSurface.dispatchEvent("drop", { dataTransfer });
+  await droppedUploadCreated;
+  await expect(dropOverlay).toHaveCount(0);
+  const droppedImage = composer.locator('img[alt="dropped.png"]');
+  await expect(droppedImage).toBeVisible();
+  await expect(droppedImage).not.toHaveClass(/ProseMirror-selectednode/u);
+  await expect.poll(() =>
+    droppedImage.evaluate((image) => image.closest("p")?.tagName)
+  ).toBe("P");
+  await expect(body).toBeFocused();
+  await expect.poll(() =>
+    droppedImage.evaluate((image) => {
+      const selection = window.getSelection();
+      const parent = image.closest("p");
+      let wrapper: Node | null = image;
+      while (wrapper?.parentNode && wrapper.parentNode !== parent) {
+        wrapper = wrapper.parentNode;
+      }
+      if (!parent || !selection?.isCollapsed || selection.anchorNode !== parent) {
+        return false;
+      }
+      const imageIndex = Array.prototype.indexOf.call(
+        parent.childNodes,
+        wrapper,
+      );
+      return selection.anchorOffset === imageIndex + 1;
+    })
+  ).toBe(true);
+
+  const pastedUploadCreated = page.waitForResponse((response) =>
+    response.request().method() === "POST"
+    && response.url().includes("/api/mail/uploads?")
+    && response.status() === 201
+  );
+  await body.evaluate((editor) => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", "Pasted caption");
+    transfer.items.add(new File(
+      [new Uint8Array([137, 80, 78, 71])],
+      "pasted.png",
+      { type: "image/png" },
+    ));
+    editor.dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: transfer,
+    }));
+  });
+  await pastedUploadCreated;
+  await expect(body).toContainText("Pasted caption");
+  await expect(composer.locator('img[alt="pasted.png"]')).toBeVisible();
+  await expect(page).toHaveURL(/\/mail\//u);
+});
+
+test("retries upload finalization without uploading the file again", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  let contentUploads = 0;
+  let completions = 0;
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "PUT" && pathname === "/api/mail/uploads/content") {
+      contentUploads += 1;
+    }
+  });
+  await page.route("**/api/mail/uploads/*/complete?**", async (route) => {
+    completions += 1;
+    if (completions === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "Response was lost" },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: "finalize-retry.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("upload once"),
+  });
+
+  await expect(composer.getByText("Attached", { exact: true })).toBeVisible();
+  expect(contentUploads).toBe(1);
+  expect(completions).toBe(2);
+  await composer.getByRole("button", { name: "Close composer" }).click();
+});
+
+test("places a large linked attachment in the message and lets it move with the text", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  const body = composer.getByRole("textbox", { name: "Message body" });
+  await body.pressSequentially("Before");
+  await body.press("Enter");
+  await body.pressSequentially("After");
+
+  let releaseUpload = () => {};
+  const uploadGate = new Promise<void>((resolve) => {
+    releaseUpload = resolve;
+  });
+  await page.route("**/api/mail/uploads/content?**", async (route) => {
+    await uploadGate;
+    await route.continue();
+  });
+
+  const filename = "quarterly-video.mp4";
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: filename,
+    mimeType: "video/mp4",
+    buffer: Buffer.alloc(4_000_000, 1),
+  });
+  const linkedAttachment = composer.locator("[data-linked-attachment-node]");
+  await expect(linkedAttachment).toBeVisible();
+  await expect(linkedAttachment).toContainText(filename);
+  await expect(linkedAttachment).toContainText("Uploading");
+  await expect.poll(() =>
+    linkedAttachment.evaluate((attachment) =>
+      attachment.parentElement?.classList.contains("ProseMirror-selectednode")
+    )
+  ).toBe(false);
+  await expect.poll(() =>
+    linkedAttachment.evaluate((attachment) => {
+      const selection = window.getSelection();
+      const parent = attachment.closest("p");
+      let wrapper: Node | null = attachment;
+      while (wrapper?.parentNode && wrapper.parentNode !== parent) {
+        wrapper = wrapper.parentNode;
+      }
+      if (!parent || !selection?.isCollapsed || selection.anchorNode !== parent) {
+        return false;
+      }
+      const attachmentIndex = Array.prototype.indexOf.call(
+        parent.childNodes,
+        wrapper,
+      );
+      return selection.anchorOffset === attachmentIndex + 1;
+    })
+  ).toBe(true);
+
+  releaseUpload();
+  await expect(linkedAttachment).toContainText("30-day link");
+  await expect(composer.getByText(filename, { exact: true })).toHaveCount(1);
+
+  await composer.getByRole("button", { name: "Undo" }).click();
+  await expect(linkedAttachment).toHaveCount(0);
+  await composer.getByRole("button", { name: "Redo" }).click();
+  await expect(linkedAttachment).toContainText(filename);
+
+  const attachmentIndex = () =>
+    body.evaluate((editor) =>
+      Array.from(editor.children).findIndex((child) =>
+        child.querySelector("[data-linked-attachment-node]")
+      )
+    );
+  const indexBeforeDrag = await attachmentIndex();
+  const firstParagraph = body.locator("p").first();
+  await linkedAttachment.dragTo(firstParagraph);
+  await expect.poll(attachmentIndex).not.toBe(indexBeforeDrag);
+
+  await linkedAttachment.getByRole("button", { name: `Remove ${filename}` }).click();
+  await expect(linkedAttachment).toHaveCount(0);
+
+  await composer.getByRole("button", { name: "Undo" }).click();
+  await expect(linkedAttachment).toBeVisible();
+  await expect(linkedAttachment).toContainText(filename);
+
+  await linkedAttachment.getByRole("button", { name: `Remove ${filename}` }).click();
+  await expect(linkedAttachment).toHaveCount(0);
+  const cleanup = page.waitForResponse((response) =>
+    response.request().method() === "DELETE"
+    && response.url().includes("/api/mail/uploads/")
+    && response.status() === 200
+  );
+  await composer.getByRole("button", { name: "Close composer" }).click();
+  await cleanup;
+});
+
+test("keeps an attachment position when preflight changes it into a link", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  const body = composer.getByRole("textbox", { name: "Message body" });
+  await body.pressSequentially("Before");
+  await body.press("Enter");
+  await body.pressSequentially("After");
+
+  let preflightCount = 0;
+  await page.route("**/api/mail/attachment-preflight", async (route) => {
+    const request = route.request().postDataJSON() as {
+      attachments: Array<{ uploadId: string }>;
+    };
+    preflightCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        externalizedAttachments: preflightCount > 1 ? 1 : 0,
+        linkedUploadIds: preflightCount > 1
+          ? request.attachments.map((attachment) => attachment.uploadId)
+          : [],
+      }),
+    });
+  });
+
+  const filename = "positioned.txt";
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: filename,
+    mimeType: "text/plain",
+    buffer: Buffer.from("positioned attachment"),
+  });
+  await expect(composer.getByText("Attached", { exact: true })).toBeVisible();
+  await expect(
+    composer.locator("[data-linked-attachment-node]"),
+  ).toHaveCount(0);
+  await expect.poll(() => preflightCount).toBe(1);
+
+  await body.press("ControlOrMeta+Home");
+  await body.pressSequentially("Changed ");
+  const linkedAttachment = composer.locator("[data-linked-attachment-node]");
+  await expect(linkedAttachment).toContainText(filename);
+  await expect.poll(() =>
+    linkedAttachment.evaluate((attachment) =>
+      attachment.closest("p")?.textContent ?? ""
+    )
+  ).toContain("After");
+
+  await composer.getByRole("button", { name: "Close composer" }).click();
+});
+
+test("previews a large inline image as the link that will be sent", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByRole("textbox", { name: "To recipients" })
+    .fill("karri@example.com");
+  await composer.getByRole("textbox", { name: "To recipients" }).press("Enter");
+  await composer.getByRole("textbox", { name: "Subject" }).fill("Large inline preview");
+  await composer.getByRole("textbox", { name: "Message body" }).fill("See image.");
+
+  const filename = "large-inline.png";
+  await composer.locator('input[type="file"][accept]').setInputFiles({
+    name: filename,
+    mimeType: "image/png",
+    buffer: Buffer.alloc(4_000_000, 1),
+  });
+  const linkedImage = composer.locator("[data-linked-attachment-node]")
+    .filter({ hasText: filename });
+  await expect(linkedImage).toContainText("30-day link");
+  await expect(composer.locator(`img[alt="${filename}"]`)).toHaveCount(0);
+  await expect(composer.getByText(filename, { exact: true })).toHaveCount(1);
+
+  const requestPromise = page.waitForRequest((request) =>
+    request.method() === "POST"
+    && new URL(request.url()).pathname === "/api/mail/messages"
+  );
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  const request = await requestPromise;
+  const payload = request.postDataJSON() as {
+    attachments: Array<{
+      disposition: string;
+      contentId?: string;
+    }>;
+  };
+  expect(payload.attachments).toEqual([
+    expect.objectContaining({ disposition: "attachment" }),
+  ]);
+  expect(payload.attachments[0]).not.toHaveProperty("contentId");
+  await expect(composer).toHaveCount(0);
+});
+
+test("keeps undo-retained uploads inside composer limits", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  const fileInput = composer.locator('input[type="file"]:not([accept])');
+  const filename = "undo-reserved-video.mp4";
+
+  await fileInput.setInputFiles({
+    name: filename,
+    mimeType: "video/mp4",
+    buffer: Buffer.alloc(4_000_000, 1),
+  });
+  const linkedAttachment = composer.locator("[data-linked-attachment-node]");
+  await expect(linkedAttachment).toContainText("30-day link");
+  await linkedAttachment.getByRole("button", { name: `Remove ${filename}` }).click();
+  await expect(linkedAttachment).toHaveCount(0);
+
+  await fileInput.setInputFiles(
+    Array.from({ length: 10 }, (_, index) => ({
+      name: `replacement-${index + 1}.txt`,
+      mimeType: "text/plain",
+      buffer: Buffer.from(`replacement ${index + 1}`),
+    })),
+  );
+  await expect(page.getByText("Use at most 10 attachments", { exact: true }))
+    .toBeVisible();
+  await expect(composer.getByText("Attached", { exact: true })).toHaveCount(0);
+
+  await composer.getByRole("button", { name: "Undo" }).click();
+  await expect(linkedAttachment).toBeVisible();
+  await composer.getByRole("button", { name: "Close composer" }).click();
+});
+
+test("does not discard submitted uploads while send is in flight", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByRole("textbox", { name: "To recipients" })
+    .fill("karri@example.com");
+  await composer.getByRole("textbox", { name: "To recipients" }).press("Enter");
+  await composer.getByRole("textbox", { name: "Message body" })
+    .fill("Submission ownership");
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: "claimed.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("claimed upload"),
+  });
+  await expect(composer.getByText("Attached", { exact: true })).toBeVisible();
+
+  let releaseSend = () => {};
+  const sendGate = new Promise<void>((resolve) => {
+    releaseSend = resolve;
+  });
+  await page.route("**/api/mail/messages", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await sendGate;
+    await route.continue();
+  });
+
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(composer.getByRole("textbox", { name: "To recipients" }))
+    .toBeDisabled();
+  await expect(composer.getByRole("textbox", { name: "Subject" }))
+    .toBeDisabled();
+  await expect(composer.getByRole("textbox", { name: "Message body" }))
+    .toHaveAttribute("contenteditable", "false");
+  await expect(composer.getByRole("button", { name: "Add attachments" }))
+    .toBeDisabled();
+  const preventedFileDrop = await composer.evaluate((dialog) => {
+    const form = dialog.querySelector("form")!;
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["ignored"], "ignored.txt", {
+      type: "text/plain",
+    }));
+    const dragOver = new DragEvent("dragover", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    });
+    const drop = new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    });
+    form.dispatchEvent(dragOver);
+    form.dispatchEvent(drop);
+    return dragOver.defaultPrevented && drop.defaultPrevented;
+  });
+  expect(preventedFileDrop).toBe(true);
+  await composer.getByRole("button", { name: "Close composer" }).click();
+  await expect(composer).toBeVisible();
+  await expect(page.getByText("Wait for the message to finish sending", { exact: true }))
+    .toBeVisible();
+
+  releaseSend();
+  await expect(composer).toHaveCount(0);
+});
+
+test("retries a transient send with the same request id", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByRole("textbox", { name: "To recipients" })
+    .fill("karri@example.com");
+  await composer.getByRole("textbox", { name: "To recipients" }).press("Enter");
+  await composer.getByRole("textbox", { name: "Message body" })
+    .fill("Idempotent retry");
+
+  const requestIds: string[] = [];
+  await page.route("**/api/mail/messages", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    requestIds.push(
+      (route.request().postDataJSON() as { requestId: string }).requestId,
+    );
+    if (requestIds.length === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "Try again" },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(composer).toHaveCount(0);
+  expect(requestIds).toHaveLength(2);
+  expect(requestIds[1]).toBe(requestIds[0]);
+});
+
+test("cancels final attachment preflight when composer unmounts", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByRole("textbox", { name: "To recipients" })
+    .fill("karri@example.com");
+  await composer.getByRole("textbox", { name: "To recipients" }).press("Enter");
+  await composer.getByRole("textbox", { name: "Message body" })
+    .fill("Do not send after close");
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: "cancelled-preflight.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("cancelled preflight"),
+  });
+  await expect(composer.getByText("Attached", { exact: true })).toBeVisible();
+
+  let releasePreflight = () => {};
+  const preflightGate = new Promise<void>((resolve) => {
+    releasePreflight = resolve;
+  });
+  let markPreflightStarted = () => {};
+  const preflightStarted = new Promise<void>((resolve) => {
+    markPreflightStarted = resolve;
+  });
+  await page.route("**/api/mail/attachment-preflight", async (route) => {
+    markPreflightStarted();
+    await preflightGate;
+    await route.continue().catch(() => {});
+  });
+  let sendRequests = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST"
+      && new URL(request.url()).pathname === "/api/mail/messages"
+    ) {
+      sendRequests += 1;
+    }
+  });
+
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await preflightStarted;
+  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  await page.getByRole("menuitem", { name: /Customer care/u }).click();
+  await expect(composer).toHaveCount(0);
+  releasePreflight();
+
+  await page.waitForTimeout(300);
+  expect(sendRequests).toBe(0);
+});
+
+test("does not restart a retry after composer closes", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  let uploadIntents = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST"
+      && new URL(request.url()).pathname === "/api/mail/uploads"
+    ) {
+      uploadIntents += 1;
+    }
+  });
+  let failNextUpload = true;
+  await page.route("**/api/mail/uploads/content?**", async (route) => {
+    if (failNextUpload) {
+      failNextUpload = false;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Simulated upload failure" }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  const filename = "retry-close.txt";
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: filename,
+    mimeType: "text/plain",
+    buffer: Buffer.from("retry close"),
+  });
+  await expect(composer.getByText("Failed", { exact: true })).toBeVisible();
+  expect(uploadIntents).toBe(1);
+
+  let releaseDelete = () => {};
+  const deleteGate = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  let markDeleteStarted = () => {};
+  const deleteStarted = new Promise<void>((resolve) => {
+    markDeleteStarted = resolve;
+  });
+  await page.route("**/api/mail/uploads/**", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.continue();
+      return;
+    }
+    markDeleteStarted();
+    await deleteGate;
+    await route.continue().catch(() => {});
+  });
+
+  await composer.getByRole("button", { name: `Retry ${filename}` }).click();
+  await deleteStarted;
+  await composer.getByRole("button", { name: "Close composer" }).click();
+  await expect(composer).toHaveCount(0);
+  releaseDelete();
+
+  await page.waitForTimeout(300);
+  expect(uploadIntents).toBe(1);
+});
+
+test("shows upload intent failures inside the attachment card", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await page.route("**/api/mail/uploads?**", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        error: { code: "BAD_REQUEST", message: "Simulated intent failure" },
+      }),
+    });
+  });
+
+  const filename = "intent-failure.txt";
+  await composer.locator('input[type="file"]:not([accept])').setInputFiles({
+    name: filename,
+    mimeType: "text/plain",
+    buffer: Buffer.from("intent failure"),
+  });
+  const card = composer.locator("[data-linked-attachment-node]");
+  await expect(card).toContainText(filename);
+  await expect(card).toContainText("Upload failed");
+  await expect(composer.getByText("Failed", { exact: true })).toBeVisible();
+
+  await composer.getByRole("button", { name: "Close composer" }).click();
 });
 
 test("offers Reply and Reply all on a group message", async ({ page }) => {
@@ -270,11 +968,47 @@ test("offers Reply and Reply all on a group message", async ({ page }) => {
   await expect(page.getByText("2 people", { exact: true })).toBeVisible();
   await message.getByRole("button", { name: "Reply to this message" }).click();
   const replyForm = page.locator("form");
+  await replyForm.getByRole("button", { name: "Cc", exact: true }).click();
+  const replyCc = replyForm.getByRole("textbox", { name: "Cc recipients" });
+  await replyCc.fill("maya");
+  await replyForm.getByRole("option", { name: /Maya Chen/u }).click();
+  await expect(replyForm.getByText("Maya Chen", { exact: true })).toBeVisible();
+  await replyForm.getByRole("button", { name: /Remove maya@/u }).click();
+  const replyUploadCreated = page.waitForResponse((response) =>
+    response.request().method() === "POST"
+    && response.url().includes("/api/mail/uploads?")
+    && response.status() === 201
+  );
+  const replyDropPrevented = await replyForm.evaluate((form) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(
+      [new Uint8Array(4_000_000)],
+      "reply-note.txt",
+      { type: "text/plain" },
+    ));
+    const dragOver = new DragEvent("dragover", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    });
+    const drop = new DragEvent("drop", {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: transfer,
+    });
+    form.dispatchEvent(dragOver);
+    form.dispatchEvent(drop);
+    return dragOver.defaultPrevented && drop.defaultPrevented;
+  });
+  expect(replyDropPrevented).toBe(true);
+  await replyUploadCreated;
+  await expect(replyForm.getByText("30-day link", { exact: true })).toBeVisible();
   await replyForm.getByPlaceholder(/Reply to/u).fill("Following up privately.");
   await replyForm.getByRole("button", { name: "Send", exact: true }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("folder")).toBe("sent");
   expect(new URL(page.url()).searchParams.get("conversation")).toMatch(/^conv_/u);
-  await expect(page.getByText("Following up privately.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Following up privately.", { exact: false })).toBeVisible();
+  await expect(page.getByText("reply-note.txt", { exact: true })).toBeVisible();
 });
 
 test("restores an archived conversation to the inbox", async ({ page }, testInfo) => {

@@ -3,10 +3,12 @@ import type {
   RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { z } from "zod";
+import { isValidExternalEmailAddress } from "../../shared/mail";
 import { normalizeEmail } from "../lib/ids";
 
 export const emailSchema = z
-  .email("Enter a valid email address")
+  .string()
+  .refine(isValidExternalEmailAddress, "Enter a valid email address")
   .max(254)
   .transform(normalizeEmail);
 

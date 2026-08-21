@@ -1,4 +1,7 @@
 import {
+  isComposerInlineImageContentType,
+} from "../../shared/mail";
+import {
   isRemoteHttpUrl,
   mailRemoteProxyPath,
 } from "../../shared/mail-remote";
@@ -31,12 +34,41 @@ const FORBIDDEN_ATTRIBUTES = [
   "formaction",
 ];
 
-const SAFE_INLINE_IMAGE_TYPES = new Set([
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
+const COMPOSER_TAGS = [
+  "a",
+  "b",
+  "blockquote",
+  "br",
+  "code",
+  "div",
+  "em",
+  "i",
+  "img",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "s",
+  "section",
+  "span",
+  "strong",
+  "u",
+  "ul",
+];
+
+const COMPOSER_ATTRIBUTES = [
+  "alt",
+  "data-forwarded-message",
+  "data-linked-attachment-card",
+  "href",
+  "loading",
+  "referrerpolicy",
+  "rel",
+  "src",
+  "srcset",
+  "target",
+  "title",
+];
 
 const DANGEROUS_CSS =
   /expression\s*\(|-moz-binding|behavior\s*:|@import|javascript\s*:|vbscript\s*:|data\s*:\s*text\/html/giu;
@@ -64,10 +96,6 @@ export function sanitizeEmailCss(
       return "/* remote url blocked */";
     },
   );
-}
-
-function mediaType(contentType: string) {
-  return contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 function normalizedContentId(value: string) {
@@ -102,7 +130,7 @@ function inlineAttachmentUrls(
   for (const attachment of attachments) {
     if (
       !attachment.contentId
-      || !SAFE_INLINE_IMAGE_TYPES.has(mediaType(attachment.contentType))
+      || !isComposerInlineImageContentType(attachment.contentType)
     ) {
       continue;
     }
@@ -194,6 +222,7 @@ function isRichEmailDocument(document: Document) {
 }
 
 export type SafeEmailDocument = {
+  composerHtml: string;
   srcDoc: string;
   proxiedRemoteImages: number;
   renderAsHtml: boolean;
@@ -291,6 +320,15 @@ export async function sanitizeEmailHtml(input: {
     .map((node) => node.outerHTML)
     .join("\n");
   const body = document.body.innerHTML;
+  // Composer HTML is rendered in the app document, so sender-controlled CSS,
+  // classes, and layout attributes must not cross that boundary. The iframe
+  // path below remains intentionally more permissive for external email.
+  const composerHtml = DOMPurify.sanitize(body, {
+    ALLOWED_TAGS: COMPOSER_TAGS,
+    ALLOWED_ATTR: COMPOSER_ATTRIBUTES,
+    ALLOW_ARIA_ATTR: false,
+    ALLOW_DATA_ATTR: false,
+  });
   // Keep the layout guard after sender styles: email templates commonly use
   // fixed 600px tables that otherwise overflow a narrow message iframe.
   const srcDoc = `<!doctype html>
@@ -328,5 +366,5 @@ export async function sanitizeEmailHtml(input: {
 </head>
 <body>${body}</body>
 </html>`;
-  return { srcDoc, proxiedRemoteImages, renderAsHtml };
+  return { composerHtml, srcDoc, proxiedRemoteImages, renderAsHtml };
 }

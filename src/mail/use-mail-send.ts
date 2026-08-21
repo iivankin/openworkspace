@@ -1,16 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import type { ReplyActionMode } from "../../shared/mail";
 import {
-  MAX_COMPOSER_ATTACHMENT_BYTES,
-  MAX_COMPOSER_ATTACHMENT_COUNT,
-  type ReplyActionMode,
-} from "../../shared/mail";
-import {
+  ApiError,
   api,
   responseJson,
   type SuccessfulResponse,
 } from "@/lib/api";
+import type { SubmittedComposerUpload } from "./composer-session";
 import { invalidateMailQueries } from "./use-mail-data";
 
 export type SubmittedMessage = SuccessfulResponse<
@@ -18,8 +14,11 @@ export type SubmittedMessage = SuccessfulResponse<
 >;
 
 type MessageContent = {
+  requestId: string;
   mailboxId: string;
   bodyText: string;
+  bodyHtml?: string;
+  uploadedAttachments?: SubmittedComposerUpload[];
 };
 
 export type MailSendInput =
@@ -47,55 +46,37 @@ export type MailSendInput =
     replyTo?: string;
   };
 
-async function uploadAttachment(mailboxId: string, file: File) {
-  const intent = await responseJson(
-    await api.api.mail.uploads.$post({
-      query: { mailboxId },
-      json: {
-        filename: file.name || "attachment",
-        contentType: file.type || "application/octet-stream",
-        size: file.size,
-      },
-    }),
-  );
-  const put = await fetch(intent.upload.uploadUrl, {
-    method: "PUT",
-    headers: intent.upload.headers,
-    body: file,
-  });
-  if (!put.ok) {
-    throw new Error(`Attachment upload failed (${put.status})`);
+type WithoutRequestId<Input> = Input extends MailSendInput
+  ? Omit<Input, "requestId">
+  : never;
+
+export type MailSendDraft = WithoutRequestId<MailSendInput>;
+
+export function withMailSendRequestId(
+  draft: MailSendDraft,
+  requestId: string,
+): MailSendInput {
+  switch (draft.kind) {
+    case "compose":
+      return { ...draft, requestId };
+    case "reply":
+      return { ...draft, requestId };
+    case "forward":
+      return { ...draft, requestId };
   }
-  return intent.upload;
 }
 
 export function useMailSend() {
   const client = useQueryClient();
-  const requestId = useRef(crypto.randomUUID());
-  const [files, setFiles] = useState<File[]>([]);
-  const totalAttachmentBytes = useMemo(
-    () => files.reduce((total, file) => total + file.size, 0),
-    [files],
-  );
-
-  const reset = useCallback(() => {
-    requestId.current = crypto.randomUUID();
-    setFiles([]);
-  }, []);
 
   const send = useMutation({
     mutationFn: async (input: MailSendInput) => {
-      const attachments = await Promise.all(
-        files.map(async (file) => {
-          const upload = await uploadAttachment(input.mailboxId, file);
-          return { uploadId: upload.id };
-        }),
-      );
       const request = {
-        requestId: requestId.current,
+        requestId: input.requestId,
         mailboxId: input.mailboxId,
         bodyText: input.bodyText,
-        attachments,
+        bodyHtml: input.bodyHtml,
+        attachments: input.uploadedAttachments ?? [],
       };
       if (input.kind === "reply") {
         return responseJson(
@@ -137,47 +118,15 @@ export function useMailSend() {
         }),
       );
     },
-    onSuccess: async () => {
-      reset();
-      await invalidateMailQueries(client);
+    // A retry reuses the caller-owned requestId. The Worker derives the
+    // message id from it, so a lost response cannot create a second message.
+    retry: (failureCount, error) =>
+      failureCount < 1
+      && (!(error instanceof ApiError) || error.status >= 500),
+    onSuccess: () => {
+      void invalidateMailQueries(client);
     },
   });
 
-  function addFiles(selected: FileList | null) {
-    if (!selected) return;
-    const next = [...files, ...Array.from(selected)];
-    if (next.length > MAX_COMPOSER_ATTACHMENT_COUNT) {
-      toast.error(`Use at most ${MAX_COMPOSER_ATTACHMENT_COUNT} attachments`);
-      return;
-    }
-    if (
-      next.reduce((total, file) => total + file.size, 0)
-        > MAX_COMPOSER_ATTACHMENT_BYTES
-    ) {
-      toast.error(
-        `Attachments are limited to ${Math.floor(MAX_COMPOSER_ATTACHMENT_BYTES / 1_000_000)} MB per message`,
-      );
-      return;
-    }
-    setFiles(next);
-  }
-
-  function removeFile(index: number) {
-    setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  }
-
-  return {
-    send,
-    files,
-    totalAttachmentBytes,
-    addFiles,
-    removeFile,
-    reset,
-  };
-}
-
-export function formatBytes(value: number) {
-  if (value < 1_000) return `${value} B`;
-  if (value < 1_000_000) return `${Math.round(value / 1_000)} KB`;
-  return `${(value / 1_000_000).toFixed(1)} MB`;
+  return { send };
 }

@@ -1,6 +1,18 @@
 import { normalizeEmail, normalizeMailboxAddress } from "../lib/ids";
 import type { MailAddress } from "../mailbox/model";
 
+export type ParticipantSource = {
+  fromJson: MailAddress[];
+  toJson: MailAddress[];
+  ccJson: MailAddress[];
+  bccJson: MailAddress[];
+};
+
+export type ParticipantSuggestion = {
+  address: string;
+  name: string | null;
+};
+
 export function normalizedParticipantSet(
   values: Iterable<string>,
   ownAddress: string,
@@ -57,5 +69,44 @@ export function participantLabels(
       participant.name?.trim() || participant.address,
     );
   }
+  return [...result.values()];
+}
+
+export function suggestParticipants(
+  messages: Iterable<ParticipantSource>,
+  ownAddress: string,
+  query: string,
+  limit: number,
+): ParticipantSuggestion[] {
+  const own = normalizeMailboxAddress(ownAddress);
+  const needle = query.trim().toLocaleLowerCase("en-US");
+  const result = new Map<string, ParticipantSuggestion>();
+
+  for (const message of messages) {
+    for (const participant of [
+      ...message.fromJson,
+      ...message.toJson,
+      ...message.ccJson,
+      ...message.bccJson,
+    ]) {
+      const address = normalizeEmail(participant.address);
+      if (
+        !address
+        || normalizeMailboxAddress(address) === own
+        || result.has(address)
+      ) continue;
+      const name = participant.name?.trim() || null;
+      if (
+        needle
+        && !address.toLocaleLowerCase("en-US").includes(needle)
+        && !name?.toLocaleLowerCase("en-US").includes(needle)
+      ) {
+        continue;
+      }
+      result.set(address, { address, name });
+      if (result.size >= limit) return [...result.values()];
+    }
+  }
+
   return [...result.values()];
 }
