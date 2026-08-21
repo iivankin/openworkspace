@@ -139,6 +139,14 @@ export function MailHeader({
                       <span className="block truncate text-[0.8125rem] font-medium">{item.displayName}</span>
                       <span className="block truncate text-[11px] text-muted-foreground">{item.address}</span>
                     </span>
+                    {item.unreadCount > 0 && (
+                      <span
+                        className="min-w-5 shrink-0 rounded-full bg-primary/16 px-1.5 py-0.5 text-center text-[10px] leading-none font-bold text-foreground tabular-nums"
+                        aria-label={`${item.unreadCount} unread conversations`}
+                      >
+                        {item.unreadCount}
+                      </span>
+                    )}
                     {active && <Check className="shrink-0 text-primary" />}
                   </DropdownMenuItem>
                 );

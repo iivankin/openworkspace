@@ -53,6 +53,7 @@ describe("mail worker", () => {
         address: string;
         kind: string;
         canSend: boolean;
+        unreadCount: number;
       }>;
     };
     expect(mailboxBody).toMatchObject({
@@ -62,6 +63,7 @@ describe("mail worker", () => {
           address: "admin@example.test",
           kind: "personal",
           canSend: true,
+          unreadCount: 0,
         },
       ],
     });

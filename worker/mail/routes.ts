@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import {
   baseSubject,
@@ -8,7 +8,7 @@ import {
 } from "../../shared/mail";
 import { requireAuth } from "../auth/middleware";
 import { createDb } from "../db/client";
-import { mailboxMembers, mailboxes } from "../db/schema";
+import { mailboxMembers, mailboxes, users } from "../db/schema";
 import type { AppEnv } from "../env";
 import { apiError } from "../lib/http";
 import { createId } from "../lib/ids";
@@ -41,6 +41,7 @@ import {
   createUploadSchema,
   forwardSchema,
   mailboxQuerySchema,
+  messageReadSchema,
   recipientSuggestionQuerySchema,
   remoteProxyQuerySchema,
   replySchema,
@@ -93,6 +94,14 @@ function toMessageDetail(
   email: Email,
   ownAddress: string,
   bodyHtml: string | null,
+  readReceipt: {
+    isRead: boolean;
+    viewedBy: Array<{
+      userId: string;
+      name: string;
+      readAt: Date;
+    }>;
+  },
 ) {
   return {
     ...toMessageSummary(email),
@@ -109,6 +118,7 @@ function toMessageDetail(
       disposition: file.disposition,
     })),
     replyPlan: buildReplyPlan(ownAddress, email),
+    ...readReceipt,
   };
 }
 
@@ -180,6 +190,7 @@ function outgoingFailure(
 export const mailRoutes = new Hono<AppEnv>()
   .use("*", requireAuth)
   .get("/mailboxes", async (c) => {
+    const userId = c.get("user").id;
     const rows = await createDb(c.env.DB)
       .select({
         id: mailboxes.id,
@@ -190,10 +201,19 @@ export const mailRoutes = new Hono<AppEnv>()
       })
       .from(mailboxMembers)
       .innerJoin(mailboxes, eq(mailboxMembers.mailboxId, mailboxes.id))
-      .where(eq(mailboxMembers.userId, c.get("user").id))
+      .where(eq(mailboxMembers.userId, userId))
       .orderBy(mailboxes.kind, mailboxes.displayName);
 
-    return c.json({ ok: true as const, mailboxes: rows });
+    const rowsWithUnreadCounts = await Promise.all(rows.map(async (mailbox) => {
+      const inbox = await mailboxStub(c.env, mailbox.id)
+        .getFolderCounts(userId, "inbox");
+      return {
+        ...mailbox,
+        unreadCount: inbox?.unreadCount ?? 0,
+      };
+    }));
+
+    return c.json({ ok: true as const, mailboxes: rowsWithUnreadCounts });
   })
   .post(
     "/uploads",
@@ -347,7 +367,9 @@ export const mailRoutes = new Hono<AppEnv>()
     if (!access) {
       return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
     }
-    const storedFolders = await mailboxStub(c.env, mailboxId).listFolders();
+    const storedFolders = await mailboxStub(c.env, mailboxId).listFolders(
+      c.get("user").id,
+    );
     return c.json({
       ok: true as const,
       folders: storedFolders.map((folder) => ({
@@ -355,6 +377,8 @@ export const mailRoutes = new Hono<AppEnv>()
         name: folder.name,
         kind: folder.kind,
         systemType: folder.systemType,
+        totalCount: folder.totalCount,
+        unreadCount: folder.unreadCount,
       })),
     });
   })
@@ -369,6 +393,7 @@ export const mailRoutes = new Hono<AppEnv>()
       return apiError(c, 400, "BAD_REQUEST", "Conversation cursor is invalid");
     }
     const page = await mailboxStub(c.env, query.mailboxId).listConversations(
+      c.get("user").id,
       query.folder,
       query.limit,
       cursor,
@@ -384,6 +409,9 @@ export const mailRoutes = new Hono<AppEnv>()
           access.address,
           item.email,
         ),
+        messageCount: item.messageCount,
+        unreadCount: item.unreadCount,
+        isUnread: item.unreadCount > 0,
       })),
       nextCursor: page.next ? encodeConversationCursor(page.next) : null,
     });
@@ -400,14 +428,54 @@ export const mailRoutes = new Hono<AppEnv>()
       const snapshot = await mailboxStub(c.env, mailboxId)
         .getConversationSnapshot(c.req.param("id"));
       if (!snapshot) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
+      const readerIds = [...new Set(
+        snapshot.readStates.map((readState) => readState.userId),
+      )];
+      const readers = readerIds.length
+        ? await createDb(c.env.DB)
+          .select({ id: users.id, name: users.name })
+          .from(mailboxMembers)
+          .innerJoin(users, eq(mailboxMembers.userId, users.id))
+          .where(and(
+            eq(mailboxMembers.mailboxId, mailboxId),
+            inArray(mailboxMembers.userId, readerIds),
+          ))
+        : [];
+      const readerById = new Map(readers.map((reader) => [reader.id, reader]));
+      const readStatesByEmail = new Map<
+        string,
+        typeof snapshot.readStates
+      >();
+      for (const readState of snapshot.readStates) {
+        const states = readStatesByEmail.get(readState.emailId) ?? [];
+        states.push(readState);
+        readStatesByEmail.set(readState.emailId, states);
+      }
+      const currentUserId = c.get("user").id;
       const messages = await Promise.all(snapshot.messages.map(async (email) => {
         const object = email.bodyHtmlR2Key
           ? await c.env.MAIL_STORAGE.get(email.bodyHtmlR2Key)
           : null;
+        const readStates = readStatesByEmail.get(email.id) ?? [];
         return toMessageDetail(
           email,
           access.address,
           object ? await object.text() : null,
+          {
+            isRead: readStates.some(
+              (readState) => readState.userId === currentUserId,
+            ),
+            viewedBy: readStates.flatMap((readState) => {
+              const reader = readerById.get(readState.userId);
+              return reader
+                ? [{
+                    userId: reader.id,
+                    name: reader.name,
+                    readAt: readState.readAt,
+                  }]
+                : [];
+            }),
+          },
         );
       }));
       return c.json({
@@ -436,6 +504,44 @@ export const mailRoutes = new Hono<AppEnv>()
         },
       );
       if (!updated) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
+      return c.json({ ok: true as const });
+    },
+  )
+  .patch(
+    "/conversations/:id/read",
+    zValidator("query", mailboxQuerySchema),
+    zValidator("json", messageReadSchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const user = c.get("user");
+      if (!await accessibleMailbox(c.env, user.id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const updated = await mailboxStub(c.env, mailboxId).setConversationRead(
+        user.id,
+        c.req.param("id"),
+        c.req.valid("json").isRead,
+      );
+      if (!updated) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
+      return c.json({ ok: true as const });
+    },
+  )
+  .patch(
+    "/messages/:id/read",
+    zValidator("query", mailboxQuerySchema),
+    zValidator("json", messageReadSchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const user = c.get("user");
+      if (!await accessibleMailbox(c.env, user.id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const updated = await mailboxStub(c.env, mailboxId).setMessageRead(
+        user.id,
+        c.req.param("id"),
+        c.req.valid("json").isRead,
+      );
+      if (!updated) return apiError(c, 404, "NOT_FOUND", "Message not found");
       return c.json({ ok: true as const });
     },
   )

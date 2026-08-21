@@ -142,21 +142,46 @@ export function MessageList({
                 "transition-colors duration-150 ease-out hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
                 "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity hover:before:opacity-100 focus-visible:before:opacity-100",
                 "sm:gap-4 sm:px-5",
+                message.isUnread && "bg-primary/4",
               )}
             >
-              <Avatar className="size-10">
+              <Avatar className={cn(
+                "size-10",
+                message.isUnread && "ring-2 ring-primary/25",
+              )}>
                 <AvatarFallback className="text-xs">
                   {sender.slice(0, 2).toUpperCase()}
                 </AvatarFallback>
               </Avatar>
 
               <div className="min-w-0 lg:flex lg:items-baseline lg:gap-4">
-                <span className="block truncate text-[0.9375rem] leading-6 font-semibold tracking-[-0.01em] lg:w-56 lg:shrink-0">
-                  {sender}
+                <span className="flex min-w-0 items-center gap-2 lg:w-56 lg:shrink-0">
+                  {message.isUnread ? (
+                    <span
+                      className="size-2 shrink-0 rounded-full bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_14%,transparent)]"
+                      aria-label={`${message.unreadCount} unread messages`}
+                    />
+                  ) : null}
+                  <span className={cn(
+                    "block truncate text-[0.9375rem] leading-6 tracking-[-0.01em]",
+                    message.isUnread ? "font-bold" : "font-semibold",
+                  )}>
+                    {sender}
+                  </span>
                 </span>
                 <span className="mt-0.5 block min-w-0 lg:mt-0 lg:flex lg:flex-1 lg:items-baseline lg:gap-2">
-                  <span className="block truncate text-sm leading-6 font-medium text-foreground/90 lg:max-w-[46%] lg:shrink-0">
-                    {message.subject}
+                  <span className="flex min-w-0 items-baseline gap-1.5 lg:max-w-[46%] lg:shrink-0">
+                    <span className={cn(
+                      "block truncate text-sm leading-6 text-foreground/90",
+                      message.isUnread ? "font-semibold" : "font-medium",
+                    )}>
+                      {message.subject}
+                    </span>
+                    {message.messageCount > 1 ? (
+                      <span className="shrink-0 text-[10px] font-semibold text-muted-foreground tabular-nums">
+                        {message.messageCount}
+                      </span>
+                    ) : null}
                   </span>
                   <span className="mt-0.5 block line-clamp-2 text-[0.8125rem] leading-5 text-muted-foreground lg:mt-0 lg:min-w-0 lg:flex-1 lg:truncate lg:before:mr-2 lg:before:text-border lg:before:content-['—']">
                     {message.preview || "No text preview"}
@@ -164,7 +189,10 @@ export function MessageList({
                 </span>
               </div>
 
-              <time className="shrink-0 pt-1 text-[11px] font-medium text-muted-foreground tabular-nums">
+              <time className={cn(
+                "shrink-0 pt-1 text-[11px] font-medium tabular-nums",
+                message.isUnread ? "text-foreground" : "text-muted-foreground",
+              )}>
                 {shortDate(message.timelineAt)}
               </time>
             </button>

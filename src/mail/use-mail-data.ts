@@ -8,11 +8,27 @@ import {
 import { api, responseJson } from "@/lib/api";
 import type { Folder } from "./types";
 
+const readInvalidationTimers = new WeakMap<
+  QueryClient,
+  ReturnType<typeof setTimeout>
+>();
+
+// Several messages can become visible together; refresh their shared counters once.
+function scheduleReadInvalidation(client: QueryClient) {
+  if (readInvalidationTimers.has(client)) return;
+  const timer = setTimeout(() => {
+    readInvalidationTimers.delete(client);
+    void invalidateMailQueries(client);
+  }, 150);
+  readInvalidationTimers.set(client, timer);
+}
+
 export function useMailboxes() {
   return useQuery({
     queryKey: ["mailboxes"],
     queryFn: async () =>
       responseJson(await api.api.mail.mailboxes.$get()),
+    refetchInterval: 5_000,
   });
 }
 
@@ -26,6 +42,7 @@ export function useFolders(mailboxId: string | undefined) {
         }),
       ),
     enabled: Boolean(mailboxId),
+    refetchInterval: 5_000,
   });
 }
 
@@ -107,6 +124,52 @@ export function useResendMessage() {
   });
 }
 
+export function useSetMessageRead() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      mailboxId,
+      isRead,
+    }: {
+      id: string;
+      mailboxId: string;
+      isRead: boolean;
+    }) =>
+      responseJson(
+        await api.api.mail.messages[":id"].read.$patch({
+          param: { id },
+          query: { mailboxId },
+          json: { isRead },
+        }),
+      ),
+    onSuccess: () => scheduleReadInvalidation(client),
+  });
+}
+
+export function useSetConversationRead() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      mailboxId,
+      isRead,
+    }: {
+      id: string;
+      mailboxId: string;
+      isRead: boolean;
+    }) =>
+      responseJson(
+        await api.api.mail.conversations[":id"].read.$patch({
+          param: { id },
+          query: { mailboxId },
+          json: { isRead },
+        }),
+      ),
+    onSuccess: () => invalidateMailQueries(client),
+  });
+}
+
 export function useUpdateConversation() {
   const client = useQueryClient();
   return useMutation({
@@ -135,6 +198,8 @@ export function useUpdateConversation() {
 
 export async function invalidateMailQueries(client: QueryClient) {
   await Promise.all([
+    client.invalidateQueries({ queryKey: ["mailboxes"] }),
+    client.invalidateQueries({ queryKey: ["folders"] }),
     client.invalidateQueries({ queryKey: ["conversations"] }),
     client.invalidateQueries({ queryKey: ["conversation"] }),
   ]);

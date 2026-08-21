@@ -25,6 +25,7 @@ import {
 } from "./folder-model";
 import {
   conversations,
+  emailReadStates,
   emails,
   folders,
   pendingInbound,
@@ -35,7 +36,13 @@ import {
 } from "./schema";
 import type { RecipientDeliveryStatus } from "./model";
 
-const schema = { conversations, emails, folders, pendingInbound };
+const schema = {
+  conversations,
+  emailReadStates,
+  emails,
+  folders,
+  pendingInbound,
+};
 type MailboxDatabase = DrizzleSqliteDODatabase<typeof schema>;
 const INBOUND_ALARM_BATCH_SIZE = 1;
 const MAX_INBOUND_RETRY_DELAY_MS = 60 * 60 * 1000;
@@ -64,6 +71,8 @@ export type ConversationCursorPosition = {
 
 export type ConversationListItem = {
   email: Email;
+  messageCount: number;
+  unreadCount: number;
 };
 
 export type SubmitOutgoingResult = {
@@ -86,6 +95,8 @@ export type FolderListItem = {
   kind: "system" | "custom";
   systemType: SystemFolderType | null;
   sortOrder: number;
+  totalCount: number;
+  unreadCount: number;
 };
 
 type MailFolder =
@@ -101,6 +112,18 @@ type MailFolder =
 type ConversationRow = {
   email_id: string;
   timeline_at: number;
+  message_count: number;
+  unread_count: number;
+};
+
+type FolderCountRow = {
+  total_count: number;
+  unread_count: number;
+};
+
+export type FolderCounts = {
+  totalCount: number;
+  unreadCount: number;
 };
 
 function folderMembership(folder: MailFolder) {
@@ -140,6 +163,7 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   listConversations(
+    userId: string,
     folderId: string,
     limit: number,
     cursor: ConversationCursorPosition | null,
@@ -174,12 +198,29 @@ export class MailboxDO extends DurableObject<Env> {
     const rows = this.state.storage.sql.exec<ConversationRow>(`
       select
         c.latest_email_id as email_id,
-        c.timeline_at
+        c.timeline_at,
+        (
+          select count(*)
+          from emails message
+          where message.conversation_id = c.id
+        ) as message_count,
+        (
+          select count(*)
+          from emails message
+          where message.conversation_id = c.id
+            and message.direction = 'incoming'
+            and not exists (
+              select 1
+              from email_read_states read_state
+              where read_state.user_id = ?
+                and read_state.email_id = message.id
+            )
+        ) as unread_count
       from conversations c
       where ${predicates.join(" and ")}
       order by c.timeline_at desc, c.latest_email_id desc
       limit ?
-    `, ...bindings).toArray();
+    `, userId, ...bindings).toArray();
 
     const pageRows = rows.slice(0, limit);
     const emailIds = pageRows.map((row) => row.email_id);
@@ -189,7 +230,13 @@ export class MailboxDO extends DurableObject<Env> {
     const emailsById = new Map(emailRows.map((email) => [email.id, email]));
     const items = pageRows.flatMap((row): ConversationListItem[] => {
       const email = emailsById.get(row.email_id);
-      return email ? [{ email }] : [];
+      return email
+        ? [{
+            email,
+            messageCount: Number(row.message_count),
+            unreadCount: Number(row.unread_count),
+          }]
+        : [];
     });
     const last = pageRows.at(-1);
     return {
@@ -252,6 +299,17 @@ export class MailboxDO extends DurableObject<Env> {
       mailboxState: conversation.mailboxState,
       folderId: conversation.folderId,
       messages: this.getConversation(conversationId),
+      readStates: this.db
+        .select({
+          emailId: emailReadStates.emailId,
+          userId: emailReadStates.userId,
+          readAt: emailReadStates.readAt,
+        })
+        .from(emailReadStates)
+        .innerJoin(emails, eq(emailReadStates.emailId, emails.id))
+        .where(eq(emails.conversationId, conversationId))
+        .orderBy(asc(emailReadStates.readAt))
+        .all(),
     };
   }
 
@@ -280,14 +338,14 @@ export class MailboxDO extends DurableObject<Env> {
     );
   }
 
-  listFolders(): FolderListItem[] {
+  listFolders(userId: string): FolderListItem[] {
     const customFolders = this.db
       .select()
       .from(folders)
       .orderBy(asc(folders.sortOrder), asc(folders.name))
       .all();
 
-    return [
+    const mailFolders: MailFolder[] = [
       ...systemFolderDefinitions.map((folder) => ({
         ...folder,
         kind: "system" as const,
@@ -297,10 +355,106 @@ export class MailboxDO extends DurableObject<Env> {
         kind: "custom" as const,
         systemType: null,
       })),
-    ].sort(
+    ];
+
+    return mailFolders.map((folder): FolderListItem => {
+      const counts = this.countFolder(userId, folder);
+      return {
+        ...folder,
+        ...counts,
+      };
+    }).sort(
       (left, right) =>
         left.sortOrder - right.sortOrder || left.name.localeCompare(right.name),
     );
+  }
+
+  getFolderCounts(userId: string, folderId: string): FolderCounts | null {
+    const folder = this.getFolder(folderId);
+    return folder ? this.countFolder(userId, folder) : null;
+  }
+
+  private countFolder(userId: string, folder: MailFolder): FolderCounts {
+    const membership = folderMembership(folder);
+    const counts = this.state.storage.sql.exec<FolderCountRow>(`
+      select
+        count(*) as total_count,
+        coalesce(sum(
+          case when exists (
+            select 1
+            from emails message
+            where message.conversation_id = c.id
+              and message.direction = 'incoming'
+              and not exists (
+                select 1
+                from email_read_states read_state
+                where read_state.user_id = ?
+                  and read_state.email_id = message.id
+              )
+          ) then 1 else 0 end
+        ), 0) as unread_count
+      from conversations c
+      where ${membership.predicate}
+    `, userId, ...membership.bindings).one();
+    return {
+      totalCount: Number(counts.total_count),
+      unreadCount: Number(counts.unread_count),
+    };
+  }
+
+  setMessageRead(userId: string, emailId: string, isRead: boolean) {
+    if (!this.getEmail(emailId)) return false;
+    if (isRead) {
+      const readAt = new Date();
+      this.db
+        .insert(emailReadStates)
+        .values({ userId, emailId, readAt })
+        .onConflictDoUpdate({
+          target: [emailReadStates.userId, emailReadStates.emailId],
+          set: { readAt },
+        })
+        .run();
+    } else {
+      this.db
+        .delete(emailReadStates)
+        .where(and(
+          eq(emailReadStates.userId, userId),
+          eq(emailReadStates.emailId, emailId),
+        ))
+        .run();
+    }
+    return true;
+  }
+
+  setConversationRead(userId: string, conversationId: string, isRead: boolean) {
+    const conversation = this.db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .all()[0];
+    if (!conversation) return false;
+
+    if (isRead) {
+      this.state.storage.sql.exec(`
+        insert into email_read_states (user_id, email_id, read_at)
+        select ?, id, ?
+        from emails
+        where conversation_id = ? and direction = 'incoming'
+        on conflict (user_id, email_id) do update set read_at = excluded.read_at
+      `, userId, Date.now(), conversationId);
+    } else {
+      this.state.storage.sql.exec(`
+        delete from email_read_states
+        where user_id = ? and email_id = (
+          select id
+          from emails
+          where conversation_id = ? and direction = 'incoming'
+          order by timeline_at desc, id desc
+          limit 1
+        )
+      `, userId, conversationId);
+    }
+    return true;
   }
 
   async enqueueInbound(input: InboundDeliveryInput) {

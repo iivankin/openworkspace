@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex,
@@ -175,8 +176,29 @@ export const conversations = sqliteTable(
   ],
 );
 
+/**
+ * Read state belongs to a person, not to the mailbox. This keeps shared
+ * mailboxes independent: one teammate viewing a message cannot clear another
+ * teammate's unread state.
+ */
+export const emailReadStates = sqliteTable(
+  "email_read_states",
+  {
+    userId: text("user_id").notNull(),
+    emailId: text("email_id")
+      .notNull()
+      .references(() => emails.id, { onDelete: "cascade" }),
+    readAt: integer("read_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.emailId] }),
+    index("email_read_states_email_idx").on(table.emailId),
+  ],
+);
+
 export type Email = typeof emails.$inferSelect;
 export type NewEmail = typeof emails.$inferInsert;
+export type EmailReadState = typeof emailReadStates.$inferSelect;
 export type PendingInbound = typeof pendingInbound.$inferSelect;
 export type NewPendingInbound = typeof pendingInbound.$inferInsert;
 export type ConversationRecord = typeof conversations.$inferSelect;

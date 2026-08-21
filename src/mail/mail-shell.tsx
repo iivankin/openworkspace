@@ -25,6 +25,7 @@ import {
   useMailboxes,
   useConversation,
   useFolders,
+  useSetConversationRead,
   useUpdateConversation,
 } from "./use-mail-data";
 
@@ -102,11 +103,16 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     locationReady ? conversationId : undefined,
   );
   const updateConversation = useUpdateConversation();
+  const setConversationRead = useSetConversationRead();
   const conversations = useMemo(
     () => conversationsQuery.data?.pages.flatMap((page) => page.conversations) ?? [],
     [conversationsQuery.data?.pages],
   );
   const folderName = folderDisplayName(folder, folders);
+  const activeFolder = folders?.find((item) => item.id === folder);
+  const displayedConversationCount = debouncedSearch
+    ? `${conversations.length}${conversationsQuery.hasNextPage ? "+" : ""}`
+    : String(activeFolder?.totalCount ?? conversations.length);
 
   function navigate(next: {
     folder?: Folder;
@@ -178,6 +184,34 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     navigate({ folder: next, conversation: null });
   }
 
+  function markConversationUnread() {
+    if (!conversationId || !mailbox) return;
+    setConversationRead.mutate(
+      {
+        id: conversationId,
+        mailboxId: mailbox.id,
+        isRead: false,
+      },
+      {
+        onSuccess: closeConversation,
+        onError: (error) => toast.error(error.message),
+      },
+    );
+  }
+
+  async function markConversationRead() {
+    if (!conversationId || !mailbox) return;
+    try {
+      await setConversationRead.mutateAsync({
+        id: conversationId,
+        mailboxId: mailbox.id,
+        isRead: true,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not mark messages as read");
+    }
+  }
+
   return (
     <main className="paper-grain flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
       <MailHeader
@@ -209,6 +243,16 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
             onArchive={() => mutateConversation({ mailboxState: "archive" }, true)}
             onRestore={() => mutateConversation({ mailboxState: "active" }, true)}
             onTrash={() => mutateConversation({ mailboxState: "trash" }, true)}
+            onMarkRead={conversationQuery.data?.messages.some(
+                (message) => message.direction === "incoming" && !message.isRead,
+              )
+              ? () => void markConversationRead()
+              : undefined}
+            onMarkUnread={conversationQuery.data?.messages.some(
+                (message) => message.direction === "incoming",
+              )
+              ? markConversationUnread
+              : undefined}
             onForward={openForward}
             onOpenConversation={(id) => navigate({ folder: "sent", conversation: id })}
           />
@@ -224,7 +268,11 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
                 </h1>
               </div>
               <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {conversations.length}{conversationsQuery.hasNextPage ? "+" : ""} conversations
+                {displayedConversationCount}{" "}
+                {displayedConversationCount === "1" ? "conversation" : "conversations"}
+                {!debouncedSearch && activeFolder?.unreadCount
+                  ? ` · ${activeFolder.unreadCount} unread`
+                  : ""}
               </p>
             </div>
 

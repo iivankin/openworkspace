@@ -109,6 +109,56 @@ describe("read-only mailbox access", () => {
     expect(conversation.status).toBe(200);
     await conversation.json();
 
+    const markRead = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/messages/msg_visible_incoming/read?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ isRead: true }),
+        },
+      ),
+    );
+    expect(markRead.status).toBe(200);
+    await markRead.json();
+
+    const readConversation = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/conv_visible?mailboxId=${mailboxId}`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    expect(await readConversation.json()).toMatchObject({
+      messages: [{
+        id: "msg_visible_incoming",
+        isRead: true,
+        viewedBy: [{ userId, name: "Reader" }],
+      }],
+    });
+
+    const markConversationUnread = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/conv_visible/read?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ isRead: false }),
+        },
+      ),
+    );
+    expect(markConversationUnread.status).toBe(200);
+    await markConversationUnread.json();
+
+    const unreadConversation = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/conv_visible?mailboxId=${mailboxId}`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    expect(await unreadConversation.json()).toMatchObject({
+      messages: [{ id: "msg_visible_incoming", isRead: false }],
+    });
+
     const compose = await exports.default.fetch(
       new Request("http://example.test/api/mail/messages", {
         method: "POST",

@@ -264,6 +264,114 @@ test("desktop mail uses navbar navigation and a corner composer", async ({ page 
   expect(box!.y + box!.height).toBeGreaterThan(650);
 });
 
+test("shared mailbox reads only visible messages and shows every viewer", async ({ page, browser }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop visibility behavior");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  const supportMailbox = page.getByRole("menuitem", { name: /Customer care/u });
+  await expect(
+    supportMailbox.getByLabel("3 unread conversations"),
+  ).toBeVisible();
+  await supportMailbox.click();
+
+  await page.route("**/api/mail/conversations/conv_demo_customer3?*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json() as {
+      messages: Array<{ id: string; bodyText: string | null }>;
+    };
+    const first = body.messages.find((message) => message.id === "msg_demo_10");
+    if (first) {
+      first.bodyText = Array.from(
+        { length: 80 },
+        (_, index) => `Visible message line ${index + 1}`,
+      ).join("\n");
+    }
+    await route.fulfill({ response, json: body });
+  });
+
+  let firstMessageReadAttempts = 0;
+  await page.route("**/api/mail/messages/msg_demo_10/read?*", async (route) => {
+    firstMessageReadAttempts += 1;
+    if (firstMessageReadAttempts === 1) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: false,
+          error: { message: "Temporary read failure" },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  const readMessageIds = new Set<string>();
+  page.on("request", (request) => {
+    if (request.method() !== "PATCH") return;
+    const match = new URL(request.url()).pathname.match(
+      /\/api\/mail\/messages\/([^/]+)\/read$/u,
+    );
+    if (match && request.postDataJSON()?.isRead === true) {
+      readMessageIds.add(match[1]!);
+    }
+  });
+
+  await page.getByRole("button", { name: /Léa Martin/u }).click();
+  const archiveButton = page.getByRole("button", { name: "Archive conversation" });
+  await archiveButton.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]'))
+    .toHaveText("Archive conversation");
+  await expect.poll(() => firstMessageReadAttempts, { timeout: 5_000 })
+    .toBeGreaterThanOrEqual(2);
+  await expect.poll(() => readMessageIds.has("msg_demo_10")).toBe(true);
+  await page.waitForTimeout(700);
+  expect(readMessageIds.has("msg_demo_11")).toBe(false);
+  const firstMessage = page.locator('[data-message-id="msg_demo_10"]');
+  const viewedBy = firstMessage.getByText("Viewed by Ilya Morozov");
+  await expect(viewedBy).toBeVisible();
+  await firstMessage.hover();
+  const viewedByBox = await viewedBy.boundingBox();
+  const actionsBox = await firstMessage.locator('[data-slot="bubble-reactions"]').boundingBox();
+  expect(viewedByBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(viewedByBox!.y + viewedByBox!.height).toBeLessThan(actionsBox!.y);
+
+  const mayaContext = await browser.newContext({
+    baseURL: new URL(page.url()).origin,
+  });
+  const mayaPage = await mayaContext.newPage();
+  await mayaPage.goto("/");
+  const loginStatus = await mayaPage.evaluate(async () => {
+    const response = await fetch("/api/auth/mock/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "usr_demo_member" }),
+    });
+    return response.status;
+  });
+  expect(loginStatus).toBe(200);
+  await mayaPage.goto("/mail/mbx_demo_support?folder=inbox");
+  await mayaPage.getByRole("button", { name: /Léa Martin/u }).click();
+  await expect(
+    mayaPage.locator('[data-message-id="msg_demo_10"]')
+      .getByText(/Maya Chen/u),
+  ).toBeVisible();
+  await mayaContext.close();
+
+  await expect(
+    firstMessage.getByText("Viewed by Ilya Morozov and Maya Chen"),
+  ).toBeVisible({ timeout: 10_000 });
+
+  await page.locator('[data-message-id="msg_demo_11"]').scrollIntoViewIfNeeded();
+  await expect.poll(() => readMessageIds.has("msg_demo_11")).toBe(true);
+  await page.getByRole("button", { name: "Mark conversation as unread" }).click();
+  const unreadConversation = page.getByRole("button", { name: /Léa Martin/u });
+  await expect(unreadConversation).toBeVisible();
+  await expect(unreadConversation.getByLabel("1 unread messages")).toBeVisible();
+});
+
 test("closes the mailbox composer when switching mailboxes", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Composer routing is covered once");
   await page.goto("/");

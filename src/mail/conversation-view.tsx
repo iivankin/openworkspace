@@ -8,10 +8,12 @@ import {
   FileText,
   Forward,
   Inbox,
+  Mail,
+  MailOpen,
   RotateCw,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
@@ -27,6 +29,12 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { baseSubject } from "../../shared/mail";
 import {
@@ -39,7 +47,8 @@ import { DeliveryIndicator } from "./delivery-indicator";
 import { EmailHtmlBody } from "./email-html-body";
 import { formatBytes } from "./format-bytes";
 import { notifyOutboundResult } from "./outbound-notification";
-import { useResendMessage } from "./use-mail-data";
+import { useResendMessage, useSetMessageRead } from "./use-mail-data";
+import { useVisibleMessageRead } from "./use-visible-message-read";
 import type {
   Mailbox,
   MessageDetail,
@@ -63,6 +72,8 @@ export function ConversationView({
   onArchive,
   onRestore,
   onTrash,
+  onMarkRead,
+  onMarkUnread,
   onForward,
   onOpenConversation,
 }: {
@@ -76,11 +87,14 @@ export function ConversationView({
   onArchive: () => void;
   onRestore: () => void;
   onTrash: () => void;
+  onMarkRead?: () => void;
+  onMarkUnread?: () => void;
   onForward: (message: MessageDetail) => void;
   onOpenConversation: (conversationId: string) => void;
 }) {
   const [replySelection, setReplySelection] = useState<ReplySelection | null>(null);
   const resendMessage = useResendMessage();
+  const setMessageRead = useSetMessageRead();
 
   if (loading) {
     return <ConversationLoadingSkeleton />;
@@ -141,35 +155,55 @@ export function ConversationView({
     );
   }
 
+  async function markViewed(messageId: string) {
+    if (!mailbox) return;
+    await setMessageRead.mutateAsync({
+      id: messageId,
+      mailboxId: mailbox.id,
+      isRead: true,
+    });
+  }
+
   return (
     <article className="w-full px-3 pb-24 sm:px-6 lg:pb-10">
-      <header className="sticky top-0 z-30 -mx-3 flex h-14 items-center gap-1 border-b border-border/70 bg-background/85 px-3 backdrop-blur-xl sm:-mx-6 sm:px-6">
-        <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft /> Back
-        </Button>
-        <Separator orientation="vertical" className="mx-2.5 h-5" />
-        {mailboxState === "active" ? (
-          <Button variant="ghost" size="icon-sm" onClick={onArchive}>
-            <Archive /><span className="sr-only">Archive conversation</span>
+      <TooltipProvider delay={300}>
+        <header className="sticky top-0 z-30 -mx-3 flex h-14 items-center gap-1 border-b border-border/70 bg-background/85 px-3 backdrop-blur-xl sm:-mx-6 sm:px-6">
+          <Button variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft /> Back
           </Button>
-        ) : (
-          <Button variant="ghost" size="icon-sm" onClick={onRestore}>
-            <Inbox />
-            <span className="sr-only">
-              {mailboxState === "spam" ? "Mark as not spam" : "Move conversation to inbox"}
-            </span>
-          </Button>
-        )}
-        {mailboxState !== "trash" && (
-          <Button variant="ghost" size="icon-sm" onClick={onTrash}>
-            <Trash2 /><span className="sr-only">Move conversation to trash</span>
-          </Button>
-        )}
-        <span className="ml-auto hidden truncate pl-4 text-xs text-muted-foreground sm:block">
-          {mailboxState === "active" ? "Inbox" : mailboxState} · {messages.length}{" "}
-          {messages.length === 1 ? "message" : "messages"}
-        </span>
-      </header>
+          <Separator orientation="vertical" className="mx-2.5 h-5" />
+          {mailboxState === "active" ? (
+            <ConversationToolbarButton label="Archive conversation" onClick={onArchive}>
+              <Archive />
+            </ConversationToolbarButton>
+          ) : (
+            <ConversationToolbarButton
+              label={mailboxState === "spam" ? "Mark as not spam" : "Move conversation to inbox"}
+              onClick={onRestore}
+            >
+              <Inbox />
+            </ConversationToolbarButton>
+          )}
+          {mailboxState !== "trash" && (
+            <ConversationToolbarButton label="Move conversation to trash" onClick={onTrash}>
+              <Trash2 />
+            </ConversationToolbarButton>
+          )}
+          {onMarkRead ? (
+            <ConversationToolbarButton label="Mark conversation as read" onClick={onMarkRead}>
+              <MailOpen />
+            </ConversationToolbarButton>
+          ) : onMarkUnread ? (
+            <ConversationToolbarButton label="Mark conversation as unread" onClick={onMarkUnread}>
+              <Mail />
+            </ConversationToolbarButton>
+          ) : null}
+          <span className="ml-auto hidden truncate pl-4 text-xs text-muted-foreground sm:block">
+            {mailboxState === "active" ? "Inbox" : mailboxState} · {messages.length}{" "}
+            {messages.length === 1 ? "message" : "messages"}
+          </span>
+        </header>
+      </TooltipProvider>
 
       <div className="mx-auto max-w-4xl py-8 sm:py-12">
         <div className="mb-9 border-b border-border/70 pb-7">
@@ -193,6 +227,8 @@ export function ConversationView({
                   mailboxId={mailbox?.id}
                   showAvatar={shouldShowAvatar(previous, message)}
                   canForward={Boolean(mailbox?.canSend)}
+                  showViewedBy={mailbox?.kind === "shared"}
+                  onViewed={() => markViewed(message.id)}
                   onReply={(action) => setReplySelection({
                     parentId: message.id,
                     mode: action.mode,
@@ -229,6 +265,8 @@ function MessageBubble({
   mailboxId,
   showAvatar,
   canForward,
+  showViewedBy,
+  onViewed,
   onReply,
   onRetry,
   onForward,
@@ -238,6 +276,8 @@ function MessageBubble({
   mailboxId?: string;
   showAvatar: boolean;
   canForward: boolean;
+  showViewedBy: boolean;
+  onViewed: () => Promise<void>;
   onReply: (action: ReplyAction) => void;
   onRetry: () => void;
   onForward: () => void;
@@ -246,9 +286,19 @@ function MessageBubble({
   const outgoing = message.direction === "outgoing";
   const sender = message.fromName || message.fromAddress;
   const [rendersHtml, setRendersHtml] = useState(false);
+  const visibilityRef = useVisibleMessageRead({
+    enabled: !message.isRead,
+    messageId: message.id,
+    onVisible: onViewed,
+  });
+  const hasActions = message.replyPlan.actions.length > 0
+    || canRetry(message)
+    || canForward;
+  const hasViewedBy = showViewedBy && message.viewedBy.length > 0;
 
   return (
     <section
+      ref={visibilityRef}
       className={cn(
         "group/message flex items-start gap-2.5 pt-1 pb-6",
         outgoing && "justify-end",
@@ -271,6 +321,7 @@ function MessageBubble({
         className={cn(
           "max-w-[calc(100%-2.75rem)] sm:max-w-[82%]",
           rendersHtml && "w-full",
+          hasViewedBy && hasActions && "pb-6",
         )}
       >
         <MessageMetadata
@@ -324,7 +375,16 @@ function MessageBubble({
           <DeliveryIndicator message={message} />
         </BubbleContent>
 
-        {(message.replyPlan.actions.length > 0 || canRetry(message) || canForward) && (
+        {hasViewedBy ? (
+          <p className={cn(
+            "px-1 text-[10px] font-medium text-muted-foreground",
+            outgoing && "text-right",
+          )}>
+            Viewed by {viewedByNames(message.viewedBy.map((viewer) => viewer.name))}
+          </p>
+        ) : null}
+
+        {hasActions && (
           <BubbleReactions
             align={outgoing ? "end" : "start"}
             className="opacity-100 transition-opacity md:opacity-0 md:group-hover/message:opacity-100 md:group-focus-within/message:opacity-100"
@@ -384,6 +444,28 @@ function canRetry(message: MessageDetail) {
       message.transportState === "failed"
       || message.transportState === "unconfirmed"
     );
+}
+
+function ConversationToolbarButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<Button variant="ghost" size="icon-sm" onClick={onClick} />}
+      >
+        {children}
+        <span className="sr-only">{label}</span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={6}>{label}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 function MessageMetadata({
@@ -487,4 +569,11 @@ function initials(value: string) {
     .map((part) => part[0])
     .join("")
     .toUpperCase();
+}
+
+function viewedByNames(names: string[]) {
+  return new Intl.ListFormat("en", {
+    style: "long",
+    type: "conjunction",
+  }).format(names);
 }

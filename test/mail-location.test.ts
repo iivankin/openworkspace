@@ -7,12 +7,14 @@ const mailboxes = [{
   displayName: "A",
   kind: "personal" as const,
   canSend: true,
+  unreadCount: 0,
 }, {
   id: "mailbox-read-only",
   address: "readonly@example.test",
   displayName: "Read only",
   kind: "shared" as const,
   canSend: false,
+  unreadCount: 0,
 }];
 
 const folders = [
@@ -21,12 +23,16 @@ const folders = [
     name: "Inbox",
     kind: "system" as const,
     systemType: "inbox" as const,
+    totalCount: 0,
+    unreadCount: 0,
   },
   {
     id: "project",
     name: "Project",
     kind: "custom" as const,
     systemType: null,
+    totalCount: 0,
+    unreadCount: 0,
   },
 ];
 

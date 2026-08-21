@@ -33,6 +33,10 @@ export const conversationListQuerySchema = mailboxQuerySchema.extend({
 
 export const mailboxStateSchema = z.enum(mailboxStates);
 
+export const messageReadSchema = z.object({
+  isRead: z.boolean(),
+});
+
 export const createUploadSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.string().trim().min(1).max(255),

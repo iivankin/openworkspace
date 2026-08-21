@@ -8,6 +8,13 @@
       "when": 1784825133044,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787348208125,
+      "tag": "0001_lazy_chameleon",
+      "breakpoints": true
     }
   ]
 }

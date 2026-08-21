@@ -14,6 +14,8 @@ const fallbackFolders: MailFolder[] = Object.keys(systemFolderLabels).map((id) =
   name: systemFolderLabels[id],
   kind: "system",
   systemType: id as MailFolder["systemType"],
+  totalCount: 0,
+  unreadCount: 0,
 }));
 
 export function folderDisplayName(folder: Folder, folders?: MailFolder[]) {
@@ -72,7 +74,15 @@ function FolderTabs({
                 value={item.id}
                 className="h-full flex-none rounded-none px-3 text-[0.8125rem] font-medium tracking-[-0.005em] after:inset-x-3 after:bottom-0"
               >
-                {item.name}
+                <span>{item.name}</span>
+                {item.unreadCount > 0 ? (
+                  <span
+                    className="min-w-5 rounded-full bg-primary/16 px-1.5 py-0.5 text-[10px] leading-none font-bold text-foreground tabular-nums"
+                    aria-label={`${item.unreadCount} unread conversations`}
+                  >
+                    {item.unreadCount}
+                  </span>
+                ) : null}
               </TabsTrigger>
             ))}
           </TabsList>
