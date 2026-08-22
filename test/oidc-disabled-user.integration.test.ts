@@ -1,6 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { hashToken, randomToken } from "../worker/lib/crypto";
+import { mailboxStub } from "../worker/mailbox";
 
 const issuer = "http://example.test";
 
@@ -52,6 +53,47 @@ describe("OIDC user lifecycle", () => {
     );
     const userCookie = login.headers.get("set-cookie")?.split(";", 1)[0]!;
     await body(login);
+    const mailboxList = await body<{ mailboxes: Array<{ id: string }> }>(
+      await exports.default.fetch(
+        new Request(`${issuer}/api/mail/mailboxes`, {
+          headers: { cookie: userCookie },
+        }),
+      ),
+    );
+    const mailboxId = mailboxList.mailboxes[0]!.id;
+    const realtime = await exports.default.fetch(
+      new Request(
+        `${issuer}/api/mail/mailboxes/${mailboxId}/realtime`,
+        {
+          headers: {
+            cookie: userCookie,
+            origin: issuer,
+            upgrade: "websocket",
+          },
+        },
+      ),
+    );
+    expect(realtime.status).toBe(101);
+    const socket = realtime.webSocket!;
+    socket.accept();
+    const socketClosed = new Promise<number>((resolve) => {
+      socket.addEventListener("close", (event) => resolve(event.code), { once: true });
+    });
+    const userSession = await env.DB.prepare(
+      "SELECT id FROM sessions WHERE user_id = ? LIMIT 1",
+    ).bind(userId).first<{ id: string }>();
+    expect(userSession).toBeTruthy();
+    const pushSubscriptionId = `push_${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO push_subscriptions (id, session_id, endpoint, p256dh, auth)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      pushSubscriptionId,
+      userSession!.id,
+      `https://push.example.test/${crypto.randomUUID()}`,
+      "test-p256dh",
+      "test-auth",
+    ).run();
 
     const client = await body<{ clientId: string }>(
       await exports.default.fetch(
@@ -135,6 +177,12 @@ describe("OIDC user lifecycle", () => {
         }),
       ),
     );
+    await mailboxStub(env, mailboxId).visibleUserIds();
+    await expect(socketClosed).resolves.toBe(1008);
+    const remainingPushSubscriptions = await env.DB.prepare(
+      "SELECT count(*) AS count FROM push_subscriptions WHERE id = ?",
+    ).bind(pushSubscriptionId).first<{ count: number }>();
+    expect(remainingPushSubscriptions?.count).toBe(0);
 
     const authState = await body<{ authenticated: boolean }>(
       await exports.default.fetch(

@@ -14,7 +14,7 @@ import {
 import { mailboxStub } from "../mailbox";
 import { provisionInstallationAccount } from "./personal-account";
 import { mockBootstrapSchema, mockLoginSchema } from "./schemas";
-import { createSession, replaceSession } from "./session";
+import { createSession, reauthenticateSession } from "./session";
 import {
   authenticateLoginTransaction,
   browserLoginTransaction,
@@ -89,7 +89,7 @@ export const mockAuthRoutes = new Hono<AppEnv>()
         input.oidcRequestId,
         user.id,
       );
-      await replaceSession(db, c, user.id);
+      await reauthenticateSession(db, c, user.id);
       clearLoginTransactionCookie(c, input.oidcRequestId);
       return c.json({ ok: true as const, ...transaction });
     }

@@ -96,6 +96,26 @@ export const mailboxMembers = sqliteTable(
   ],
 );
 
+export const mailboxNotificationPreferences = sqliteTable(
+  "mailbox_notification_preferences",
+  {
+    mailboxId: text("mailbox_id")
+      .notNull()
+      .references(() => mailboxes.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.mailboxId, table.userId] }),
+    index("mailbox_notification_preferences_user_idx").on(table.userId),
+  ],
+);
+
 export const passkeyCredentials = sqliteTable(
   "passkey_credentials",
   {
@@ -195,7 +215,8 @@ export const authChallenges = sqliteTable(
 export const sessions = sqliteTable(
   "sessions",
   {
-    tokenHash: text("token_hash").primaryKey(),
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -206,8 +227,31 @@ export const sessions = sqliteTable(
     userAgent: text("user_agent"),
   },
   (table) => [
+    uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
     index("sessions_user_idx").on(table.userId),
     index("sessions_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+/**
+ * A push channel belongs to the stable browser session, not its rotating
+ * bearer token. Removing or expiring that session still stops delivery by FK.
+ */
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint),
+    index("push_subscriptions_session_idx").on(table.sessionId),
   ],
 );
 

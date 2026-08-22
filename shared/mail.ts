@@ -50,6 +50,28 @@ export type RecipientDeliveryStatus = {
   detail: string | null;
 };
 
+export const MAILBOX_REALTIME_UPDATE = "update" as const;
+
+export type MailboxRealtimeClientMessage = "visible" | "hidden";
+
+type MailboxPushJobBase = {
+  mailboxId: string;
+  conversationId: string;
+  messageId: string;
+  occurredAt: number;
+  sender: string;
+  subject: string;
+};
+
+export type MailboxPushJob = MailboxPushJobBase & (
+  | { type: "dispatch" }
+  | {
+      type: "deliver";
+      targetSubscriptionId: string;
+      mailboxDisplayName: string;
+    }
+);
+
 export const MAX_COMPOSER_ATTACHMENT_BYTES = 500_000_000;
 export const MAX_COMPOSER_ATTACHMENT_COUNT = 10;
 export const MAX_MAIL_RECIPIENTS = 50;

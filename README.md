@@ -10,6 +10,7 @@ One Worker, your domain, your data. Invite people with a link, grant mailbox acc
 - **Personal and shared mailboxes** — read-only or read-and-send access per member
 - **Catch-all routing** — accept every address at your domain; only provisioned mailboxes receive mail
 - **Delivery status** — bounces, deferrals, and complaints surface in the app
+- **Realtime and push** — mailbox-scoped WebSockets plus optional PWA notifications
 - **Runs on Cloudflare** — Workers, D1, Durable Objects, R2, Images, Email Service, and Queues
 
 ## Deploy to Cloudflare
@@ -48,6 +49,7 @@ The script merges upstream (`main` or `master`) and keeps your Cloudflare-provis
 6. **Profile photos** — Enable **Images** for the account if prompted. Create a public delivery variant named `public` (or `avatar`). Uploaded avatars use custom ids `avatars/<userId>` and are served from `https://imagedelivery.net/<account_hash>/avatars/<userId>/public` (not your Worker domain). Optional later: a custom Images delivery hostname in the dashboard.
 7. **Attachment upload cleanup** — Run `bun run r2:lifecycle:setup` once to expire abandoned composer uploads after seven days. If the provisioned bucket is not named `openworkspace`, run `R2_BUCKET_NAME=<bucket> bun run r2:lifecycle:setup`.
 8. **Direct attachment uploads** — Optional. Create an R2 API token (Object Read & Write) for the mail bucket and set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ACCOUNT_ID`. In the R2 bucket **Settings → CORS**, allow your app origin with methods `PUT` and `HEAD` and headers `Content-Type`. Without these secrets, uploads still work through the Worker.
+9. **Push notifications** — Generate one persistent VAPID key pair with `bun run push:keygen`. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a contact such as `mailto:admin@example.com` in `VAPID_SUBJECT` with `wrangler secret put`. Users can then enable the current device and choose mailboxes under **Settings → Notifications**. Device registrations belong to the current login session, so signing out or recovering an account disables them until the user explicitly enables that device again.
 
 Unknown catch-all recipients are rejected permanently. Only addresses you create in the app accept mail.
 
@@ -110,15 +112,16 @@ Open [http://localhost:5173](http://localhost:5173). Local seed includes an admi
 | Invitation | `/invite/demo-invitation-token` (while signed out) |
 | Passkey recovery | `/recover/demo-recovery-token` |
 
-Outbound mail is logged locally instead of sent. Useful checks: `bun run typecheck`, `bun run test`, `bun run build`.
+Outbound mail is logged locally instead of sent. To test push locally, add a key pair from `bun run push:keygen` and `VAPID_SUBJECT` to `.dev.vars`. Useful checks: `bun run typecheck`, `bun run test`, `bun run build`.
 
 ## Using the app
 
 - **Empty install** — first visitor sets a name and personal email, registers a passkey, and becomes admin.
 - **Invite users** — admin creates a person with a personal mailbox and shares the one-time invitation link. They register a passkey to join.
 - **Recover access** — admin issues a one-hour recovery link; redeeming it replaces all passkeys and ends existing sessions.
-- **Settings** — each person uploads or removes their avatar under **Settings → Profile**, and chooses light/dark/system under **Appearance**.
+- **Settings** — each person manages their avatar, appearance, current-device push subscription, and per-mailbox notification preferences.
 - **Shared mailboxes** — admin adds members with read-only or read-and-send access. Everyone who is a member can read; there is no send-only mode.
+- **PWA notifications** — desktop and Android browsers can subscribe from Settings. On iPhone and iPad, first add OpenWorkspace to the Home Screen, then enable notifications from the installed app.
 
 ## License
 

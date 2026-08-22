@@ -6,6 +6,7 @@ import {
   responseJson,
   type SuccessfulResponse,
 } from "@/lib/api";
+import { unsubscribeCurrentPushSubscription } from "@/pwa/push-subscription";
 
 type AuthState = Omit<
   SuccessfulResponse<Awaited<ReturnType<typeof api.api.auth.state.$get>>>,
@@ -119,6 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     await responseJson(await api.api.auth.logout.$post());
+    void unsubscribeCurrentPushSubscription().catch((error) => {
+      console.warn("Could not remove the inactive browser push subscription", error);
+    });
     queryClient.removeQueries({
       predicate: (query) => query.queryKey[0] !== "auth-state",
     });
@@ -157,6 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value: AuthContextValue = {
     needsBootstrap: state.data?.needsBootstrap ?? false,
     authenticated: state.data?.authenticated ?? false,
+    sessionVersion: state.data?.sessionVersion ?? null,
     user: state.data?.user ?? null,
     mockAuthEnabled: state.data?.mockAuthEnabled ?? false,
     loading: state.isLoading,

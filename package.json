@@ -19,6 +19,7 @@
     "db:setup:e2e": "wrangler d1 migrations apply DB --local --persist-to=\"${E2E_PERSIST_PATH:-.wrangler/e2e-state-v2}\" && wrangler d1 execute DB --local --persist-to=\"${E2E_PERSIST_PATH:-.wrangler/e2e-state-v2}\" --file=./seed/local.sql",
     "r2:lifecycle:setup": "wrangler r2 bucket lifecycle add \"${R2_BUCKET_NAME:-openworkspace}\" openworkspace-composer-uploads composer-uploads/ --expire-days 7 --force",
     "oidc:keygen": "bun scripts/generate-oidc-key.ts",
+    "push:keygen": "bun scripts/generate-vapid-keys.ts",
     "sync:upstream": "bun scripts/sync-upstream.ts",
     "typecheck": "bun run cf-typegen && tsc -b && tsc -p test/tsconfig.json && tsc -p e2e/tsconfig.json",
     "test": "vitest run",
@@ -64,6 +65,18 @@
       "EMAIL": {
         "description": "Email Service sends outbound mail. Onboard the sending domain after deployment."
       },
+      "PUSH_NOTIFICATIONS": {
+        "description": "Queue for Web Push delivery after incoming mail is committed."
+      },
+      "VAPID_PUBLIC_KEY": {
+        "description": "Optional. Public half of the persistent Web Push VAPID key pair."
+      },
+      "VAPID_PRIVATE_KEY": {
+        "description": "Optional secret. Private half of the persistent Web Push VAPID key pair."
+      },
+      "VAPID_SUBJECT": {
+        "description": "Optional VAPID contact URI, for example mailto:admin@example.com."
+      },
       "OIDC_ISSUER": {
         "description": "Optional. Canonical public HTTPS origin of this Worker (no trailing slash), e.g. `https://mail.example.com`. Set with `wrangler secret put OIDC_ISSUER` after deploy — do not use localhost."
       },
@@ -77,6 +90,7 @@
     "@fontsource-variable/figtree": "5.3.0",
     "@fontsource-variable/fraunces": "5.3.0",
     "@hono/zod-validator": "0.9.0",
+    "@mmmike/web-push": "1.3.0",
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.2",
     "@tanstack/react-query": "5.101.4",

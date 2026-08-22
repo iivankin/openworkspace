@@ -11,6 +11,11 @@ import { mailDownloadRoutes } from "./mail/downloads";
 import { consumeDeliveryEvents } from "./mail/delivery-events";
 import { inboundDeliveryId } from "./mail/inbound-delivery";
 import { mailRoutes } from "./mail/routes";
+import {
+  consumePushNotifications,
+  PUSH_NOTIFICATION_QUEUE,
+  pushNotificationRoutes,
+} from "./mail/push-notifications";
 import { mailboxStub } from "./mailbox";
 import {
   oidcConsentRoutes,
@@ -32,6 +37,7 @@ const app = new Hono<AppEnv>()
   .route("/api/oidc/logout", oidcLogoutRoutes)
   .route("/api/downloads", mailDownloadRoutes)
   .route("/api/mail", mailRoutes)
+  .route("/api/notifications", pushNotificationRoutes)
   .route("/api/admin", adminRoutes)
   .route("/.well-known", wellKnownRoutes)
   .route("/oauth", oidcRoutes)
@@ -91,5 +97,9 @@ export default {
       { httpMetadata: { contentType: "message/rfc822" } },
     );
   },
-  queue: consumeDeliveryEvents,
+  queue(batch, env) {
+    return batch.queue === PUSH_NOTIFICATION_QUEUE
+      ? consumePushNotifications(batch, env)
+      : consumeDeliveryEvents(batch, env);
+  },
 } satisfies ExportedHandler<Env>;

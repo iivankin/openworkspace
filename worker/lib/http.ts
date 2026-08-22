@@ -9,11 +9,13 @@ export type ApiErrorCode =
   | "WEBAUTHN_FAILED"
   | "CONFLICT"
   | "RATE_LIMITED"
-  | "BAD_GATEWAY";
+  | "BAD_GATEWAY"
+  | "UPGRADE_REQUIRED"
+  | "UNAVAILABLE";
 
 export function apiError(
   c: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 502,
+  status: 400 | 401 | 403 | 404 | 409 | 422 | 426 | 429 | 502 | 503,
   code: ApiErrorCode,
   message: string,
 ) {

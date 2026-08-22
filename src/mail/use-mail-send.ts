@@ -7,7 +7,7 @@ import {
   type SuccessfulResponse,
 } from "@/lib/api";
 import type { SubmittedComposerUpload } from "./composer-session";
-import { invalidateMailQueries } from "./use-mail-data";
+import { scheduleMailboxRefresh } from "./mail-query-cache";
 
 export type SubmittedMessage = SuccessfulResponse<
   Awaited<ReturnType<typeof api.api.mail.messages.$post>>
@@ -123,8 +123,8 @@ export function useMailSend() {
     retry: (failureCount, error) =>
       failureCount < 1
       && (!(error instanceof ApiError) || error.status >= 500),
-    onSuccess: () => {
-      void invalidateMailQueries(client);
+    onSuccess: (_result, input) => {
+      scheduleMailboxRefresh(client, input.mailboxId);
     },
   });
 

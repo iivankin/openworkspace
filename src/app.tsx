@@ -9,9 +9,11 @@ import {
 import { AdminPage } from "@/admin/admin-page";
 import { AuthScreen } from "@/auth/auth-screen";
 import { useAuth } from "@/auth/auth-context";
+import { MailboxRealtimeConnections } from "@/mail/mailbox-realtime";
 import {
   SettingsAppearancePage,
   SettingsIndexRedirect,
+  SettingsNotificationsPage,
   SettingsProfilePage,
   SettingsShell,
 } from "@/settings/settings-shell";
@@ -54,6 +56,7 @@ export function App() {
   const settings = auth.authenticated ? <SettingsShell /> : <Navigate to="/" replace />;
   return (
     <Suspense fallback={<LoadingScreen />}>
+      {auth.authenticated ? <MailboxRealtimeConnections /> : null}
       <Routes>
         <Route path="/invite/:token" element={auth.authenticated ? <Navigate to="/" replace /> : <AccessLinkScreen kind="invitation" />} />
         <Route path="/recover/:token" element={auth.authenticated ? <Navigate to="/" replace /> : <AccessLinkScreen kind="recovery" />} />
@@ -65,6 +68,7 @@ export function App() {
           <Route index element={<SettingsIndexRedirect />} />
           <Route path="profile" element={<SettingsProfilePage />} />
           <Route path="appearance" element={<SettingsAppearancePage />} />
+          <Route path="notifications" element={<SettingsNotificationsPage />} />
         </Route>
         <Route path="/" element={mail} />
         <Route path="/mail/:mailboxId" element={mail} />

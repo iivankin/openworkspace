@@ -305,7 +305,7 @@ export const adminRoutes = new Hono<AppEnv>()
             canSend: member.canSend,
             createdAt: now,
           }),
-        ),
+          ),
       ]);
       return c.json({ ok: true as const });
     },

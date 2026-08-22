@@ -8,6 +8,27 @@
       "when": 1784921795122,
       "tag": "0000_curvy_princess_powerful",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787355343636,
+      "tag": "0001_slim_swarm",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787405725709,
+      "tag": "0002_high_shatterstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787415206819,
+      "tag": "0003_bouncy_wraith",
+      "breakpoints": true
     }
   ]
 }

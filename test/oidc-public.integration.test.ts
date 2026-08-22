@@ -1,4 +1,4 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import * as oidcClient from "openid-client";
 import { describe, expect, it } from "vitest";
 
@@ -281,6 +281,26 @@ describe("public OIDC clients", () => {
       ),
     ).toMatchObject({ transaction: { clientName: "Browser app" } });
 
+    const originalSession = await env.DB.prepare(
+      "SELECT id, token_hash, created_at FROM sessions WHERE user_id = ? LIMIT 1",
+    ).bind(state.users[0]!.id).first<{
+      id: string;
+      token_hash: string;
+      created_at: number;
+    }>();
+    expect(originalSession).toBeTruthy();
+    const pushSubscriptionId = `push_${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO push_subscriptions (id, session_id, endpoint, p256dh, auth)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      pushSubscriptionId,
+      originalSession!.id,
+      `https://push.example.test/${crypto.randomUUID()}`,
+      "test-p256dh",
+      "test-auth",
+    ).run();
+
     const reauthenticated = await exports.default.fetch(
       new Request(`${issuer}/api/auth/mock/login`, {
         method: "POST",
@@ -298,8 +318,27 @@ describe("public OIDC clients", () => {
     expect(continuation.redirectTo).toBe(
       `/oauth/authorize/resume/${reauthRequestId}`,
     );
-    const replacementSession = responseCookie(reauthenticated, "op_session");
-    expect(replacementSession).toBeTruthy();
+    const reauthenticatedSession = responseCookie(reauthenticated, "op_session");
+    expect(reauthenticatedSession).toBeTruthy();
+    expect(reauthenticatedSession).not.toBe(cookie);
+    const refreshedSession = await env.DB.prepare(
+      "SELECT id, token_hash, created_at FROM sessions WHERE user_id = ? LIMIT 1",
+    ).bind(state.users[0]!.id).first<{
+      id: string;
+      token_hash: string;
+      created_at: number;
+    }>();
+    expect(refreshedSession).toMatchObject({
+      id: originalSession!.id,
+    });
+    expect(refreshedSession!.token_hash).not.toBe(originalSession!.token_hash);
+    expect(refreshedSession!.created_at).toBeGreaterThan(
+      originalSession!.created_at,
+    );
+    const retainedPush = await env.DB.prepare(
+      "SELECT session_id FROM push_subscriptions WHERE id = ?",
+    ).bind(pushSubscriptionId).first<{ session_id: string }>();
+    expect(retainedPush?.session_id).toBe(originalSession!.id);
     expect(
       await json<{ authenticated: boolean }>(
         await exports.default.fetch(
@@ -309,10 +348,19 @@ describe("public OIDC clients", () => {
         ),
       ),
     ).toMatchObject({ authenticated: false });
+    expect(
+      await json<{ authenticated: boolean }>(
+        await exports.default.fetch(
+          new Request(`${issuer}/api/auth/state`, {
+            headers: { cookie: reauthenticatedSession! },
+          }),
+        ),
+      ),
+    ).toMatchObject({ authenticated: true });
 
     const resumed = await exports.default.fetch(
       new Request(`${issuer}${continuation.redirectTo}`, {
-        headers: { cookie: replacementSession! },
+        headers: { cookie: reauthenticatedSession! },
         redirect: "manual",
       }),
     );
@@ -321,7 +369,7 @@ describe("public OIDC clients", () => {
       .toBeTruthy();
     const replayedResume = await exports.default.fetch(
       new Request(`${issuer}${continuation.redirectTo}`, {
-        headers: { cookie: replacementSession! },
+        headers: { cookie: reauthenticatedSession! },
         redirect: "manual",
       }),
     );
@@ -339,7 +387,7 @@ describe("public OIDC clients", () => {
     });
     const maxAgeLogin = await exports.default.fetch(
       new Request(maxAgeUrl, {
-        headers: { cookie: replacementSession! },
+        headers: { cookie: reauthenticatedSession! },
         redirect: "manual",
       }),
     );
@@ -351,7 +399,7 @@ describe("public OIDC clients", () => {
     logout.searchParams.set("client_id", registered.clientId);
     const logoutChallenge = await exports.default.fetch(
       new Request(logout, {
-        headers: { cookie: replacementSession! },
+        headers: { cookie: reauthenticatedSession! },
         redirect: "manual",
       }),
     );
@@ -363,7 +411,7 @@ describe("public OIDC clients", () => {
       await json<{ authenticated: boolean }>(
         await exports.default.fetch(
           new Request(`${issuer}/api/auth/state`, {
-            headers: { cookie: replacementSession! },
+            headers: { cookie: reauthenticatedSession! },
           }),
         ),
       ),

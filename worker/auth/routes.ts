@@ -25,8 +25,8 @@ import {
 import {
   createSession,
   destroySession,
-  readSessionUserFromContext,
-  replaceSession,
+  readSessionFromContext,
+  reauthenticateSession,
 } from "./session";
 import {
   clearChallengeCookie,
@@ -134,15 +134,16 @@ function accessLinkRoutes(kind: AccessLinkKind) {
 export const authRoutes = new Hono<AppEnv>()
   .get("/state", async (c) => {
     const db = createDb(c.env.DB);
-    const [installed, user] = await Promise.all([
+    const [installed, session] = await Promise.all([
       hasInstallation(db),
-      readSessionUserFromContext(c),
+      readSessionFromContext(c),
     ]);
     return c.json({
       ok: true as const,
       needsBootstrap: !installed,
-      authenticated: Boolean(user),
-      user,
+      authenticated: Boolean(session),
+      sessionVersion: session?.authTime.getTime() ?? null,
+      user: session?.user ?? null,
       mockAuthEnabled: c.env.ALLOW_MOCK_AUTH === "true",
     });
   })
@@ -214,7 +215,7 @@ export const authRoutes = new Hono<AppEnv>()
             result.oidcRequestId,
             result.userId,
           );
-          await replaceSession(db, c, result.userId);
+          await reauthenticateSession(db, c, result.userId);
           clearLoginTransactionCookie(c, result.oidcRequestId);
           return c.json({ ok: true as const, ...transaction });
         }

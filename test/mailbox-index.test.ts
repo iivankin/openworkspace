@@ -133,7 +133,7 @@ describe("mailbox conversation index", () => {
     });
     expect((await mailbox.listFolders("usr_reader_one")).find(
       (folder) => folder.id === "inbox",
-    )).toMatchObject({ totalCount: 1, unreadCount: 1 });
+    )).toMatchObject({ totalCount: 1, unreadCount: 2 });
 
     expect(await mailbox.setMessageRead(
       "usr_reader_one",
@@ -161,7 +161,7 @@ describe("mailbox conversation index", () => {
     )?.unreadCount).toBe(0);
     expect((await mailbox.listFolders("usr_reader_two")).find(
       (folder) => folder.id === "inbox",
-    )?.unreadCount).toBe(1);
+    )?.unreadCount).toBe(2);
     expect((await mailbox.getConversationSnapshot(conversationId))?.readStates)
       .toEqual(expect.arrayContaining([
         expect.objectContaining({

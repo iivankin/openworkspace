@@ -1,7 +1,9 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { ApiError } from "@/lib/api";
 
 const READ_VISIBILITY_DELAY_MS = 400;
 const READ_RETRY_DELAY_MS = 2_000;
+const MAX_READ_ATTEMPTS = 2;
 const MIN_VISIBLE_HEIGHT_PX = 120;
 
 /** Marks a message only after a meaningful part of it remains on screen. */
@@ -29,6 +31,7 @@ export function useVisibleMessageRead({
 
     let visible = false;
     let pending = false;
+    let attempts = 0;
     let stopped = false;
     let visibleTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -39,14 +42,23 @@ export function useVisibleMessageRead({
         visibleTimer = undefined;
         if (!visible || stopped) return;
         pending = true;
+        attempts += 1;
         try {
           await onVisibleRef.current();
           if (stopped) return;
           reportedMessageId.current = messageId;
           observer.disconnect();
-        } catch {
+        } catch (error) {
           pending = false;
-          if (visible && !stopped) scheduleRead(READ_RETRY_DELAY_MS);
+          const retryable = !(error instanceof ApiError) || error.status >= 500;
+          if (
+            retryable
+            && attempts < MAX_READ_ATTEMPTS
+            && visible
+            && !stopped
+          ) {
+            scheduleRead(READ_RETRY_DELAY_MS);
+          }
           return;
         }
         pending = false;

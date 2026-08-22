@@ -3,46 +3,31 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-  type QueryClient,
 } from "@tanstack/react-query";
 import { api, responseJson } from "@/lib/api";
+import { scheduleMailboxRefresh } from "./mail-query-cache";
 import type { Folder } from "./types";
-
-const readInvalidationTimers = new WeakMap<
-  QueryClient,
-  ReturnType<typeof setTimeout>
->();
-
-// Several messages can become visible together; refresh their shared counters once.
-function scheduleReadInvalidation(client: QueryClient) {
-  if (readInvalidationTimers.has(client)) return;
-  const timer = setTimeout(() => {
-    readInvalidationTimers.delete(client);
-    void invalidateMailQueries(client);
-  }, 150);
-  readInvalidationTimers.set(client, timer);
-}
 
 export function useMailboxes() {
   return useQuery({
     queryKey: ["mailboxes"],
-    queryFn: async () =>
-      responseJson(await api.api.mail.mailboxes.$get()),
-    refetchInterval: 5_000,
+    queryFn: async ({ signal }) =>
+      responseJson(await api.api.mail.mailboxes.$get(undefined, {
+        init: { signal },
+      })),
   });
 }
 
 export function useFolders(mailboxId: string | undefined) {
   return useQuery({
     queryKey: ["folders", mailboxId],
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       responseJson(
         await api.api.mail.mailboxes[":id"].folders.$get({
           param: { id: mailboxId! },
-        }),
+        }, { init: { signal } }),
       ),
     enabled: Boolean(mailboxId),
-    refetchInterval: 5_000,
   });
 }
 
@@ -53,12 +38,12 @@ export function useRecipientSuggestions(
 ) {
   return useQuery({
     queryKey: ["recipient-suggestions", mailboxId, query],
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       responseJson(
         await api.api.mail.mailboxes[":id"]["recipient-suggestions"].$get({
           param: { id: mailboxId! },
           query: { q: query, limit: "8" },
-        }),
+        }, { init: { signal } }),
       ),
     enabled: Boolean(mailboxId) && active,
     staleTime: 30_000,
@@ -74,7 +59,7 @@ export function useConversations(
   return useInfiniteQuery({
     queryKey: ["conversations", mailboxId, folder, search],
     initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam }) =>
+    queryFn: async ({ pageParam, signal }) =>
       responseJson(
         await api.api.mail.conversations.$get({
           query: {
@@ -84,11 +69,10 @@ export function useConversations(
             cursor: pageParam,
             search: search || undefined,
           },
-        }),
+        }, { init: { signal } }),
       ),
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: Boolean(mailboxId) && active,
-    refetchInterval: active ? 5_000 : false,
   });
 }
 
@@ -98,15 +82,14 @@ export function useConversation(
 ) {
   return useQuery({
     queryKey: ["conversation", mailboxId, conversationId],
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       responseJson(
         await api.api.mail.conversations[":id"].$get({
           param: { id: conversationId! },
           query: { mailboxId: mailboxId! },
-        }),
+        }, { init: { signal } }),
       ),
     enabled: Boolean(mailboxId && conversationId),
-    refetchInterval: 5_000,
   });
 }
 
@@ -120,7 +103,7 @@ export function useResendMessage() {
           query: { mailboxId },
         }),
       ),
-    onSuccess: () => invalidateMailQueries(client),
+    onSuccess: (_result, { mailboxId }) => scheduleMailboxRefresh(client, mailboxId),
   });
 }
 
@@ -143,7 +126,7 @@ export function useSetMessageRead() {
           json: { isRead },
         }),
       ),
-    onSuccess: () => scheduleReadInvalidation(client),
+    onSuccess: (_result, { mailboxId }) => scheduleMailboxRefresh(client, mailboxId),
   });
 }
 
@@ -166,7 +149,7 @@ export function useSetConversationRead() {
           json: { isRead },
         }),
       ),
-    onSuccess: () => invalidateMailQueries(client),
+    onSuccess: (_result, { mailboxId }) => scheduleMailboxRefresh(client, mailboxId),
   });
 }
 
@@ -192,15 +175,6 @@ export function useUpdateConversation() {
           json: input,
         }),
       ),
-    onSuccess: () => invalidateMailQueries(client),
+    onSuccess: (_result, { mailboxId }) => scheduleMailboxRefresh(client, mailboxId),
   });
-}
-
-export async function invalidateMailQueries(client: QueryClient) {
-  await Promise.all([
-    client.invalidateQueries({ queryKey: ["mailboxes"] }),
-    client.invalidateQueries({ queryKey: ["folders"] }),
-    client.invalidateQueries({ queryKey: ["conversations"] }),
-    client.invalidateQueries({ queryKey: ["conversation"] }),
-  ]);
 }

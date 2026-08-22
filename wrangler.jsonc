@@ -47,11 +47,23 @@
     }
   ],
   "queues": {
+    "producers": [
+      {
+        "binding": "PUSH_NOTIFICATIONS",
+        "queue": "openworkspace-push-notifications"
+      }
+    ],
     "consumers": [
       {
         "queue": "openworkspace-delivery-events",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
+        "max_retries": 5
+      },
+      {
+        "queue": "openworkspace-push-notifications",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
         "max_retries": 5
       }
     ]

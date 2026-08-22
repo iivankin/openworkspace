@@ -18,9 +18,17 @@ export type R2S3Bindings = {
   R2_BUCKET_NAME?: string;
 };
 
+export type PushBindings = {
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
+};
+
 export type AppEnv = {
-  Bindings: Env & OidcBindings & R2S3Bindings;
+  Bindings: Env & OidcBindings & R2S3Bindings & PushBindings;
   Variables: {
     user: SessionUser;
+    sessionId: string;
+    sessionTokenHash: string;
   };
 };

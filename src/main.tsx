@@ -5,7 +5,10 @@ import { BrowserRouter } from "react-router";
 import { App } from "./app";
 import { AuthProvider } from "./auth/auth-context";
 import { Toaster } from "./components/ui/sonner";
+import { registerServiceWorker } from "./pwa/register-service-worker";
 import "./styles.css";
+
+registerServiceWorker();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 15_000, retry: 1 } },

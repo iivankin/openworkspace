@@ -215,6 +215,31 @@ export const mailRoutes = new Hono<AppEnv>()
 
     return c.json({ ok: true as const, mailboxes: rowsWithUnreadCounts });
   })
+  .get("/mailboxes/:id/realtime", async (c) => {
+    const origin = c.req.header("origin");
+    if (!origin || origin !== new URL(c.req.url).origin) {
+      return apiError(c, 403, "FORBIDDEN", "Cross-origin WebSocket rejected");
+    }
+    if (c.req.header("upgrade")?.toLowerCase() !== "websocket") {
+      return apiError(c, 426, "UPGRADE_REQUIRED", "WebSocket upgrade required");
+    }
+    const mailboxId = c.req.param("id");
+    const user = c.get("user");
+    if (!await accessibleMailbox(c.env, user.id, mailboxId, "read")) {
+      return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+    }
+    const headers = new Headers(c.req.raw.headers);
+    headers.set("x-openworkspace-user-id", user.id);
+    headers.set("x-openworkspace-session-id", c.get("sessionId"));
+    headers.set("x-openworkspace-session-token-hash", c.get("sessionTokenHash"));
+    headers.set(
+      "x-openworkspace-visibility",
+      c.req.query("visibility") === "hidden" ? "hidden" : "visible",
+    );
+    return mailboxStub(c.env, mailboxId).fetch(
+      new Request(c.req.raw, { headers }),
+    );
+  })
   .post(
     "/uploads",
     zValidator("query", mailboxQuerySchema),

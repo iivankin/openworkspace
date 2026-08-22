@@ -1,12 +1,14 @@
 import { createMiddleware } from "hono/factory";
 import type { AppEnv } from "../env";
 import { apiError } from "../lib/http";
-import { readSessionUserFromContext } from "./session";
+import { readSessionFromContext } from "./session";
 
 export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
-  const user = await readSessionUserFromContext(c);
-  if (!user) return apiError(c, 401, "UNAUTHORIZED", "Sign in is required");
-  c.set("user", user);
+  const session = await readSessionFromContext(c);
+  if (!session) return apiError(c, 401, "UNAUTHORIZED", "Sign in is required");
+  c.set("user", session.user);
+  c.set("sessionId", session.id);
+  c.set("sessionTokenHash", session.tokenHash);
   await next();
 });
 

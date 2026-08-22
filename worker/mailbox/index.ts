@@ -1,8 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../drizzle/mailbox/migrations.js";
+import {
+  MAILBOX_REALTIME_UPDATE,
+  type MailboxPushJob,
+  type MailboxRealtimeClientMessage,
+} from "../../shared/mail";
 import {
   inboundMessageId,
   MissingRawMimeError,
@@ -33,8 +38,15 @@ import {
   type FolderRecord,
   type NewEmail,
   type NewFolder,
+  type PendingInbound,
 } from "./schema";
 import type { RecipientDeliveryStatus } from "./model";
+import { createDb } from "../db/client";
+import {
+  mailboxMembers,
+  sessions,
+  users,
+} from "../db/schema";
 
 const schema = {
   conversations,
@@ -47,6 +59,31 @@ type MailboxDatabase = DrizzleSqliteDODatabase<typeof schema>;
 const INBOUND_ALARM_BATCH_SIZE = 1;
 const MAX_INBOUND_RETRY_DELAY_MS = 60 * 60 * 1000;
 const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
+const PRESENCE_TTL_MS = 60_000;
+
+type MailboxSocketAttachment = {
+  userId: string;
+  sessionId: string;
+  sessionTokenHash: string;
+  visibility: "visible" | "hidden";
+  presenceUpdatedAt: number;
+};
+
+function socketAttachment(socket: WebSocket): MailboxSocketAttachment | null {
+  const value = socket.deserializeAttachment();
+  if (!value || typeof value !== "object") return null;
+  const attachment = value as Partial<MailboxSocketAttachment>;
+  if (
+    typeof attachment.userId !== "string"
+    || typeof attachment.sessionId !== "string"
+    || typeof attachment.sessionTokenHash !== "string"
+    || !["visible", "hidden"].includes(attachment.visibility ?? "")
+    || typeof attachment.presenceUpdatedAt !== "number"
+  ) {
+    return null;
+  }
+  return attachment as MailboxSocketAttachment;
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -160,6 +197,218 @@ export class MailboxDO extends DurableObject<Env> {
     this.bindings = env;
     this.db = drizzle(ctx.storage, { schema });
     ctx.blockConcurrencyWhile(() => migrate(this.db, migrations));
+  }
+
+  fetch(request: Request) {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("WebSocket upgrade required", { status: 426 });
+    }
+    const userId = request.headers.get("x-openworkspace-user-id");
+    const sessionId = request.headers.get("x-openworkspace-session-id");
+    const sessionTokenHash = request.headers.get("x-openworkspace-session-token-hash");
+    if (!userId || !sessionId || !sessionTokenHash) {
+      return new Response("Authentication required", { status: 401 });
+    }
+    const requestedVisibility = request.headers.get("x-openworkspace-visibility");
+    const visibility = requestedVisibility === "hidden" ? "hidden" : "visible";
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.serializeAttachment({
+      userId,
+      sessionId,
+      sessionTokenHash,
+      visibility,
+      presenceUpdatedAt: Date.now(),
+    } satisfies MailboxSocketAttachment);
+    this.state.acceptWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+    if (typeof message !== "string") return;
+    if (message !== "visible" && message !== "hidden") return;
+    const visibility: MailboxRealtimeClientMessage = message;
+    const attachment = socketAttachment(socket);
+    if (!attachment) return;
+    socket.serializeAttachment({
+      ...attachment,
+      visibility,
+      presenceUpdatedAt: Date.now(),
+    } satisfies MailboxSocketAttachment);
+  }
+
+  webSocketClose(socket: WebSocket, code: number, reason: string) {
+    socket.close(code, reason);
+  }
+
+  webSocketError(socket: WebSocket) {
+    socket.close(1011, "Realtime connection failed");
+  }
+
+  async visibleUserIds() {
+    const now = Date.now();
+    const sockets = await this.authorizedSockets();
+    return [...new Set(sockets.flatMap(({ attachment }) =>
+      attachment.visibility === "visible"
+        && now - attachment.presenceUpdatedAt <= PRESENCE_TTL_MS
+        ? [attachment.userId]
+        : []
+    ))];
+  }
+
+  async suppressedPushUserIds(messageId: string, candidateUserIds: string[]) {
+    const candidates = new Set(candidateUserIds);
+    if (!candidates.size) return [];
+    const readUsers = this.db
+      .select({ userId: emailReadStates.userId })
+      .from(emailReadStates)
+      .where(and(
+        eq(emailReadStates.emailId, messageId),
+        inArray(emailReadStates.userId, [...candidates]),
+      ))
+      .all();
+    const visibleUsers = await this.visibleUserIds();
+    return [...new Set([
+      ...readUsers.map((row) => row.userId),
+      ...visibleUsers.filter((userId) => candidates.has(userId)),
+    ])];
+  }
+
+  private async authorizedSockets() {
+    const sockets = this.state.getWebSockets().flatMap((socket) => {
+      const attachment = socketAttachment(socket);
+      if (attachment) return [{ socket, attachment }];
+      socket.close(1008, "Realtime authorization expired");
+      return [];
+    });
+    if (!sockets.length) return sockets;
+
+    const mailboxId = this.state.id.name;
+    if (!mailboxId) {
+      for (const { socket } of sockets) socket.close(1008, "Mailbox identity is unavailable");
+      return [];
+    }
+    const sessionIds = [...new Set(
+      sockets.map(({ attachment }) => attachment.sessionId),
+    )];
+    const validSessions = await createDb(this.bindings.DB)
+      .select({
+        id: sessions.id,
+        tokenHash: sessions.tokenHash,
+        userId: sessions.userId,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .innerJoin(
+        mailboxMembers,
+        and(
+          eq(mailboxMembers.userId, sessions.userId),
+          eq(mailboxMembers.mailboxId, mailboxId),
+        ),
+      )
+      .where(and(
+        inArray(sessions.id, sessionIds),
+        gt(sessions.expiresAt, new Date()),
+        eq(users.status, "active"),
+      ));
+    const validSessionsById = new Map(
+      validSessions.map((session) => [session.id, session]),
+    );
+    return sockets.flatMap(({ socket, attachment }) => {
+      const session = validSessionsById.get(attachment.sessionId);
+      if (
+        session?.userId === attachment.userId
+        && session.tokenHash === attachment.sessionTokenHash
+      ) {
+        return [{ socket, attachment }];
+      }
+      socket.close(1008, "Realtime authorization expired");
+      return [];
+    });
+  }
+
+  private async broadcastUpdate() {
+    let sockets: Awaited<ReturnType<MailboxDO["authorizedSockets"]>>;
+    try {
+      sockets = await this.authorizedSockets();
+    } catch {
+      try {
+        sockets = await this.authorizedSockets();
+      } catch (error) {
+        // Closing forces clients to reconnect and refresh instead of silently
+        // losing the only invalidation now that there is no polling fallback.
+        for (const socket of this.state.getWebSockets()) {
+          socket.close(1011, "Realtime authorization is temporarily unavailable");
+        }
+        throw error;
+      }
+    }
+    for (const { socket } of sockets) {
+      try {
+        socket.send(MAILBOX_REALTIME_UPDATE);
+      } catch {
+        socket.close(1011, "Could not deliver realtime event");
+      }
+    }
+  }
+
+  private publishUpdate() {
+    this.state.waitUntil(this.broadcastUpdate().catch((error) => {
+      console.error("Could not authorize realtime delivery", error);
+    }));
+  }
+
+  private queueIncomingNotification(email: Email) {
+    if (email.direction !== "incoming") return;
+    const sender = email.fromJson[0];
+    const job: MailboxPushJob = {
+      type: "dispatch",
+      mailboxId: this.state.id.name ?? "unknown-mailbox",
+      conversationId: email.conversationId,
+      messageId: email.id,
+      occurredAt: Date.now(),
+      sender: sender?.name || sender?.address || "Unknown sender",
+      subject: email.subject,
+    };
+    return this.bindings.PUSH_NOTIFICATIONS.send(job);
+  }
+
+  private retryStoredInboundNotification(
+    job: PendingInbound,
+    now: number,
+    error: unknown,
+  ) {
+    if (now - job.receivedAt.getTime() >= MAX_INBOUND_RETRY_AGE_MS) {
+      this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+      console.error(`Stopped retrying notification for inbound delivery ${job.id}`, error);
+      return;
+    }
+    const attempts = job.attempts + 1;
+    this.db
+      .update(pendingInbound)
+      .set({
+        attempts,
+        nextAttemptAt: new Date(now + inboundRetryDelay(attempts)),
+      })
+      .where(eq(pendingInbound.id, job.id))
+      .run();
+    console.error(`Could not queue notification for inbound delivery ${job.id}`, error);
+  }
+
+  private async finishStoredInbound(
+    job: PendingInbound,
+    email: Email,
+    now: number,
+    announce: boolean,
+  ) {
+    if (announce) this.publishUpdate();
+    try {
+      await this.queueIncomingNotification(email);
+      this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+    } catch (error) {
+      this.retryStoredInboundNotification(job, now, error);
+    }
   }
 
   listConversations(
@@ -379,20 +628,18 @@ export class MailboxDO extends DurableObject<Env> {
     const counts = this.state.storage.sql.exec<FolderCountRow>(`
       select
         count(*) as total_count,
-        coalesce(sum(
-          case when exists (
-            select 1
-            from emails message
-            where message.conversation_id = c.id
-              and message.direction = 'incoming'
-              and not exists (
-                select 1
-                from email_read_states read_state
-                where read_state.user_id = ?
-                  and read_state.email_id = message.id
-              )
-          ) then 1 else 0 end
-        ), 0) as unread_count
+        coalesce(sum((
+          select count(*)
+          from emails message
+          where message.conversation_id = c.id
+            and message.direction = 'incoming'
+            and not exists (
+              select 1
+              from email_read_states read_state
+              where read_state.user_id = ?
+                and read_state.email_id = message.id
+            )
+        )), 0) as unread_count
       from conversations c
       where ${membership.predicate}
     `, userId, ...membership.bindings).one();
@@ -403,7 +650,8 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   setMessageRead(userId: string, emailId: string, isRead: boolean) {
-    if (!this.getEmail(emailId)) return false;
+    const email = this.getEmail(emailId);
+    if (!email) return false;
     if (isRead) {
       const readAt = new Date();
       this.db
@@ -423,6 +671,7 @@ export class MailboxDO extends DurableObject<Env> {
         ))
         .run();
     }
+    this.publishUpdate();
     return true;
   }
 
@@ -454,6 +703,7 @@ export class MailboxDO extends DurableObject<Env> {
         )
       `, userId, conversationId);
     }
+    this.publishUpdate();
     return true;
   }
 
@@ -535,10 +785,12 @@ export class MailboxDO extends DurableObject<Env> {
       });
       if (submission.outcome !== "inserted") return submission;
       this.recentParticipantSources = null;
-      return {
+      const result = {
         ...submission,
         email: await this.deliverOutgoing(submission.email.id),
       };
+      this.publishUpdate();
+      return result;
     });
   }
 
@@ -560,7 +812,9 @@ export class MailboxDO extends DurableObject<Env> {
         .returning({ id: emails.id })
         .all();
       if (!result.length) return null;
-      return this.deliverOutgoing(id);
+      const email = await this.deliverOutgoing(id);
+      this.publishUpdate();
+      return email;
     });
   }
 
@@ -606,6 +860,9 @@ export class MailboxDO extends DurableObject<Env> {
       .where(eq(conversations.id, conversationId))
       .returning({ id: conversations.id })
       .all();
+    if (result.length) {
+      this.publishUpdate();
+    }
     return result.length;
   }
 
@@ -646,6 +903,7 @@ export class MailboxDO extends DurableObject<Env> {
       .set({ deliveryStatusJson: next })
       .where(eq(emails.id, email.id))
       .run();
+    this.publishUpdate();
     return "updated" as const;
   }
 
@@ -667,8 +925,9 @@ export class MailboxDO extends DurableObject<Env> {
       .all();
     for (const job of jobs) {
       const messageId = inboundMessageId(job.id);
-      if (this.getEmail(messageId)) {
-        this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+      const existing = this.getEmail(messageId);
+      if (existing) {
+        await this.finishStoredInbound(job, existing, now, false);
         continue;
       }
 
@@ -680,10 +939,11 @@ export class MailboxDO extends DurableObject<Env> {
           resolveParent: (inReplyTo, references) =>
             this.resolveParent(inReplyTo, references),
         });
-        if (!this.insertEmail(email)) {
+        const stored = this.insertEmail(email);
+        if (!stored) {
           throw new Error("Parsed inbound email was not persisted");
         }
-        this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+        await this.finishStoredInbound(job, stored, now, true);
       } catch (error) {
         if (error instanceof UnprocessableInboundEmailError) {
           const fallback = prepareUnprocessableInboundEmail({
@@ -691,12 +951,13 @@ export class MailboxDO extends DurableObject<Env> {
             reason: error.message,
             rawMimeR2Key: job.rawObjectKey,
           });
-          if (!this.insertEmail(fallback)) {
+          const stored = this.insertEmail(fallback);
+          if (!stored) {
             throw new Error("Inbound fallback email was not persisted", {
               cause: error,
             });
           }
-          this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+          await this.finishStoredInbound(job, stored, now, true);
           console.error(`Stored fallback for inbound delivery ${job.id}`, error);
           continue;
         }
@@ -708,12 +969,13 @@ export class MailboxDO extends DurableObject<Env> {
               ? null
               : job.rawObjectKey,
           });
-          if (!this.insertEmail(fallback)) {
+          const stored = this.insertEmail(fallback);
+          if (!stored) {
             throw new Error("Inbound infrastructure fallback was not persisted", {
               cause: error,
             });
           }
-          this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
+          await this.finishStoredInbound(job, stored, now, true);
           console.error(
             `Stored infrastructure fallback for inbound delivery ${job.id}`,
             error,

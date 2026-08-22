@@ -1,6 +1,8 @@
 import {
   ArrowLeft,
+  Bell,
   Inbox,
+  Menu,
   Palette,
   UserRound,
   type LucideIcon,
@@ -9,18 +11,21 @@ import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-route
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useState } from "react";
 import { AppearanceSettings } from "./appearance-page";
 import { ProfileSettings } from "./profile-page";
+import { NotificationsSettings } from "./notifications-page";
 
-type SettingsSection = "profile" | "appearance";
+type SettingsSection = "profile" | "appearance" | "notifications";
 
 const settingsSections: Array<{
   id: SettingsSection;
@@ -29,6 +34,13 @@ const settingsSections: Array<{
   Icon: LucideIcon;
   path: string;
 }> = [
+  {
+    id: "notifications",
+    label: "Notifications",
+    description: "New mail alerts for this device and your mailboxes.",
+    Icon: Bell,
+    path: "/settings/notifications",
+  },
   {
     id: "profile",
     label: "Profile",
@@ -46,17 +58,25 @@ const settingsSections: Array<{
 ];
 
 function sectionFromPath(pathname: string): SettingsSection {
+  if (pathname.startsWith("/settings/notifications")) return "notifications";
   if (pathname.startsWith("/settings/appearance")) return "appearance";
   return "profile";
 }
 
-function SettingsNavigation({ value }: { value: SettingsSection }) {
+function SettingsNavigation({
+  value,
+  onNavigate,
+}: {
+  value: SettingsSection;
+  onNavigate?: () => void;
+}) {
   return (
     <nav className="flex flex-1 flex-col gap-0.5 p-3">
       {settingsSections.map(({ id, label, Icon, path }) => (
         <NavLink
           key={id}
           to={path}
+          onClick={onNavigate}
           className={cn(
             "flex items-center gap-2.5 rounded-xl px-3 py-2 text-[0.8125rem] font-medium transition-colors",
             value === id
@@ -72,23 +92,39 @@ function SettingsNavigation({ value }: { value: SettingsSection }) {
   );
 }
 
-function MobileSettingsNavigation({ value }: { value: SettingsSection }) {
+function MobileSettingsMenu({ value }: { value: SettingsSection }) {
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
   return (
-    <Select value={value} onValueChange={(next) => navigate(`/settings/${next}`)}>
-      <SelectTrigger className="w-full">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          {settingsSections.map(({ id, label }) => (
-            <SelectItem key={id} value={id}>
-              {label}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger
+        render={(
+          <Button className="md:hidden" variant="ghost" size="icon-sm" />
+        )}
+      >
+        <Menu />
+        <span className="sr-only">Open settings navigation</span>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-72 gap-0 p-0" showCloseButton>
+        <SheetHeader className="border-b border-border/70 pr-12">
+          <SheetTitle className="font-display font-semibold">OpenWorkspace</SheetTitle>
+          <SheetDescription>Settings</SheetDescription>
+        </SheetHeader>
+        <SettingsNavigation value={value} onNavigate={() => setOpen(false)} />
+        <SheetFooter className="border-t border-border/70">
+          <Button
+            className="w-full justify-start"
+            variant="ghost"
+            onClick={() => {
+              setOpen(false);
+              navigate("/");
+            }}
+          >
+            <ArrowLeft /> Back to mail
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -122,10 +158,7 @@ export function SettingsShell() {
 
       <section className="paper-grain flex min-w-0 flex-1 flex-col">
         <header className="flex h-18 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <Button className="md:hidden" variant="ghost" size="icon-sm" onClick={() => navigate("/")}>
-            <ArrowLeft />
-            <span className="sr-only">Back to mail</span>
-          </Button>
+          <MobileSettingsMenu value={section} />
           <div className="min-w-0">
             <h1 className="truncate font-display text-xl font-semibold">{copy.label}</h1>
             <p className="hidden truncate text-xs text-muted-foreground sm:block">
@@ -133,10 +166,6 @@ export function SettingsShell() {
             </p>
           </div>
         </header>
-
-        <div className="border-b border-border/70 p-2 md:hidden">
-          <MobileSettingsNavigation value={section} />
-        </div>
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 lg:p-8">
@@ -158,4 +187,8 @@ export function SettingsAppearancePage() {
 
 export function SettingsProfilePage() {
   return <ProfileSettings />;
+}
+
+export function SettingsNotificationsPage() {
+  return <NotificationsSettings />;
 }
