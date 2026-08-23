@@ -24,13 +24,19 @@ export function folderDisplayName(folder: Folder, folders?: MailFolder[]) {
     ?? folder;
 }
 
+export function folderShowsUnreadCount(folder: MailFolder | undefined) {
+  return folder?.kind === "custom" || folder?.systemType === "inbox";
+}
+
 export function FolderTabBar({
   folder,
   folders,
+  hideMobile = false,
   onSelect,
 }: {
   folder: Folder;
   folders?: MailFolder[];
+  hideMobile?: boolean;
   onSelect: (folder: Folder) => void;
 }) {
   const items = folders?.length ? folders : fallbackFolders;
@@ -43,7 +49,9 @@ export function FolderTabBar({
         onSelect={onSelect}
       />
       <FolderTabs
-        className="fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-border/70 bg-surface/90 px-4 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-16px_var(--shadow-color)] backdrop-blur-xl lg:hidden"
+        className={hideMobile
+          ? "hidden"
+          : "fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-border/70 bg-surface/90 px-4 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-16px_var(--shadow-color)] backdrop-blur-xl lg:hidden"}
         folder={folder}
         folders={items}
         onSelect={onSelect}
@@ -75,7 +83,7 @@ function FolderTabs({
                 className="h-full flex-none rounded-none px-3 text-[0.8125rem] font-medium tracking-[-0.005em] after:inset-x-3 after:bottom-0"
               >
                 <span>{item.name}</span>
-                {item.unreadCount > 0 ? (
+                {folderShowsUnreadCount(item) && item.unreadCount > 0 ? (
                   <span
                     className="min-w-5 rounded-full bg-primary/16 px-1.5 py-0.5 text-[10px] leading-none font-bold text-foreground tabular-nums"
                     aria-label={`${item.unreadCount} unread messages`}

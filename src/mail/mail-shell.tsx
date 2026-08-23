@@ -6,13 +6,20 @@ import {
   useState,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { Search } from "lucide-react";
+import { ListChecks, Mail, Search } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { ConversationView } from "./conversation-view";
+import { ConversationSelectionToolbar } from "./conversation-selection-toolbar";
 import { MailHeader } from "./mail-header";
-import { FolderTabBar, folderDisplayName } from "./mail-navigation";
+import {
+  FolderTabBar,
+  folderDisplayName,
+  folderShowsUnreadCount,
+} from "./mail-navigation";
 import { MessageList } from "./message-list";
 import type {
   ConversationSummary,
@@ -21,13 +28,13 @@ import type {
 } from "./types";
 import { mailboxForRoute, resolveMailLocation } from "./mail-location";
 import {
+  useBulkConversationAction,
   useConversations,
   useMailboxes,
   useConversation,
   useFolders,
-  useSetConversationRead,
-  useUpdateConversation,
 } from "./use-mail-data";
+import { useConversationSelection } from "./use-conversation-selection";
 
 const ComposeWindow = lazy(async () => {
   const module = await import("./compose-window");
@@ -40,6 +47,7 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
   const [composerMailboxId, setComposerMailboxId] = useState<string | null>(null);
   const [forwardedMessage, setForwardedMessage] = useState<MessageDetail | undefined>();
   const [search, setSearch] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const mailboxQuery = useMailboxes();
   const mailboxes = mailboxQuery.data?.mailboxes ?? [];
   const requestedMailbox = mailboxForRoute(mailboxId, mailboxes);
@@ -96,22 +104,31 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     mailbox?.id,
     folder,
     debouncedSearch,
+    unreadOnly,
     locationReady && !conversationId,
   );
   const conversationQuery = useConversation(
     mailbox?.id,
     locationReady ? conversationId : undefined,
   );
-  const updateConversation = useUpdateConversation();
-  const setConversationRead = useSetConversationRead();
+  const sharedConversationAction = useBulkConversationAction();
   const conversations = useMemo(
     () => conversationsQuery.data?.pages.flatMap((page) => page.conversations) ?? [],
     [conversationsQuery.data?.pages],
   );
   const folderName = folderDisplayName(folder, folders);
   const activeFolder = folders?.find((item) => item.id === folder);
-  const displayedConversationCount = debouncedSearch
-    ? `${conversations.length}${conversationsQuery.hasNextPage ? "+" : ""}`
+  const selection = useConversationSelection({
+    scope: `${activeMailboxId ?? ""}\0${folder}\0${debouncedSearch}\0${unreadOnly}`,
+    mailboxId: activeMailboxId,
+    folderId: folder,
+    conversations,
+  });
+  const moreConversationsExist = Boolean(
+    conversationsQuery.data?.pages.at(-1)?.nextCursor,
+  );
+  const displayedConversationCount = debouncedSearch || unreadOnly
+    ? `${conversations.length}${moreConversationsExist ? "+" : ""}`
     : String(activeFolder?.totalCount ?? conversations.length);
 
   function navigate(next: {
@@ -169,10 +186,19 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     returnToList = false,
   ) {
     if (!conversationId || !mailbox) return;
-    updateConversation.mutate(
-      { id: conversationId, mailboxId: mailbox.id, input },
+    sharedConversationAction.mutate(
       {
-        onSuccess: () => {
+        mailboxId: mailbox.id,
+        sourceFolderId: folder,
+        conversationIds: [conversationId],
+        action: { type: "update", update: input },
+      },
+      {
+        onSuccess: ({ updatedCount }) => {
+          if (!updatedCount) {
+            toast.warning("Conversation was not changed because its folder changed.");
+            return;
+          }
           if (returnToList) closeConversation();
         },
         onError: (error) => toast.error(error.message),
@@ -181,54 +207,62 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
   }
 
   function selectFolder(next: Folder) {
+    selection.exit();
     navigate({ folder: next, conversation: null });
   }
 
-  function markConversationUnread() {
-    if (!conversationId || !mailbox) return;
-    setConversationRead.mutate(
-      {
-        id: conversationId,
-        mailboxId: mailbox.id,
-        isRead: false,
-      },
-      {
-        onSuccess: closeConversation,
-        onError: (error) => toast.error(error.message),
-      },
-    );
-  }
-
-  async function markConversationRead() {
+  async function changeConversationRead(isRead: boolean, returnToList = false) {
     if (!conversationId || !mailbox) return;
     try {
-      await setConversationRead.mutateAsync({
-        id: conversationId,
+      const { updatedCount } = await sharedConversationAction.mutateAsync({
         mailboxId: mailbox.id,
-        isRead: true,
+        sourceFolderId: folder,
+        conversationIds: [conversationId],
+        action: { type: "read", isRead },
       });
+      if (!updatedCount) {
+        toast.warning("Conversation no longer contains incoming messages.");
+        return;
+      }
+      if (returnToList) closeConversation();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not mark messages as read");
+      toast.error(error instanceof Error ? error.message : "Could not update read state");
     }
   }
 
   return (
-    <main className="paper-grain flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
+    <main
+      className="paper-grain flex h-dvh min-h-0 flex-col overflow-hidden bg-background"
+      onKeyDown={(event) => {
+        if (selection.active && !selection.pending && event.key === "Escape") {
+          selection.exit();
+        }
+      }}
+    >
       <MailHeader
         mailbox={mailbox}
         mailboxes={mailboxQuery.data?.mailboxes ?? []}
         search={search}
         searchPlaceholder={`Search in ${folderName}`}
         showSearch={!conversationId}
-        onSearchChange={setSearch}
+        onSearchChange={(value) => {
+          setSearch(value);
+          selection.exit();
+        }}
         onMailboxChange={(id) => {
           closeComposer();
+          selection.exit();
           navigate({ mailbox: id, folder: "inbox", conversation: null });
         }}
         onCompose={openCompose}
         onAdministration={() => navigateRoute("/admin")}
       />
-      <FolderTabBar folder={folder} folders={folders} onSelect={selectFolder} />
+      <FolderTabBar
+        folder={folder}
+        folders={folders}
+        hideMobile={selection.active}
+        onSelect={selectFolder}
+      />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {conversationId ? (
@@ -238,6 +272,8 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
             error={conversationQuery.error?.message}
             mailbox={mailbox}
             mailboxState={conversationQuery.data?.mailboxState ?? "active"}
+            folderName={folderName}
+            sharedActionPending={sharedConversationAction.isPending}
             onRetry={() => void conversationQuery.refetch()}
             onBack={() => navigate({ conversation: null })}
             onArchive={() => mutateConversation({ mailboxState: "archive" }, true)}
@@ -246,12 +282,12 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
             onMarkRead={conversationQuery.data?.messages.some(
                 (message) => message.direction === "incoming" && !message.isRead,
               )
-              ? () => void markConversationRead()
+              ? () => void changeConversationRead(true)
               : undefined}
             onMarkUnread={conversationQuery.data?.messages.some(
                 (message) => message.direction === "incoming",
               )
-              ? markConversationUnread
+              ? () => void changeConversationRead(false, true)
               : undefined}
             onForward={openForward}
             onOpenConversation={(id) => navigate({ folder: "sent", conversation: id })}
@@ -267,18 +303,77 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
                   {folderName}
                 </h1>
               </div>
-              <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {displayedConversationCount}{" "}
-                {displayedConversationCount === "1" ? "conversation" : "conversations"}
-                {!debouncedSearch && activeFolder?.unreadCount
-                  ? ` · ${activeFolder.unreadCount} unread`
-                  : ""}
-              </p>
+              {selection.active && mailbox ? (
+                <TooltipProvider delay={300}>
+                  <ConversationSelectionToolbar
+                    sharedMailboxName={mailbox.kind === "shared"
+                      ? mailbox.displayName
+                      : undefined}
+                    canDeletePermanently={mailbox.canSend}
+                    folder={folder}
+                    folders={folders ?? []}
+                    selectedCount={selection.selectedConversations.length}
+                    allLoadedSelected={selection.allLoadedSelected}
+                    someLoadedSelected={selection.selectedConversations.length > 0}
+                    anySelectedUnread={selection.anySelectedUnread}
+                    hasSelectedIncoming={selection.hasSelectedIncoming}
+                    allSelectedHaveIncoming={selection.allSelectedHaveIncoming}
+                    busy={selection.pending}
+                    onToggleAll={selection.toggleAllLoaded}
+                    onAction={selection.run}
+                    onExit={selection.exit}
+                  />
+                </TooltipProvider>
+              ) : (
+                <div className="flex shrink-0 items-center gap-2">
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {displayedConversationCount}{" "}
+                    {displayedConversationCount === "1" ? "conversation" : "conversations"}
+                    {!debouncedSearch
+                      && folderShowsUnreadCount(activeFolder)
+                      && activeFolder?.unreadCount
+                      ? ` · ${activeFolder.unreadCount} unread`
+                      : ""}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-pressed={unreadOnly}
+                    className={unreadOnly
+                      ? "border-primary/35 bg-primary/12 text-foreground shadow-inner hover:bg-primary/16"
+                      : undefined}
+                    onClick={() => {
+                      selection.exit();
+                      setUnreadOnly((current) => !current);
+                    }}
+                  >
+                    <Mail /> Unread
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={selection.pending || !conversations.length}
+                    onClick={selection.start}
+                  >
+                    <ListChecks /> Select
+                  </Button>
+                </div>
+              )}
             </div>
 
             <label className="relative mb-4 block xl:hidden">
               <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="h-11 rounded-full pl-10" placeholder={`Search in ${folderName}`} value={search} onChange={(event) => setSearch(event.target.value)} />
+              <Input
+                className="h-11 rounded-full pl-10"
+                placeholder={`Search in ${folderName}`}
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  selection.exit();
+                }}
+              />
             </label>
 
             <MessageList
@@ -288,6 +383,7 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
               loadingMore={conversationsQuery.isFetchingNextPage}
               hasMore={Boolean(conversationsQuery.hasNextPage)}
               search={debouncedSearch}
+              unreadOnly={unreadOnly}
               error={mailboxQuery.error?.message
                 ?? foldersQuery.error?.message
                 ?? conversationsQuery.error?.message}
@@ -298,6 +394,11 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
                   ? foldersQuery.refetch()
                   : conversationsQuery.refetch())}
               onSelect={(message: ConversationSummary) => navigate({ conversation: message.conversationId })}
+              selection={selection.active ? {
+                disabled: selection.pending,
+                selectedIds: selection.selectedIds,
+                onToggle: selection.toggle,
+              } : undefined}
             />
           </section>
         )}

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, desc, eq, gt, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../drizzle/mailbox/migrations.js";
@@ -20,11 +20,13 @@ import {
   suggestParticipants,
   type ParticipantSource,
 } from "../mail/participants";
+import { listActiveMailboxSessions } from "../mail/mailbox-directory";
 import { buildEmailSearchQuery } from "../mail/search";
 import {
-  customFolderVisibilityPredicate,
+  customFolderPredicate,
+  folderAggregateJoinPredicate,
   systemFolderDefinitions,
-  systemFolderPredicates,
+  systemFolderPredicate,
   type MailboxState,
   type SystemFolderType,
 } from "./folder-model";
@@ -34,6 +36,7 @@ import {
   emails,
   folders,
   pendingInbound,
+  pendingObjectDeletions,
   type Email,
   type FolderRecord,
   type NewEmail,
@@ -41,12 +44,6 @@ import {
   type PendingInbound,
 } from "./schema";
 import type { RecipientDeliveryStatus } from "./model";
-import { createDb } from "../db/client";
-import {
-  mailboxMembers,
-  sessions,
-  users,
-} from "../db/schema";
 
 const schema = {
   conversations,
@@ -54,11 +51,14 @@ const schema = {
   emails,
   folders,
   pendingInbound,
+  pendingObjectDeletions,
 };
 type MailboxDatabase = DrizzleSqliteDODatabase<typeof schema>;
 const INBOUND_ALARM_BATCH_SIZE = 1;
-const MAX_INBOUND_RETRY_DELAY_MS = 60 * 60 * 1000;
+const OBJECT_DELETION_ALARM_BATCH_SIZE = 100;
+const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
 const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
+const ALARM_WAKE_DELAY_MS = 1_000;
 const PRESENCE_TTL_MS = 60_000;
 
 type MailboxSocketAttachment = {
@@ -89,11 +89,15 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function inboundRetryDelay(attempts: number) {
+function retryDelay(attempts: number) {
   return Math.min(
-    MAX_INBOUND_RETRY_DELAY_MS,
+    MAX_RETRY_DELAY_MS,
     5_000 * 2 ** Math.min(Math.max(attempts - 1, 0), 10),
   );
+}
+
+function stringListJson(values: string[]) {
+  return JSON.stringify([...new Set(values)]);
 }
 
 export type ConversationUpdate = {
@@ -110,6 +114,7 @@ export type ConversationListItem = {
   email: Email;
   messageCount: number;
   unreadCount: number;
+  hasIncoming: boolean;
 };
 
 export type SubmitOutgoingResult = {
@@ -151,9 +156,20 @@ type ConversationRow = {
   timeline_at: number;
   message_count: number;
   unread_count: number;
+  has_incoming: number;
 };
 
 type FolderCountRow = {
+  total_count: number;
+  unread_count: number;
+};
+
+type FolderListRow = {
+  id: string;
+  name: string;
+  kind: "system" | "custom";
+  system_type: SystemFolderType | null;
+  sort_order: number;
   total_count: number;
   unread_count: number;
 };
@@ -168,16 +184,22 @@ function folderMembership(folder: MailFolder) {
     return {
       predicate: `
         c.folder_id = ?
-        and ${customFolderVisibilityPredicate}
+        and ${customFolderPredicate("c")}
       `,
       bindings: [folder.id],
     };
   }
   return {
-    predicate: systemFolderPredicates[folder.systemType],
+    predicate: systemFolderPredicate(folder.systemType, "c"),
     bindings: [],
   };
 }
+
+const SYSTEM_FOLDER_DEFINITIONS_JSON = JSON.stringify(systemFolderDefinitions);
+const FOLDER_AGGREGATE_JOIN_PREDICATE = folderAggregateJoinPredicate(
+  "folder",
+  "conversation",
+);
 
 export type TransportUpdate = {
   state: Email["transportState"];
@@ -246,39 +268,46 @@ export class MailboxDO extends DurableObject<Env> {
     socket.close(1011, "Realtime connection failed");
   }
 
-  async visibleUserIds() {
-    const now = Date.now();
-    const sockets = await this.authorizedSockets();
-    return [...new Set(sockets.flatMap(({ attachment }) =>
-      attachment.visibility === "visible"
-        && now - attachment.presenceUpdatedAt <= PRESENCE_TTL_MS
-        ? [attachment.userId]
-        : []
-    ))];
+  async shouldSuppressPush(messageId: string, userId: string, sessionId: string) {
+    const messageState = this.db
+      .select({
+        messageId: emails.id,
+        readByUserId: emailReadStates.userId,
+      })
+      .from(emails)
+      .leftJoin(
+        emailReadStates,
+        and(
+          eq(emailReadStates.emailId, emails.id),
+          eq(emailReadStates.userId, userId),
+        ),
+      )
+      .where(eq(emails.id, messageId))
+      .get();
+    if (!messageState || messageState.readByUserId) return true;
+    const visibleAfter = Date.now() - PRESENCE_TTL_MS;
+    return (await this.authorizedSockets({ sessionId, visibleAfter })).length > 0;
   }
 
-  async suppressedPushUserIds(messageId: string, candidateUserIds: string[]) {
-    const candidates = new Set(candidateUserIds);
-    if (!candidates.size) return [];
-    const readUsers = this.db
-      .select({ userId: emailReadStates.userId })
-      .from(emailReadStates)
-      .where(and(
-        eq(emailReadStates.emailId, messageId),
-        inArray(emailReadStates.userId, [...candidates]),
-      ))
-      .all();
-    const visibleUsers = await this.visibleUserIds();
-    return [...new Set([
-      ...readUsers.map((row) => row.userId),
-      ...visibleUsers.filter((userId) => candidates.has(userId)),
-    ])];
-  }
-
-  private async authorizedSockets() {
+  private async authorizedSockets(filter?: {
+    sessionId: string;
+    visibleAfter: number;
+  }) {
     const sockets = this.state.getWebSockets().flatMap((socket) => {
       const attachment = socketAttachment(socket);
-      if (attachment) return [{ socket, attachment }];
+      if (attachment) {
+        if (
+          filter
+          && (
+            attachment.sessionId !== filter.sessionId
+            || attachment.visibility !== "visible"
+            || attachment.presenceUpdatedAt < filter.visibleAfter
+          )
+        ) {
+          return [];
+        }
+        return [{ socket, attachment }];
+      }
       socket.close(1008, "Realtime authorization expired");
       return [];
     });
@@ -292,26 +321,12 @@ export class MailboxDO extends DurableObject<Env> {
     const sessionIds = [...new Set(
       sockets.map(({ attachment }) => attachment.sessionId),
     )];
-    const validSessions = await createDb(this.bindings.DB)
-      .select({
-        id: sessions.id,
-        tokenHash: sessions.tokenHash,
-        userId: sessions.userId,
-      })
-      .from(sessions)
-      .innerJoin(users, eq(sessions.userId, users.id))
-      .innerJoin(
-        mailboxMembers,
-        and(
-          eq(mailboxMembers.userId, sessions.userId),
-          eq(mailboxMembers.mailboxId, mailboxId),
-        ),
-      )
-      .where(and(
-        inArray(sessions.id, sessionIds),
-        gt(sessions.expiresAt, new Date()),
-        eq(users.status, "active"),
-      ));
+    const validSessions = await listActiveMailboxSessions(
+      this.bindings.DB,
+      mailboxId,
+      sessionIds,
+      Date.now(),
+    );
     const validSessionsById = new Map(
       validSessions.map((session) => [session.id, session]),
     );
@@ -389,7 +404,7 @@ export class MailboxDO extends DurableObject<Env> {
       .update(pendingInbound)
       .set({
         attempts,
-        nextAttemptAt: new Date(now + inboundRetryDelay(attempts)),
+        nextAttemptAt: new Date(now + retryDelay(attempts)),
       })
       .where(eq(pendingInbound.id, job.id))
       .run();
@@ -417,6 +432,7 @@ export class MailboxDO extends DurableObject<Env> {
     limit: number,
     cursor: ConversationCursorPosition | null,
     search: string | undefined,
+    unreadOnly = false,
   ) {
     const folder = this.getFolder(folderId);
     if (!folder) return null;
@@ -426,6 +442,21 @@ export class MailboxDO extends DurableObject<Env> {
 
     const predicates = [membership.predicate];
     const bindings: Array<string | number> = [...membership.bindings];
+    if (unreadOnly) {
+      predicates.push(`exists (
+        select 1
+        from emails unread_message
+        where unread_message.conversation_id = c.id
+          and unread_message.direction = 'incoming'
+          and not exists (
+            select 1
+            from email_read_states unread_state
+            where unread_state.user_id = ?
+              and unread_state.email_id = unread_message.id
+          )
+      )`);
+      bindings.push(userId);
+    }
     if (searchQuery) {
       // Folder membership belongs to the conversation, while a match can be in
       // any message in that conversation.
@@ -448,6 +479,7 @@ export class MailboxDO extends DurableObject<Env> {
       select
         c.latest_email_id as email_id,
         c.timeline_at,
+        c.has_incoming,
         (
           select count(*)
           from emails message
@@ -484,6 +516,7 @@ export class MailboxDO extends DurableObject<Env> {
             email,
             messageCount: Number(row.message_count),
             unreadCount: Number(row.unread_count),
+            hasIncoming: Boolean(row.has_incoming),
           }]
         : [];
     });
@@ -588,31 +621,72 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   listFolders(userId: string): FolderListItem[] {
-    const customFolders = this.db
-      .select()
-      .from(folders)
-      .orderBy(asc(folders.sortOrder), asc(folders.name))
-      .all();
+    const rows = this.state.storage.sql.exec<FolderListRow>(`
+      with folder_rows(id, name, kind, system_type, sort_order) as (
+        select
+          json_extract(value, '$.id'),
+          json_extract(value, '$.name'),
+          'system',
+          json_extract(value, '$.systemType'),
+          json_extract(value, '$.sortOrder')
+        from json_each(?)
+        union all
+        select id, name, 'custom', null, sort_order
+        from folders
+      ),
+      conversation_unread as (
+        select
+          c.id,
+          c.mailbox_state,
+          c.folder_id,
+          c.has_incoming,
+          c.has_outgoing,
+          coalesce(sum(case
+            when message.id is not null and read_state.email_id is null then 1
+            else 0
+          end), 0) as unread_count
+        from conversations c
+        left join emails message
+          on message.conversation_id = c.id
+          and message.direction = 'incoming'
+        left join email_read_states read_state
+          on read_state.user_id = ?
+          and read_state.email_id = message.id
+        group by
+          c.id,
+          c.mailbox_state,
+          c.folder_id,
+          c.has_incoming,
+          c.has_outgoing
+      )
+      select
+        folder.id,
+        folder.name,
+        folder.kind,
+        folder.system_type,
+        folder.sort_order,
+        count(conversation.id) as total_count,
+        coalesce(sum(conversation.unread_count), 0) as unread_count
+      from folder_rows folder
+      left join conversation_unread conversation on
+        ${FOLDER_AGGREGATE_JOIN_PREDICATE}
+      group by
+        folder.id,
+        folder.name,
+        folder.kind,
+        folder.system_type,
+        folder.sort_order
+    `, SYSTEM_FOLDER_DEFINITIONS_JSON, userId).toArray();
 
-    const mailFolders: MailFolder[] = [
-      ...systemFolderDefinitions.map((folder) => ({
-        ...folder,
-        kind: "system" as const,
-      })),
-      ...customFolders.map((folder) => ({
-        ...folder,
-        kind: "custom" as const,
-        systemType: null,
-      })),
-    ];
-
-    return mailFolders.map((folder): FolderListItem => {
-      const counts = this.countFolder(userId, folder);
-      return {
-        ...folder,
-        ...counts,
-      };
-    }).sort(
+    return rows.map((row): FolderListItem => ({
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      systemType: row.system_type,
+      sortOrder: Number(row.sort_order),
+      totalCount: Number(row.total_count),
+      unreadCount: Number(row.unread_count),
+    })).sort(
       (left, right) =>
         left.sortOrder - right.sortOrder || left.name.localeCompare(right.name),
     );
@@ -675,36 +749,67 @@ export class MailboxDO extends DurableObject<Env> {
     return true;
   }
 
-  setConversationRead(userId: string, conversationId: string, isRead: boolean) {
-    const conversation = this.db
+  bulkSetConversationRead(
+    userId: string,
+    conversationIds: string[],
+    isRead: boolean,
+  ) {
+    const candidates = [...new Set(conversationIds)];
+    if (!candidates.length) return 0;
+    const candidatesJson = stringListJson(candidates);
+    const existingIds = this.db
       .select({ id: conversations.id })
       .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .all()[0];
-    if (!conversation) return false;
+      .where(and(
+        sql`${conversations.id} in (
+          select cast(value as text) from json_each(${candidatesJson})
+        )`,
+        eq(conversations.hasIncoming, true),
+      ))
+      .all()
+      .map((conversation) => conversation.id);
+    if (!existingIds.length) return 0;
+    const existingIdsJson = stringListJson(existingIds);
 
     if (isRead) {
-      this.state.storage.sql.exec(`
+      this.db.run(sql`
         insert into email_read_states (user_id, email_id, read_at)
-        select ?, id, ?
+        select ${userId}, id, ${Date.now()}
         from emails
-        where conversation_id = ? and direction = 'incoming'
+        where conversation_id in (
+          select cast(value as text) from json_each(${existingIdsJson})
+        ) and direction = 'incoming'
         on conflict (user_id, email_id) do update set read_at = excluded.read_at
-      `, userId, Date.now(), conversationId);
+      `);
     } else {
-      this.state.storage.sql.exec(`
+      this.db.run(sql`
         delete from email_read_states
-        where user_id = ? and email_id = (
-          select id
-          from emails
-          where conversation_id = ? and direction = 'incoming'
-          order by timeline_at desc, id desc
-          limit 1
-        )
-      `, userId, conversationId);
+        where user_id = ${userId}
+          and email_id in (
+            select message.id
+            from emails message
+            where message.conversation_id in (
+              select cast(value as text) from json_each(${existingIdsJson})
+            )
+              and message.direction = 'incoming'
+              and not exists (
+                select 1
+                from emails newer
+                where newer.conversation_id = message.conversation_id
+                  and newer.direction = 'incoming'
+                  and (
+                    newer.timeline_at > message.timeline_at
+                    or (
+                      newer.timeline_at = message.timeline_at
+                      and newer.id > message.id
+                    )
+                  )
+              )
+          )
+      `);
     }
     this.publishUpdate();
-    return true;
+    return existingIds.length;
   }
 
   async enqueueInbound(input: InboundDeliveryInput) {
@@ -716,8 +821,11 @@ export class MailboxDO extends DurableObject<Env> {
       throw new Error("Inbound delivery targeted the wrong mailbox object");
     }
 
-    // Schedule first so a committed row can never be stranded without a wake-up.
-    await this.scheduleAlarm(Date.now());
+    const queuedAt = new Date();
+    // Keep the alarm just ahead of the due time. Scheduling it for "now" can
+    // wake it on the setAlarm await before the synchronous insert below runs.
+    const alarmAt = queuedAt.getTime() + ALARM_WAKE_DELAY_MS;
+    await this.scheduleAlarm(alarmAt);
     const messageId = inboundMessageId(input.id);
     const queued = this.db.transaction((tx) => {
       const existing = tx
@@ -735,7 +843,7 @@ export class MailboxDO extends DurableObject<Env> {
           envelopeFrom: input.envelopeFrom,
           envelopeTo: input.envelopeTo,
           receivedAt,
-          nextAttemptAt: new Date(),
+          nextAttemptAt: queuedAt,
         })
         .onConflictDoNothing()
         .returning({ id: pendingInbound.id })
@@ -848,22 +956,207 @@ export class MailboxDO extends DurableObject<Env> {
     return { folders: folderValues.length, emails: emailValues.length };
   }
 
-  updateConversation(conversationId: string, update: ConversationUpdate) {
-    const values: ConversationUpdate = {};
-    if (update.mailboxState !== undefined) values.mailboxState = update.mailboxState;
-    if (update.folderId !== undefined) values.folderId = update.folderId;
-    if (!Object.keys(values).length) return 0;
-
-    const result = this.db
-      .update(conversations)
-      .set(values)
-      .where(eq(conversations.id, conversationId))
-      .returning({ id: conversations.id })
-      .all();
-    if (result.length) {
-      this.publishUpdate();
+  bulkUpdateConversations(
+    conversationIds: string[],
+    sourceFolderId: string,
+    update: ConversationUpdate,
+  ) {
+    const sourceFolder = this.getFolder(sourceFolderId);
+    if (!sourceFolder) return null;
+    if (update.folderId) {
+      const targetFolder = this.getFolder(update.folderId);
+      if (!targetFolder || targetFolder.kind !== "custom") return null;
     }
+    const candidates = [...new Set(conversationIds)];
+    if (!candidates.length) return 0;
+    const assignments: string[] = [];
+    const values: Array<string | null> = [];
+    // A custom folder is a classification inside the active Inbox
+    // distribution, so assigning one also restores the conversation.
+    const mailboxState = update.folderId
+      ? "active" as const
+      : update.mailboxState;
+    if (mailboxState !== undefined) {
+      assignments.push("mailbox_state = ?");
+      values.push(mailboxState);
+    }
+    if (update.folderId !== undefined) {
+      assignments.push("folder_id = ?");
+      values.push(update.folderId);
+    }
+    if (!assignments.length) return 0;
+    const membership = folderMembership(sourceFolder);
+    const candidatesJson = stringListJson(candidates);
+    // Setting folderId means placing the conversation in the Inbox
+    // distribution. Outgoing-only conversations must stay in Sent.
+    const targetPredicate = update.folderId !== undefined
+      ? "and c.has_incoming = 1"
+      : "";
+
+    // Keep the source-folder guard in the update itself so a stale shared
+    // selection cannot overwrite a teammate's newer move.
+    const result = this.state.storage.sql.exec<{ id: string }>(`
+      update conversations as c
+      set ${assignments.join(", ")}
+      where c.id in (
+        select cast(value as text) from json_each(?)
+      )
+        and ${membership.predicate}
+        ${targetPredicate}
+      returning id
+    `, ...values, candidatesJson, ...membership.bindings).toArray();
+    if (result.length) this.publishUpdate();
     return result.length;
+  }
+
+  async permanentlyDeleteConversations(conversationIds: string[]) {
+    const candidates = [...new Set(conversationIds)];
+    if (!candidates.length) {
+      return { outcome: "not_found" as const, deletedCount: 0 };
+    }
+    const candidatesJson = stringListJson(candidates);
+    const storedConversations = this.db
+      .select({ id: conversations.id, mailboxState: conversations.mailboxState })
+      .from(conversations)
+      .where(sql`${conversations.id} in (
+        select cast(value as text) from json_each(${candidatesJson})
+      )`)
+      .all();
+    if (storedConversations.length !== candidates.length) {
+      return { outcome: "not_found" as const, deletedCount: 0 };
+    }
+    if (storedConversations.some((conversation) => conversation.mailboxState !== "trash")) {
+      return { outcome: "not_in_trash" as const, deletedCount: 0 };
+    }
+
+    const storedEmails = this.db
+      .select({
+        id: emails.id,
+        direction: emails.direction,
+        bodyHtmlR2Key: emails.bodyHtmlR2Key,
+        rawMimeR2Key: emails.rawMimeR2Key,
+        attachmentsJson: emails.attachmentsJson,
+      })
+      .from(emails)
+      .where(sql`${emails.conversationId} in (
+        select cast(value as text) from json_each(${candidatesJson})
+      )`)
+      .all();
+    const incomingEmailIds = new Set(
+      storedEmails.flatMap((email) =>
+        email.direction === "incoming" ? [email.id] : []
+      ),
+    );
+    const pendingInboundIds = incomingEmailIds.size
+      ? this.db
+        .select({ id: pendingInbound.id })
+        .from(pendingInbound)
+        .all()
+        .flatMap((job) =>
+          incomingEmailIds.has(inboundMessageId(job.id)) ? [job.id] : []
+        )
+      : [];
+    const pendingInboundIdsJson = stringListJson(pendingInboundIds);
+    const objectKeys = [...new Set(storedEmails.flatMap((email) => [
+      ...(email.bodyHtmlR2Key ? [email.bodyHtmlR2Key] : []),
+      ...(email.rawMimeR2Key ? [email.rawMimeR2Key] : []),
+      ...email.attachmentsJson.map((attachment) => attachment.r2Key),
+    ]))];
+
+    const referencedObjectKeys = this.referencedObjectKeys(
+      objectKeys,
+      candidates,
+    );
+    const ownedObjectKeys = objectKeys.filter(
+      (objectKey) => !referencedObjectKeys.has(objectKey),
+    );
+    const cleanupAt = new Date();
+    // Schedule first so the cleanup rows committed below can never be left
+    // without a retry after an interruption. The short delay prevents the
+    // alarm from waking on setAlarm's await before the rows are inserted.
+    const cleanupAlarmAt = cleanupAt.getTime() + ALARM_WAKE_DELAY_MS;
+    if (ownedObjectKeys.length) {
+      await this.scheduleAlarm(cleanupAlarmAt);
+    }
+    this.db.transaction((tx) => {
+      for (const objectKey of ownedObjectKeys) {
+        tx.insert(pendingObjectDeletions)
+          .values({ objectKey, nextAttemptAt: cleanupAt })
+          .onConflictDoNothing()
+          .run();
+      }
+      if (pendingInboundIds.length) {
+        tx.delete(pendingInbound)
+          .where(sql`${pendingInbound.id} in (
+            select cast(value as text) from json_each(${pendingInboundIdsJson})
+          )`)
+          .run();
+      }
+      tx.run(sql`
+        delete from email_search where conversation_id in (
+          select cast(value as text) from json_each(${candidatesJson})
+        )
+      `);
+      tx.run(sql`
+        delete from email_read_states
+        where email_id in (
+          select id from emails where conversation_id in (
+            select cast(value as text) from json_each(${candidatesJson})
+          )
+        )
+      `);
+      tx.delete(conversations)
+        .where(sql`${conversations.id} in (
+          select cast(value as text) from json_each(${candidatesJson})
+        )`)
+        .run();
+      tx.delete(emails)
+        .where(sql`${emails.conversationId} in (
+          select cast(value as text) from json_each(${candidatesJson})
+        )`)
+        .run();
+    });
+    this.recentParticipantSources = null;
+    this.publishUpdate();
+    return {
+      outcome: "deleted" as const,
+      deletedCount: storedConversations.length,
+    };
+  }
+
+  private referencedObjectKeys(
+    objectKeys: string[],
+    excludedConversationIds: string[],
+  ) {
+    if (!objectKeys.length) return new Set<string>();
+    const rows = this.state.storage.sql.exec<{ object_key: string }>(`
+      with
+        candidate_keys(object_key) as (
+          select cast(value as text) from json_each(?)
+        ),
+        excluded_conversations(id) as (
+          select cast(value as text) from json_each(?)
+        )
+      select candidate.object_key
+      from candidate_keys candidate
+      where exists (
+        select 1
+        from emails message
+        where message.conversation_id not in (
+          select id from excluded_conversations
+        )
+          and (
+            message.body_html_r2_key = candidate.object_key
+            or message.raw_mime_r2_key = candidate.object_key
+            or exists (
+              select 1
+              from json_each(message.attachments_json) attachment
+              where json_extract(attachment.value, '$.r2Key') = candidate.object_key
+            )
+          )
+      )
+    `, stringListJson(objectKeys), stringListJson(excludedConversationIds)).toArray();
+    return new Set(rows.map((row) => row.object_key));
   }
 
   updateTransport(id: string, update: TransportUpdate) {
@@ -910,6 +1203,7 @@ export class MailboxDO extends DurableObject<Env> {
   async alarm() {
     const now = Date.now();
     await this.processInboundJobs(now);
+    await this.processObjectDeletionJobs(now);
     await this.scheduleRemainingWork();
   }
 
@@ -987,12 +1281,57 @@ export class MailboxDO extends DurableObject<Env> {
           .update(pendingInbound)
           .set({
             attempts,
-            nextAttemptAt: new Date(now + inboundRetryDelay(attempts)),
+            nextAttemptAt: new Date(now + retryDelay(attempts)),
           })
           .where(eq(pendingInbound.id, job.id))
           .run();
         console.error(`Could not ingest inbound delivery ${job.id}`, error);
       }
+    }
+  }
+
+  private async processObjectDeletionJobs(now: number) {
+    const jobs = this.db
+      .select()
+      .from(pendingObjectDeletions)
+      .where(lte(pendingObjectDeletions.nextAttemptAt, new Date(now)))
+      .orderBy(asc(pendingObjectDeletions.nextAttemptAt))
+      .limit(OBJECT_DELETION_ALARM_BATCH_SIZE)
+      .all();
+    if (!jobs.length) return;
+    const objectKeys = jobs.map((job) => job.objectKey);
+    const referencedObjectKeys = this.referencedObjectKeys(objectKeys, []);
+    const retainedKeys = objectKeys.filter((key) => referencedObjectKeys.has(key));
+    if (retainedKeys.length) {
+      this.db
+        .delete(pendingObjectDeletions)
+        .where(inArray(pendingObjectDeletions.objectKey, retainedKeys))
+        .run();
+    }
+    const deletableJobs = jobs.filter(
+      (job) => !referencedObjectKeys.has(job.objectKey),
+    );
+    if (!deletableJobs.length) return;
+    const deletableKeys = deletableJobs.map((job) => job.objectKey);
+    try {
+      await this.bindings.MAIL_STORAGE.delete(deletableKeys);
+      this.db
+        .delete(pendingObjectDeletions)
+        .where(inArray(pendingObjectDeletions.objectKey, deletableKeys))
+        .run();
+    } catch (error) {
+      for (const job of deletableJobs) {
+        const attempts = job.attempts + 1;
+        this.db
+          .update(pendingObjectDeletions)
+          .set({
+            attempts,
+            nextAttemptAt: new Date(now + retryDelay(attempts)),
+          })
+          .where(eq(pendingObjectDeletions.objectKey, job.objectKey))
+          .run();
+      }
+      console.error("Could not delete permanent message objects", error);
     }
   }
 
@@ -1003,9 +1342,21 @@ export class MailboxDO extends DurableObject<Env> {
       .orderBy(asc(pendingInbound.nextAttemptAt))
       .limit(1)
       .all()[0];
-    if (nextInbound) {
+    const nextObjectDeletion = this.db
+      .select({ nextAttemptAt: pendingObjectDeletions.nextAttemptAt })
+      .from(pendingObjectDeletions)
+      .orderBy(asc(pendingObjectDeletions.nextAttemptAt))
+      .limit(1)
+      .all()[0];
+    const nextAttemptAt = [nextInbound, nextObjectDeletion]
+      .flatMap((job) => job ? [job.nextAttemptAt.getTime()] : [])
+      .reduce<number | null>(
+        (earliest, value) => earliest === null ? value : Math.min(earliest, value),
+        null,
+      );
+    if (nextAttemptAt !== null) {
       await this.scheduleAlarm(
-        Math.max(Date.now() + 1_000, nextInbound.nextAttemptAt.getTime()),
+        Math.max(Date.now() + ALARM_WAKE_DELAY_MS, nextAttemptAt),
       );
     }
   }

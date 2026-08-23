@@ -49,6 +49,15 @@ export function MailHeader({
 }) {
   const auth = useAuth();
   const navigate = useNavigate();
+  let otherMailboxUnreadCount = 0;
+  for (const item of mailboxes) {
+    if (item.id !== mailbox?.id) {
+      otherMailboxUnreadCount += item.unreadCount;
+    }
+  }
+  const otherMailboxUnreadLabel = otherMailboxUnreadCount > 99
+    ? "99+"
+    : String(otherMailboxUnreadCount);
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/80 px-3 backdrop-blur-xl sm:px-5">
@@ -85,7 +94,9 @@ export function MailHeader({
           <DropdownMenuTrigger
             render={(
               <Button
-                aria-label="Account and mailboxes"
+                aria-label={otherMailboxUnreadCount > 0
+                  ? `Account and mailboxes, ${otherMailboxUnreadCount} unread in other mailboxes`
+                  : "Account and mailboxes"}
                 variant="ghost"
                 className="h-11 max-w-60 gap-2.5 rounded-full py-0 pr-2.5 pl-1.5 hover:bg-accent"
               />
@@ -103,6 +114,14 @@ export function MailHeader({
                 {mailbox?.address}
               </span>
             </span>
+            {otherMailboxUnreadCount > 0 && (
+              <span
+                className="min-w-5 shrink-0 rounded-full bg-primary px-1.5 py-1 text-center text-[10px] leading-none font-bold text-primary-foreground tabular-nums"
+                aria-hidden="true"
+              >
+                {otherMailboxUnreadLabel}
+              </span>
+            )}
             <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
           </DropdownMenuTrigger>
 

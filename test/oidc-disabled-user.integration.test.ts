@@ -61,6 +61,18 @@ describe("OIDC user lifecycle", () => {
       ),
     );
     const mailboxId = mailboxList.mailboxes[0]!.id;
+    const realtimeMessageId = `msg_lifecycle_${crypto.randomUUID()}`;
+    const mailbox = mailboxStub(env, mailboxId);
+    await mailbox.seedMailbox([], [{
+      id: realtimeMessageId,
+      conversationId: `conv_lifecycle_${crypto.randomUUID()}`,
+      direction: "incoming",
+      fromJson: [{ address: "sender@example.net", name: "Sender" }],
+      toJson: [{ address: "lifecycle-user@example.test", name: "Lifecycle User" }],
+      subject: "Lifecycle realtime authorization",
+      timelineAt: new Date(),
+      transportState: "received",
+    }]);
     const realtime = await exports.default.fetch(
       new Request(
         `${issuer}/api/mail/mailboxes/${mailboxId}/realtime`,
@@ -177,7 +189,7 @@ describe("OIDC user lifecycle", () => {
         }),
       ),
     );
-    await mailboxStub(env, mailboxId).visibleUserIds();
+    expect(await mailbox.setMessageRead(userId, realtimeMessageId, true)).toBe(true);
     await expect(socketClosed).resolves.toBe(1008);
     const remainingPushSubscriptions = await env.DB.prepare(
       "SELECT count(*) AS count FROM push_subscriptions WHERE id = ?",

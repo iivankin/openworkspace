@@ -2,6 +2,7 @@ import { format, isThisYear, isToday, isYesterday } from "date-fns";
 import { CircleAlert, LoaderCircle, MailOpen, RotateCw, SearchX } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary } from "./types";
@@ -66,10 +67,12 @@ export function MessageList({
   loadingMore,
   hasMore,
   search,
+  unreadOnly,
   error,
   onLoadMore,
   onRetry,
   onSelect,
+  selection,
 }: {
   folderName: string;
   messages: ConversationSummary[];
@@ -77,10 +80,16 @@ export function MessageList({
   loadingMore: boolean;
   hasMore: boolean;
   search: string;
+  unreadOnly: boolean;
   error?: string;
   onLoadMore: () => void;
   onRetry: () => void;
   onSelect: (message: ConversationSummary) => void;
+  selection?: {
+    disabled: boolean;
+    selectedIds: ReadonlySet<string>;
+    onToggle: (conversationId: string) => void;
+  };
 }) {
   if (loading) {
     return (
@@ -116,9 +125,15 @@ export function MessageList({
       <div className="rounded-2xl bg-surface ring-1 ring-border">
         <EmptyState
           Icon={search ? SearchX : MailOpen}
-          title={search ? `No matches in ${folderName}` : `${folderName} is empty`}
+          title={search
+            ? `No${unreadOnly ? " unread" : ""} matches in ${folderName}`
+            : unreadOnly
+              ? `No unread conversations in ${folderName}`
+              : `${folderName} is empty`}
           description={search
             ? "Try a different name, address, subject, or phrase."
+            : unreadOnly
+              ? "There are no unread conversations in this folder."
             : "New conversations will appear here as soon as they arrive."}
         >
           {hasMore ? <LoadMoreButton loading={loadingMore} onLoadMore={onLoadMore} /> : null}
@@ -132,29 +147,53 @@ export function MessageList({
       <div className="divide-y divide-border/60">
         {messages.map((message) => {
           const sender = message.conversationLabel;
+          const selected = selection?.selectedIds.has(message.conversationId) ?? false;
           return (
-            <button
-              type="button"
+            <div
               key={message.id}
-              onClick={() => onSelect(message)}
               className={cn(
                 "group relative grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 px-3 py-3.5 text-left",
-                "transition-colors duration-150 ease-out hover:bg-accent/55 focus-visible:bg-accent/55 focus-visible:outline-none",
+                "transition-colors duration-150 ease-out hover:bg-accent/55",
                 "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity hover:before:opacity-100 focus-visible:before:opacity-100",
                 "sm:gap-4 sm:px-5",
                 message.isUnread && "bg-primary/4",
+                selected && "bg-primary/9 before:opacity-100",
               )}
             >
-              <Avatar className={cn(
-                "size-10",
-                message.isUnread && "ring-2 ring-primary/25",
-              )}>
-                <AvatarFallback className="text-xs">
-                  {sender.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
+              <button
+                type="button"
+                disabled={selection?.disabled}
+                className="absolute inset-0 z-0 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                aria-label={selection
+                  ? `${selected ? "Deselect" : "Select"} ${message.subject}`
+                  : `Open ${message.subject}`}
+                onClick={() => selection
+                  ? selection.onToggle(message.conversationId)
+                  : onSelect(message)}
+              />
 
-              <div className="min-w-0 lg:flex lg:items-baseline lg:gap-4">
+              <span className="pointer-events-none relative z-10 grid size-10 place-items-center">
+                {selection ? (
+                  <Checkbox
+                    className="size-5"
+                    checked={selected}
+                    disabled={selection.disabled}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Avatar className={cn(
+                    "size-10",
+                    message.isUnread && "ring-2 ring-primary/25",
+                  )}>
+                    <AvatarFallback className="text-xs">
+                      {sender.slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+              </span>
+
+              <div className="pointer-events-none relative z-1 min-w-0 lg:flex lg:items-baseline lg:gap-4">
                 <span className="flex min-w-0 items-center gap-2 lg:w-56 lg:shrink-0">
                   {message.isUnread ? (
                     <span
@@ -190,12 +229,13 @@ export function MessageList({
               </div>
 
               <time className={cn(
+                "pointer-events-none relative z-1",
                 "shrink-0 pt-1 text-[11px] font-medium tabular-nums",
                 message.isUnread ? "text-foreground" : "text-muted-foreground",
               )}>
                 {shortDate(message.timelineAt)}
               </time>
-            </button>
+            </div>
           );
         })}
       </div>

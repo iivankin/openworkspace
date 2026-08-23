@@ -30,10 +30,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
 import {
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { baseSubject } from "../../shared/mail";
@@ -47,6 +44,7 @@ import { DeliveryIndicator } from "./delivery-indicator";
 import { EmailHtmlBody } from "./email-html-body";
 import { formatBytes } from "./format-bytes";
 import { notifyOutboundResult } from "./outbound-notification";
+import { ToolbarTooltip } from "./toolbar-tooltip";
 import { useResendMessage, useSetMessageRead } from "./use-mail-data";
 import { useVisibleMessageRead } from "./use-visible-message-read";
 import type {
@@ -67,6 +65,8 @@ export function ConversationView({
   error,
   mailbox,
   mailboxState,
+  folderName,
+  sharedActionPending,
   onRetry,
   onBack,
   onArchive,
@@ -82,6 +82,8 @@ export function ConversationView({
   error?: string;
   mailbox?: Mailbox;
   mailboxState: "active" | "archive" | "spam" | "trash";
+  folderName: string;
+  sharedActionPending: boolean;
   onRetry: () => void;
   onBack: () => void;
   onArchive: () => void;
@@ -173,33 +175,50 @@ export function ConversationView({
           </Button>
           <Separator orientation="vertical" className="mx-2.5 h-5" />
           {mailboxState === "active" ? (
-            <ConversationToolbarButton label="Archive conversation" onClick={onArchive}>
+            <ConversationToolbarButton
+              label="Archive conversation"
+              disabled={sharedActionPending}
+              onClick={onArchive}
+            >
               <Archive />
             </ConversationToolbarButton>
           ) : (
             <ConversationToolbarButton
-              label={mailboxState === "spam" ? "Mark as not spam" : "Move conversation to inbox"}
+              label={mailboxState === "spam" ? "Mark as not spam" : "Restore conversation"}
+              disabled={sharedActionPending}
               onClick={onRestore}
             >
               <Inbox />
             </ConversationToolbarButton>
           )}
           {mailboxState !== "trash" && (
-            <ConversationToolbarButton label="Move conversation to trash" onClick={onTrash}>
+            <ConversationToolbarButton
+              label="Move conversation to trash"
+              disabled={sharedActionPending}
+              onClick={onTrash}
+            >
               <Trash2 />
             </ConversationToolbarButton>
           )}
           {onMarkRead ? (
-            <ConversationToolbarButton label="Mark conversation as read" onClick={onMarkRead}>
+            <ConversationToolbarButton
+              label="Mark conversation as read"
+              disabled={sharedActionPending}
+              onClick={onMarkRead}
+            >
               <MailOpen />
             </ConversationToolbarButton>
           ) : onMarkUnread ? (
-            <ConversationToolbarButton label="Mark conversation as unread" onClick={onMarkUnread}>
+            <ConversationToolbarButton
+              label="Mark conversation as unread"
+              disabled={sharedActionPending}
+              onClick={onMarkUnread}
+            >
               <Mail />
             </ConversationToolbarButton>
           ) : null}
           <span className="ml-auto hidden truncate pl-4 text-xs text-muted-foreground sm:block">
-            {mailboxState === "active" ? "Inbox" : mailboxState} · {messages.length}{" "}
+            {folderName} · {messages.length}{" "}
             {messages.length === 1 ? "message" : "messages"}
           </span>
         </header>
@@ -287,7 +306,7 @@ function MessageBubble({
   const sender = message.fromName || message.fromAddress;
   const [rendersHtml, setRendersHtml] = useState(false);
   const visibilityRef = useVisibleMessageRead({
-    enabled: !message.isRead,
+    enabled: !message.isRead && (!outgoing || showViewedBy),
     messageId: message.id,
     onVisible: onViewed,
   });
@@ -448,23 +467,27 @@ function canRetry(message: MessageDetail) {
 
 function ConversationToolbarButton({
   label,
+  disabled = false,
   onClick,
   children,
 }: {
   label: string;
+  disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<Button variant="ghost" size="icon-sm" onClick={onClick} />}
+    <ToolbarTooltip label={label} side="bottom" sideOffset={6}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        disabled={disabled}
+        onClick={onClick}
       >
         {children}
         <span className="sr-only">{label}</span>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>{label}</TooltipContent>
-    </Tooltip>
+      </Button>
+    </ToolbarTooltip>
   );
 }
 

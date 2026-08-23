@@ -3,7 +3,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { MAILBOX_REALTIME_UPDATE } from "../shared/mail";
 import { mailboxStub } from "../worker/mailbox";
 
-let session: { cookie: string; mailboxId: string; userId: string };
+let session: {
+  cookie: string;
+  mailboxId: string;
+  userId: string;
+  sessionId: string;
+};
 
 beforeAll(async () => {
   const response = await exports.default.fetch(
@@ -26,10 +31,15 @@ beforeAll(async () => {
     "SELECT user_id FROM mailbox_members WHERE mailbox_id = ? LIMIT 1",
   ).bind(body.mailboxes[0]!.id).first<{ user_id: string }>();
   expect(membership).toBeTruthy();
+  const storedSession = await env.DB.prepare(
+    "SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+  ).bind(membership!.user_id).first<{ id: string }>();
+  expect(storedSession).toBeTruthy();
   session = {
     cookie: cookie!,
     mailboxId: body.mailboxes[0]!.id,
     userId: membership!.user_id,
+    sessionId: storedSession!.id,
   };
 });
 
@@ -63,6 +73,20 @@ describe("mailbox realtime", () => {
     expect(upgrade.status).toBe(101);
     const socket = upgrade.webSocket!;
     socket.accept();
+    await expect(
+      stub.shouldSuppressPush(
+        "msg_realtime_read",
+        session.userId,
+        session.sessionId,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      stub.shouldSuppressPush(
+        "msg_realtime_read",
+        session.userId,
+        "ses_other_device",
+      ),
+    ).resolves.toBe(false);
     const nextEvent = new Promise<string>((resolve) => {
       socket.addEventListener("message", (message) => {
         resolve(String(message.data));
@@ -87,11 +111,12 @@ describe("mailbox realtime", () => {
     socket.close(1000, "Test complete");
     await closed;
     await expect(
-      stub.suppressedPushUserIds(
+      stub.shouldSuppressPush(
         "msg_realtime_read",
-        [session.userId, "usr_unread"],
+        session.userId,
+        "ses_other_device",
       ),
-    ).resolves.toEqual([session.userId]);
+    ).resolves.toBe(true);
   });
 
   it("rejects a cross-origin WebSocket request", async () => {

@@ -376,6 +376,7 @@ async function targetSubscription(
 ) {
   return createDb(env.DB).select({
     id: pushSubscriptions.id,
+    sessionId: pushSubscriptions.sessionId,
     userId: sessions.userId,
     endpoint: pushSubscriptions.endpoint,
     p256dh: pushSubscriptions.p256dh,
@@ -432,11 +433,12 @@ async function deliverPushJob(
 ) {
   const subscription = await targetSubscription(env, job);
   if (!subscription) return;
-  const suppressed = await mailboxStub(env, job.mailboxId).suppressedPushUserIds(
+  const suppressed = await mailboxStub(env, job.mailboxId).shouldSuppressPush(
     job.messageId,
-    [subscription.userId],
+    subscription.userId,
+    subscription.sessionId,
   );
-  if (suppressed.length) return;
+  if (suppressed) return;
 
   try {
     const delivered = await sendPushNotification(

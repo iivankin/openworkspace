@@ -138,16 +138,20 @@ describe("read-only mailbox access", () => {
 
     const markConversationUnread = await exports.default.fetch(
       new Request(
-        `http://example.test/api/mail/conversations/conv_visible/read?mailboxId=${mailboxId}`,
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${mailboxId}`,
         {
           method: "PATCH",
           headers: { cookie: cookie!, "content-type": "application/json" },
-          body: JSON.stringify({ isRead: false }),
+          body: JSON.stringify({
+            type: "read",
+            conversationIds: ["conv_visible"],
+            isRead: false,
+          }),
         },
       ),
     );
     expect(markConversationUnread.status).toBe(200);
-    await markConversationUnread.json();
+    expect(await markConversationUnread.json()).toMatchObject({ updatedCount: 1 });
 
     const unreadConversation = await exports.default.fetch(
       new Request(
@@ -158,6 +162,57 @@ describe("read-only mailbox access", () => {
     expect(await unreadConversation.json()).toMatchObject({
       messages: [{ id: "msg_visible_incoming", isRead: false }],
     });
+
+    const bulkRead = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "read",
+            conversationIds: ["conv_visible"],
+            isRead: true,
+          }),
+        },
+      ),
+    );
+    expect(bulkRead.status).toBe(200);
+    expect(await bulkRead.json()).toMatchObject({ updatedCount: 1 });
+
+    const bulkTrash = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "update",
+            conversationIds: ["conv_visible"],
+            sourceFolderId: "inbox",
+            update: { mailboxState: "trash" },
+          }),
+        },
+      ),
+    );
+    expect(bulkTrash.status).toBe(200);
+    expect(await bulkTrash.json()).toMatchObject({ updatedCount: 1 });
+
+    const permanentDelete = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "delete_permanently",
+            conversationIds: ["conv_visible"],
+          }),
+        },
+      ),
+    );
+    expect(permanentDelete.status).toBe(403);
+    expect(await mailbox.getConversationSnapshot("conv_visible")).not.toBeNull();
 
     const compose = await exports.default.fetch(
       new Request("http://example.test/api/mail/messages", {

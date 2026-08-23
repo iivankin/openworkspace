@@ -10,6 +10,7 @@ import { AdminPage } from "@/admin/admin-page";
 import { AuthScreen } from "@/auth/auth-screen";
 import { useAuth } from "@/auth/auth-context";
 import { MailboxRealtimeConnections } from "@/mail/mailbox-realtime";
+import { UnreadDocumentIndicator } from "@/mail/unread-document-indicator";
 import {
   SettingsAppearancePage,
   SettingsIndexRedirect,
@@ -57,6 +58,7 @@ export function App() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       {auth.authenticated ? <MailboxRealtimeConnections /> : null}
+      {auth.authenticated ? <UnreadDocumentIndicator /> : null}
       <Routes>
         <Route path="/invite/:token" element={auth.authenticated ? <Navigate to="/" replace /> : <AccessLinkScreen kind="invitation" />} />
         <Route path="/recover/:token" element={auth.authenticated ? <Navigate to="/" replace /> : <AccessLinkScreen kind="recovery" />} />

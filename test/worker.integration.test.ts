@@ -676,10 +676,15 @@ describe("mail worker", () => {
       bodyText: expect.stringContaining("Forwarded message"),
       attachmentsJson: [expect.objectContaining({
         id: "fwd_att_1",
-        r2Key: outboundAttachmentKey,
         filename: "alarm.txt",
       })],
     });
+    const forwardedAttachment = forwardedMessage!.attachmentsJson[0]!;
+    expect(forwardedAttachment.r2Key).not.toBe(outboundAttachmentKey);
+    expect(await env.MAIL_STORAGE.get(outboundAttachmentKey)).not.toBeNull();
+    expect(await env.MAIL_STORAGE.get(forwardedAttachment.r2Key).then(
+      (object) => object?.text(),
+    )).toBe("alarm attachment");
     expect(forwardedMessage?.bodyText).toContain("Outbound alarm body");
 
     const contextResponse = await exports.default.fetch(
@@ -833,11 +838,16 @@ describe("mail worker", () => {
 
     const archiveConversation = await exports.default.fetch(
       new Request(
-        `http://example.test/api/mail/conversations/${inboundMessage!.conversationId}?mailboxId=${personalMailboxId}`,
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${personalMailboxId}`,
         {
           method: "PATCH",
           headers: { cookie: cookie!, "content-type": "application/json" },
-          body: JSON.stringify({ mailboxState: "archive" }),
+          body: JSON.stringify({
+            type: "update",
+            conversationIds: [inboundMessage!.conversationId],
+            sourceFolderId: "inbox",
+            update: { mailboxState: "archive" },
+          }),
         },
       ),
     );
@@ -852,11 +862,16 @@ describe("mail worker", () => {
     expect(await archivedConversation.json()).toMatchObject({ mailboxState: "archive" });
     const restoreConversation = await exports.default.fetch(
       new Request(
-        `http://example.test/api/mail/conversations/${inboundMessage!.conversationId}?mailboxId=${personalMailboxId}`,
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${personalMailboxId}`,
         {
           method: "PATCH",
           headers: { cookie: cookie!, "content-type": "application/json" },
-          body: JSON.stringify({ mailboxState: "active" }),
+          body: JSON.stringify({
+            type: "update",
+            conversationIds: [inboundMessage!.conversationId],
+            sourceFolderId: "archive",
+            update: { mailboxState: "active" },
+          }),
         },
       ),
     );

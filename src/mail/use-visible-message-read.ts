@@ -29,18 +29,20 @@ export function useVisibleMessageRead({
     const target = element.current;
     if (!target) return;
 
-    let visible = false;
+    let intersecting = false;
     let pending = false;
     let attempts = 0;
     let stopped = false;
     let visibleTimer: ReturnType<typeof setTimeout> | undefined;
+    const isVisible = () =>
+      intersecting && document.visibilityState === "visible";
 
     const scheduleRead = (delay: number) => {
       clearTimeout(visibleTimer);
-      if (!visible || pending || stopped) return;
+      if (!isVisible() || pending || stopped) return;
       visibleTimer = setTimeout(async () => {
         visibleTimer = undefined;
-        if (!visible || stopped) return;
+        if (!isVisible() || stopped) return;
         pending = true;
         attempts += 1;
         try {
@@ -54,7 +56,7 @@ export function useVisibleMessageRead({
           if (
             retryable
             && attempts < MAX_READ_ATTEMPTS
-            && visible
+            && isVisible()
             && !stopped
           ) {
             scheduleRead(READ_RETRY_DELAY_MS);
@@ -76,9 +78,9 @@ export function useVisibleMessageRead({
         MIN_VISIBLE_HEIGHT_PX,
         entry.boundingClientRect.height * 0.5,
       );
-      visible = entry.isIntersecting
+      intersecting = entry.isIntersecting
         && entry.intersectionRect.height >= requiredHeight;
-      if (!visible) {
+      if (!isVisible()) {
         clearTimeout(visibleTimer);
         visibleTimer = undefined;
         return;
@@ -89,10 +91,17 @@ export function useVisibleMessageRead({
       threshold: [0, visibilityThreshold],
     });
     observer.observe(target);
+    const handleDocumentVisibility = () => {
+      clearTimeout(visibleTimer);
+      visibleTimer = undefined;
+      if (isVisible() && !pending) scheduleRead(READ_VISIBILITY_DELAY_MS);
+    };
+    document.addEventListener("visibilitychange", handleDocumentVisibility);
 
     return () => {
       stopped = true;
       clearTimeout(visibleTimer);
+      document.removeEventListener("visibilitychange", handleDocumentVisibility);
       observer.disconnect();
     };
   }, [enabled, messageId]);

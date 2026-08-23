@@ -524,7 +524,7 @@ export async function loadComposerUpload(input: {
   };
 }
 
-export async function copyComposerUploadToMessage(input: {
+export async function copyStoredAttachmentToMessage(input: {
   env: Bindings;
   sourceKey: string;
   destinationKey: string;
@@ -532,7 +532,7 @@ export async function copyComposerUploadToMessage(input: {
 }) {
   const source = await input.env.MAIL_STORAGE.get(input.sourceKey);
   if (!source?.body) {
-    throw new UploadValidationError("Attachment upload was not found");
+    throw new UploadValidationError("Attachment was not found");
   }
   await input.env.MAIL_STORAGE.put(input.destinationKey, source.body, {
     httpMetadata: { contentType: input.contentType },

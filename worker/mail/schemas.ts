@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   mailboxStates,
+  MAX_BULK_CONVERSATION_COUNT,
   MAX_COMPOSER_ATTACHMENT_BYTES,
   MAX_COMPOSER_ATTACHMENT_COUNT,
   MAX_MAIL_RECIPIENTS,
@@ -29,6 +30,7 @@ export const conversationListQuerySchema = mailboxQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(50).default(25),
   cursor: z.string().trim().min(1).max(512).optional(),
   search: z.string().trim().max(200).optional(),
+  unreadOnly: z.literal("true").optional(),
 });
 
 export const mailboxStateSchema = z.enum(mailboxStates);
@@ -186,4 +188,39 @@ export const updateConversationSchema = z
   })
   .refine((value) => value.mailboxState !== undefined || value.folderId !== undefined, {
     message: "No changes supplied",
-  });
+  })
+  .refine(
+    (value) =>
+      value.folderId === undefined
+      || value.folderId === null
+      || value.mailboxState === undefined
+      || value.mailboxState === "active",
+    {
+      path: ["mailboxState"],
+      message: "Moving to a custom folder requires the active mailbox state",
+    },
+  );
+
+const bulkConversationIdsSchema = z
+  .array(z.string().trim().min(1).max(255))
+  .min(1)
+  .max(MAX_BULK_CONVERSATION_COUNT)
+  .transform((ids) => [...new Set(ids)]);
+
+export const bulkConversationActionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("read"),
+    conversationIds: bulkConversationIdsSchema,
+    isRead: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("update"),
+    conversationIds: bulkConversationIdsSchema,
+    sourceFolderId: z.string().trim().min(1).max(255),
+    update: updateConversationSchema,
+  }),
+  z.object({
+    type: z.literal("delete_permanently"),
+    conversationIds: bulkConversationIdsSchema,
+  }),
+]);

@@ -22,7 +22,7 @@ import {
 } from "./rfc";
 import type { composeSchema } from "./schemas";
 import {
-  copyComposerUploadToMessage,
+  copyStoredAttachmentToMessage,
   loadComposerUpload,
   loadComposerUploadMetadata,
   UploadValidationError,
@@ -37,7 +37,7 @@ export type OutgoingMessageInput = z.infer<typeof composeSchema> & {
 type PreparedAttachment = StoredAttachment & {
   downloadUrl: string | null;
   sourceUploadId?: string;
-  sourceUploadKey?: string;
+  sourceObjectKey?: string;
 };
 
 export class ComposerAttachmentLimitError extends Error {}
@@ -182,7 +182,7 @@ async function loadPreparedComposerAttachments(input: {
         return {
           id: `att_${index + 1}`,
           sourceUploadId: file.uploadId,
-          sourceUploadKey: upload.r2Key,
+          sourceObjectKey: upload.r2Key,
           r2Key: `${input.storagePrefix}/attachments/att_${index + 1}`,
           filename: upload.filename,
           contentType: upload.contentType,
@@ -210,21 +210,29 @@ function planOutgoingAttachments(input: {
   forwarded: Email | null;
   related: Email | null;
   includeRelatedContext: boolean;
+  storagePrefix?: string;
 }) {
-  // Forwarded files reuse immutable source objects. Their delivery mode and
-  // download tokens are recalculated for the new message.
+  // A persisted forward gets message-owned copies. Preflight has no storage
+  // prefix and only needs attachment metadata for the delivery plan.
   const forwardedAttachments: PreparedAttachment[] = (
     input.forwarded?.attachmentsJson ?? []
-  ).map((file, index) => ({
-    ...file,
-    id: `fwd_att_${index + 1}`,
-    contentId: null,
-    disposition: "attachment",
-    delivery: "attached",
-    downloadTokenHash: null,
-    downloadExpiresAt: null,
-    downloadUrl: null,
-  }));
+  ).map((file, index) => {
+    const id = `fwd_att_${index + 1}`;
+    return {
+      ...file,
+      id,
+      r2Key: input.storagePrefix
+        ? `${input.storagePrefix}/attachments/${id}`
+        : file.r2Key,
+      sourceObjectKey: input.storagePrefix ? file.r2Key : undefined,
+      contentId: null,
+      disposition: "attachment",
+      delivery: "attached",
+      downloadTokenHash: null,
+      downloadExpiresAt: null,
+      downloadUrl: null,
+    };
+  });
   const attachments = [...input.uploaded, ...forwardedAttachments];
   const limitError = composerAttachmentLimitError(attachments);
   if (limitError) throw new ComposerAttachmentLimitError(limitError);
@@ -310,6 +318,7 @@ export async function prepareOutgoingEmail(input: {
     forwarded: input.forwarded,
     related,
     includeRelatedContext: input.includeRelatedContext,
+    storagePrefix,
   });
   const {
     forwardedContent,
@@ -347,17 +356,17 @@ export async function prepareOutgoingEmail(input: {
 
   const storageKeys = [
     ...attachments.flatMap((file) =>
-      file.sourceUploadKey ? [file.r2Key] : []
+      file.sourceObjectKey ? [file.r2Key] : []
     ),
     ...(bodyHtmlR2Key ? [bodyHtmlR2Key] : []),
   ];
   const writes = [
     ...attachments.flatMap((file) => {
-      if (!file.sourceUploadKey) return [];
+      if (!file.sourceObjectKey) return [];
       return [
-        copyComposerUploadToMessage({
+        copyStoredAttachmentToMessage({
           env: input.env,
-          sourceKey: file.sourceUploadKey,
+          sourceKey: file.sourceObjectKey,
           destinationKey: file.r2Key,
           contentType: file.contentType,
         }),
@@ -414,7 +423,7 @@ export async function prepareOutgoingEmail(input: {
       ({
         downloadUrl: _,
         sourceUploadId: __,
-        sourceUploadKey: ___,
+        sourceObjectKey: ___,
         ...file
       }) => file,
     ),
@@ -427,8 +436,8 @@ export async function prepareOutgoingEmail(input: {
   return {
     email,
     externalizedAttachments: linkedIds.size,
-    // Only attempt-scoped objects may be deleted on rollback. Forwarded
-    // attachments reuse immutable source keys and must not be removed.
+    // Every key is owned by this attempt, including forwarded attachment
+    // copies, so rollback cannot remove an object owned by another message.
     storageKeys,
     composerUploadIds: uploaded.flatMap((file) =>
       file.sourceUploadId ? [file.sourceUploadId] : []

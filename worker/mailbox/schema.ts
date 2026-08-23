@@ -56,6 +56,23 @@ export const pendingInbound = sqliteTable(
 );
 
 /**
+ * R2 cleanup is retried independently after a permanent conversation delete.
+ * The row is committed in the same SQLite transaction as the metadata delete,
+ * so a Worker interruption cannot leave untracked message objects behind.
+ */
+export const pendingObjectDeletions = sqliteTable(
+  "pending_object_deletions",
+  {
+    objectKey: text("object_key").primaryKey(),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("pending_object_deletions_next_attempt_idx").on(table.nextAttemptAt),
+  ],
+);
+
+/**
  * One row is one message visible in this Durable Object's mailbox. RFC
  * threading metadata and message content are immutable after insertion.
  */
@@ -200,6 +217,7 @@ export type Email = typeof emails.$inferSelect;
 export type NewEmail = typeof emails.$inferInsert;
 export type EmailReadState = typeof emailReadStates.$inferSelect;
 export type PendingInbound = typeof pendingInbound.$inferSelect;
+export type PendingObjectDeletion = typeof pendingObjectDeletions.$inferSelect;
 export type NewPendingInbound = typeof pendingInbound.$inferInsert;
 export type ConversationRecord = typeof conversations.$inferSelect;
 export type FolderRecord = typeof folders.$inferSelect;

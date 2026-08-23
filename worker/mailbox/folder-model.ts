@@ -12,16 +12,47 @@ export const systemFolderTypes = [
 ] as const;
 export type SystemFolderType = (typeof systemFolderTypes)[number];
 
-export const systemFolderPredicates: Record<SystemFolderType, string> = {
-  inbox: "c.has_incoming = 1 and c.mailbox_state = 'active'",
-  sent: "c.has_outgoing = 1 and c.mailbox_state <> 'trash'",
-  archive: "c.mailbox_state = 'archive'",
-  spam: "c.mailbox_state = 'spam'",
-  trash: "c.mailbox_state = 'trash'",
+function inboxDistributionPredicate(conversationAlias: string) {
+  return `${conversationAlias}.has_incoming = 1 and ${conversationAlias}.mailbox_state = 'active'`;
+}
+
+const systemFolderPredicateBuilders: Record<
+  SystemFolderType,
+  (conversationAlias: string) => string
+> = {
+  inbox: inboxDistributionPredicate,
+  sent: (alias) => `${alias}.has_outgoing = 1 and ${alias}.mailbox_state <> 'trash'`,
+  archive: (alias) => `${alias}.mailbox_state = 'archive'`,
+  spam: (alias) => `${alias}.mailbox_state = 'spam'`,
+  trash: (alias) => `${alias}.mailbox_state = 'trash'`,
 };
 
-export const customFolderVisibilityPredicate =
-  "c.mailbox_state not in ('spam', 'trash')";
+export function systemFolderPredicate(
+  systemType: SystemFolderType,
+  conversationAlias: string,
+) {
+  return systemFolderPredicateBuilders[systemType](conversationAlias);
+}
+
+export function customFolderPredicate(conversationAlias: string) {
+  return inboxDistributionPredicate(conversationAlias);
+}
+
+export function folderAggregateJoinPredicate(
+  folderAlias: string,
+  conversationAlias: string,
+) {
+  const custom = `(
+    ${folderAlias}.kind = 'custom'
+    and ${conversationAlias}.folder_id = ${folderAlias}.id
+    and ${customFolderPredicate(conversationAlias)}
+  )`;
+  const system = systemFolderTypes.map((systemType) => `(
+    ${folderAlias}.system_type = '${systemType}'
+    and ${systemFolderPredicate(systemType, conversationAlias)}
+  )`);
+  return [custom, ...system].join("\n or ");
+}
 
 /**
  * System folders are views over conversations, not stored folder records.

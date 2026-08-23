@@ -6,7 +6,7 @@ test("opens the seeded inbox and reads a message", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
   await expect(page.getByText("The craft behind fast software", { exact: true })).toBeVisible();
 
-  await page.getByText("The craft behind fast software", { exact: true }).click();
+  await page.getByRole("button", { name: "Open The craft behind fast software" }).click();
   await expect(page.getByRole("article").getByRole("heading", { name: "The craft behind fast software" })).toBeVisible();
   await expect(page.getByText("Here are the notes from our design review", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "Delivery status: Delivered" })).toBeVisible();
@@ -73,7 +73,7 @@ test("renders only meaningful sanitized HTML without loading remote images", asy
     });
   });
 
-  await page.getByText("The craft behind fast software", { exact: true }).click();
+  await page.getByRole("button", { name: "Open The craft behind fast software" }).click();
   const frame = page.frameLocator('iframe[title^="HTML body of"]');
   await expect(frame.getByText("482901", { exact: false })).toBeVisible();
   await expect(frame.getByRole("img", { name: "Tracking image" })).toHaveCount(1);
@@ -119,7 +119,7 @@ test("opens outbound delivery details without crashing", async ({ page }, testIn
   test.skip(testInfo.project.name !== "desktop", "Delivery menu behavior is covered once");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByText("The craft behind fast software", { exact: true }).click();
+  await page.getByRole("button", { name: "Open The craft behind fast software" }).click();
 
   const outgoing = page.locator('[data-message-id="msg_demo_07"]');
   await outgoing.getByRole("button", { name: "Delivery status: Delivered" }).click();
@@ -169,7 +169,8 @@ test("admin can edit an existing user and create recovery", async ({ page }, tes
   test.skip(testInfo.project.name !== "desktop", "Desktop administration assertion");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await page.getByRole("button", { name: /^Account and mailboxes/u }).click();
   await page.getByRole("menuitem", { name: "Administration" }).click();
   await expect(page).toHaveURL(/\/admin/u);
   await expect(page.locator("aside")).toBeVisible();
@@ -249,7 +250,9 @@ test("desktop mail uses navbar navigation and a corner composer", async ({ page 
   await expect(page.locator("aside")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Product" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Pitch Decks" })).toBeVisible();
-  const firstConversation = page.getByRole("button", { name: /Karri Saarinen/u });
+  const firstConversation = page.getByRole("button", {
+    name: "Open The craft behind fast software",
+  });
   const inboxBox = await firstConversation.boundingBox();
   expect(inboxBox).not.toBeNull();
   expect(inboxBox!.width).toBeGreaterThan(1150);
@@ -268,10 +271,16 @@ test("shared mailbox reads only visible messages and shows every viewer", async 
   test.skip(testInfo.project.name !== "desktop", "Desktop visibility behavior");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  const mailboxMenuButton = page.getByRole("button", {
+    name: "Account and mailboxes, 3 unread in other mailboxes",
+    exact: true,
+  });
+  await expect(mailboxMenuButton).toBeVisible();
+  await mailboxMenuButton.click();
   const supportMailbox = page.getByRole("menuitem", { name: /Customer care/u });
+  await expect(supportMailbox).toBeVisible();
   await expect(
-    supportMailbox.getByLabel("3 unread conversations"),
+    supportMailbox.getByLabel("3 unread messages"),
   ).toBeVisible();
   await supportMailbox.click();
 
@@ -318,7 +327,7 @@ test("shared mailbox reads only visible messages and shows every viewer", async 
     }
   });
 
-  await page.getByRole("button", { name: /Léa Martin/u }).click();
+  await page.getByRole("button", { name: "Open Shared inbox notifications" }).click();
   const archiveButton = page.getByRole("button", { name: "Archive conversation" });
   await archiveButton.hover();
   await expect(page.locator('[data-slot="tooltip-content"]'))
@@ -353,7 +362,7 @@ test("shared mailbox reads only visible messages and shows every viewer", async 
   });
   expect(loginStatus).toBe(200);
   await mayaPage.goto("/mail/mbx_demo_support?folder=inbox");
-  await mayaPage.getByRole("button", { name: /Léa Martin/u }).click();
+  await mayaPage.getByRole("button", { name: "Open Shared inbox notifications" }).click();
   await expect(
     mayaPage.locator('[data-message-id="msg_demo_10"]')
       .getByText(/Maya Chen/u),
@@ -367,9 +376,13 @@ test("shared mailbox reads only visible messages and shows every viewer", async 
   await page.locator('[data-message-id="msg_demo_11"]').scrollIntoViewIfNeeded();
   await expect.poll(() => readMessageIds.has("msg_demo_11")).toBe(true);
   await page.getByRole("button", { name: "Mark conversation as unread" }).click();
-  const unreadConversation = page.getByRole("button", { name: /Léa Martin/u });
+  const unreadConversation = page.getByRole("button", {
+    name: "Open Shared inbox notifications",
+  });
   await expect(unreadConversation).toBeVisible();
-  await expect(unreadConversation.getByLabel("1 unread messages")).toBeVisible();
+  await expect(
+    unreadConversation.locator("..").getByLabel("1 unread messages"),
+  ).toBeVisible();
 });
 
 test("closes the mailbox composer when switching mailboxes", async ({ page }, testInfo) => {
@@ -381,7 +394,7 @@ test("closes the mailbox composer when switching mailboxes", async ({ page }, te
   const composer = page.getByRole("dialog", { name: "New message" });
   await composer.getByRole("textbox", { name: "Message body" }).fill("Pinned draft");
 
-  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  await page.getByRole("button", { name: /^Account and mailboxes/u }).click();
   await page.getByRole("menuitem", { name: /Customer care/u }).click();
 
   await expect(page).toHaveURL(/\/mail\/mbx_demo_support\?/u);
@@ -530,6 +543,7 @@ test("retries upload finalization without uploading the file again", async ({ pa
   test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   let contentUploads = 0;
@@ -665,6 +679,7 @@ test("keeps an attachment position when preflight changes it into a link", async
   test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   const body = composer.getByRole("textbox", { name: "Message body" });
@@ -871,6 +886,7 @@ test("retries a transient send with the same request id", async ({ page }, testI
   test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await composer.getByRole("textbox", { name: "To recipients" })
@@ -912,6 +928,7 @@ test("cancels final attachment preflight when composer unmounts", async ({ page 
   test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await composer.getByRole("textbox", { name: "To recipients" })
@@ -951,7 +968,7 @@ test("cancels final attachment preflight when composer unmounts", async ({ page 
 
   await composer.getByRole("button", { name: "Send", exact: true }).click();
   await preflightStarted;
-  await page.getByRole("button", { name: "Account and mailboxes" }).click();
+  await page.getByRole("button", { name: /^Account and mailboxes/u }).click();
   await page.getByRole("menuitem", { name: /Customer care/u }).click();
   await expect(composer).toHaveCount(0);
   releasePreflight();
@@ -964,6 +981,7 @@ test("does not restart a retry after composer closes", async ({ page }, testInfo
   test.skip(testInfo.project.name !== "desktop", "Desktop composer lifecycle");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\/mbx_demo_personal/u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   let uploadIntents = 0;
@@ -1030,6 +1048,7 @@ test("shows upload intent failures inside the attachment card", async ({ page },
   test.skip(testInfo.project.name !== "desktop", "Desktop composer interactions");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
   await page.getByRole("button", { name: "Compose" }).click();
   const composer = page.getByRole("dialog", { name: "New message" });
   await page.route("**/api/mail/uploads?**", async (route) => {
@@ -1064,7 +1083,7 @@ test("shows upload intent failures inside the attachment card", async ({ page },
 test("offers Reply and Reply all on a group message", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByText("Your Workers architecture review", { exact: true }).click();
+  await page.getByRole("button", { name: "Open Your Workers architecture review" }).click();
 
   const message = page.locator('[data-message-id="msg_demo_02"]');
   await message.hover();
@@ -1123,22 +1142,134 @@ test("restores an archived conversation to the inbox", async ({ page }, testInfo
   test.skip(testInfo.project.name !== "desktop", "State transition is covered once");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByText("Friday launch checklist", { exact: true }).click();
+  await page.getByRole("button", { name: "Open Friday launch checklist" }).click();
   await page.getByRole("button", { name: "Archive conversation" }).click();
 
   await page.getByRole("tab", { name: /Archive/u }).click();
   await page.getByRole("button", { name: /Friday launch checklist/u }).click();
-  await page.getByRole("button", { name: "Move conversation to inbox" }).click();
+  await page.getByRole("button", { name: "Restore conversation" }).click();
 
   await page.getByRole("tab", { name: /Inbox/u }).click();
   await expect(page.getByText("Friday launch checklist", { exact: true })).toBeVisible();
+});
+
+test("filters unread mail and applies bulk actions to loaded conversations", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Bulk list actions are covered once");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+
+  const unreadButton = page.getByRole("button", { name: "Unread", exact: true });
+  const unreadRequest = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname === "/api/mail/conversations"
+      && url.searchParams.get("unreadOnly") === "true";
+  });
+  await unreadButton.click();
+  await unreadRequest;
+  await expect(unreadButton).toHaveAttribute("aria-pressed", "true");
+
+  await unreadButton.click();
+  await expect(unreadButton).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.getByRole("button", { name: "Open The craft behind fast software" }),
+  ).toBeVisible();
+
+  const loadedCount = await page.getByRole("button", { name: /^Open /u }).count();
+  expect(loadedCount).toBeGreaterThan(1);
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select loaded conversations" }).click();
+  await expect(page.getByText(`${loadedCount} selected`, { exact: true })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Deselect loaded conversations" }).click();
+  await expect(page.getByText("0 selected", { exact: true })).toBeVisible();
+
+  const subjects = [
+    "The craft behind fast software",
+    "Your Workers architecture review",
+  ];
+  for (const subject of subjects) {
+    await page.getByRole("button", { name: `Select ${subject}` }).click();
+  }
+  await expect(page.getByRole("button", { name: "Move selected", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Archive selected" }).click();
+  await expect(page.getByText("2 conversations archived", { exact: true })).toBeVisible();
+  for (const subject of subjects) {
+    await expect(page.getByRole("button", { name: `Open ${subject}` })).toHaveCount(0);
+  }
+
+  await page.getByRole("tab", { name: /Archive/u }).click();
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  for (const subject of subjects) {
+    await page.getByRole("button", { name: `Select ${subject}` }).click();
+  }
+  await page.getByRole("button", { name: "Restore selected" }).click();
+  await expect(page.getByText("2 conversations restored", { exact: true })).toBeVisible();
+
+  await page.getByRole("tab", { name: /Inbox/u }).click();
+  for (const subject of subjects) {
+    await expect(page.getByRole("button", { name: `Open ${subject}` })).toBeVisible();
+  }
+});
+
+test("permanently deletes a selected conversation from Trash", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Destructive bulk action is covered once");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+
+  const subject = `Permanent delete ${Date.now()}`;
+  const created = await page.evaluate(async (messageSubject) => {
+    const response = await fetch("/api/mail/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        requestId: crypto.randomUUID(),
+        mailboxId: "mbx_demo_personal",
+        to: ["delete-test@example.com"],
+        cc: [],
+        bcc: [],
+        subject: messageSubject,
+        bodyText: "Temporary conversation used by the permanent-delete test.",
+        attachments: [],
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return await response.json() as { conversationId: string };
+  }, subject);
+
+  await page.goto("/mail/mbx_demo_personal?folder=sent");
+  await expect(page.getByRole("button", { name: `Open ${subject}` })).toBeVisible();
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.getByRole("button", { name: `Select ${subject}` }).click();
+  await expect(page.getByRole("button", { name: "Move selected", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Move selected to Trash" }).click();
+  await expect(page.getByText("1 conversation moved to Trash", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: `Open ${subject}` })).toHaveCount(0);
+
+  await page.getByRole("tab", { name: /Trash/u }).click();
+  await expect(page.getByRole("button", { name: `Open ${subject}` })).toBeVisible();
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.getByRole("button", { name: `Select ${subject}` }).click();
+  await page.getByRole("button", { name: "Delete selected permanently" }).click();
+  await expect(page.getByRole("heading", { name: "Delete permanently?" })).toBeVisible();
+  await page.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await expect(page.getByText("1 conversation deleted permanently", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: `Open ${subject}` })).toHaveCount(0);
+
+  const deletedStatus = await page.evaluate(async (conversationId) => {
+    const response = await fetch(
+      `/api/mail/conversations/${encodeURIComponent(conversationId)}?mailboxId=mbx_demo_personal`,
+    );
+    return response.status;
+  }, created.conversationId);
+  expect(deletedStatus).toBe(404);
 });
 
 test("opens a forwarded message in the corner composer", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Composer path is covered once");
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByText("The craft behind fast software", { exact: true }).click();
+  await page.getByRole("button", { name: "Open The craft behind fast software" }).click();
 
   const message = page.locator('[data-message-id="msg_demo_01"]');
   await message.hover();
@@ -1154,8 +1285,13 @@ test("opens a forwarded message in the corner composer", async ({ page }, testIn
 test("signs out without leaving stale mailbox state", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();
-  await page.getByRole("button", { name: "Account and mailboxes" }).click();
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+  await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
+  const accountButton = page.getByRole("button", { name: /^Account and mailboxes/u });
+  await accountButton.click();
+  const signOut = page.getByRole("menuitem", { name: "Sign out" });
+  await expect(signOut).toBeVisible();
+  await signOut.click();
 
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Inbox" })).toHaveCount(0);
