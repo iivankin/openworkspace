@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
-import { runDurableObjectAlarm } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { describe, expect, it, vi } from "vitest";
 import { inboundMessageId } from "../worker/mail/inbound";
 import { mailboxStub } from "../worker/mailbox";
 import type { NewEmail } from "../worker/mailbox/schema";
@@ -26,6 +26,174 @@ function incoming(input: {
 }
 
 describe("mailbox conversation index", () => {
+  it("applies successful AI folder and spam decisions before notifications", async () => {
+    const mailboxId = `mbx_ai_success_${crypto.randomUUID()}`;
+    const mailbox = mailboxStub(env, mailboxId);
+    const folder = await mailbox.createFolder("fld_product", "Product");
+    expect(folder.status).toBe("ok");
+    if (folder.status !== "ok") throw new Error("Product folder was not created");
+
+    await env.DB.batch([
+      env.DB.prepare(`
+        insert or ignore into users (id, name, role, status)
+        values ('usr_ai_success_owner', 'AI owner', 'admin', 'active')
+      `),
+      env.DB.prepare(`
+        insert or replace into installations (
+          id, domain, owner_user_id, ai_processing_enabled
+        ) values ('primary', 'example.test', 'usr_ai_success_owner', true)
+      `),
+    ]);
+
+    const deliveries = [{
+      id: `delivery_ai_product_${crypto.randomUUID()}`,
+      subject: "Product launch update",
+      body: "Notes about the upcoming product launch.",
+    }, {
+      id: `delivery_ai_spam_${crypto.randomUUID()}`,
+      subject: "Spam offer",
+      body: "An unsolicited and deceptive promotion.",
+    }];
+    for (const [index, delivery] of deliveries.entries()) {
+      const rawObjectKey = `test/${delivery.id}.eml`;
+      await env.MAIL_STORAGE.put(rawObjectKey, [
+        "From: Sender <sender@example.net>",
+        "To: me@example.test",
+        `Subject: ${delivery.subject}`,
+        `Message-ID: <${delivery.id}@example.net>`,
+        "",
+        delivery.body,
+      ].join("\r\n"));
+      await mailbox.enqueueInbound({
+        id: delivery.id,
+        mailboxId,
+        rawObjectKey,
+        envelopeFrom: "sender@example.net",
+        envelopeTo: "me@example.test",
+        receivedAt: Date.now() + index,
+      });
+    }
+
+    const sendPush = vi.fn(async () => {});
+    const runAi = vi.fn(async (
+      _model: string,
+      request: { messages?: Array<{ content?: string }> },
+    ) => {
+      const isSpam = request.messages?.at(-1)?.content?.includes("Spam offer") ?? false;
+      return {
+        response: {
+          spam: isSpam,
+          spamConfidence: isSpam ? 0.99 : 0.01,
+          folderId: isSpam ? null : folder.folder.id,
+          folderConfidence: isSpam ? 0 : 0.96,
+          reason: isSpam ? "Unsolicited promotion" : "Product discussion",
+        },
+      };
+    });
+
+    await runInDurableObject(mailbox, async (instance) => {
+      type TestMailboxInstance = {
+        alarm(): Promise<void>;
+        bindings: Env;
+      };
+      const target = instance as unknown as TestMailboxInstance;
+      const originalBindings = target.bindings;
+      // The test config omits the always-remote AI binding. Replace bindings
+      // only on this DO instance to exercise successful orchestration locally.
+      target.bindings = {
+        ...originalBindings,
+        AI: { run: runAi },
+        PUSH_NOTIFICATIONS: { send: sendPush },
+      } as unknown as Env;
+      try {
+        await target.alarm();
+        await target.alarm();
+      } finally {
+        target.bindings = originalBindings;
+      }
+    });
+
+    const productMessage = await mailbox.getEmail(
+      inboundMessageId(deliveries[0]!.id),
+    );
+    const spamMessage = await mailbox.getEmail(
+      inboundMessageId(deliveries[1]!.id),
+    );
+    expect(productMessage?.aiClassificationJson).toMatchObject({
+      spam: false,
+      folderId: folder.folder.id,
+    });
+    expect(await mailbox.getConversationSnapshot(productMessage!.conversationId))
+      .toMatchObject({ mailboxState: "active", folderId: folder.folder.id });
+    expect(spamMessage?.aiClassificationJson).toMatchObject({
+      spam: true,
+      folderId: null,
+    });
+    expect(await mailbox.getConversationSnapshot(spamMessage!.conversationId))
+      .toMatchObject({ mailboxState: "spam", folderId: null });
+    expect(runAi).toHaveBeenCalledTimes(2);
+    expect(sendPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps AI mail pending for one retry, then falls back to Inbox", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mailboxId = `mbx_ai_fallback_${crypto.randomUUID()}`;
+    const mailbox = mailboxStub(env, mailboxId);
+    const deliveryId = `delivery_ai_fallback_${crypto.randomUUID()}`;
+    const rawObjectKey = `test/${deliveryId}.eml`;
+    await env.DB.batch([
+      env.DB.prepare(`
+        insert or ignore into users (id, name, role, status)
+        values ('usr_ai_owner', 'AI owner', 'admin', 'active')
+      `),
+      env.DB.prepare(`
+        insert or replace into installations (
+          id, domain, owner_user_id, ai_processing_enabled
+        ) values ('primary', 'example.test', 'usr_ai_owner', true)
+      `),
+    ]);
+    await mailbox.setMailboxAiConfiguration({
+      instructions: "Route product mail to Product.",
+      confidenceThreshold: 75,
+    });
+    await env.MAIL_STORAGE.put(rawObjectKey, [
+      "From: Sender <sender@example.net>",
+      "To: me@example.test",
+      "Subject: AI fallback",
+      `Message-ID: <${deliveryId}@example.net>`,
+      "",
+      "The model is deliberately unavailable in the local test runtime.",
+    ].join("\r\n"));
+    await mailbox.enqueueInbound({
+      id: deliveryId,
+      mailboxId,
+      rawObjectKey,
+      envelopeFrom: "sender@example.net",
+      envelopeTo: "me@example.test",
+      receivedAt: Date.now(),
+    });
+
+    await runDurableObjectAlarm(mailbox);
+    expect(await mailbox.getEmail(inboundMessageId(deliveryId))).toBeNull();
+    await runInDurableObject(mailbox, (_instance, state) => {
+      state.storage.sql.exec(
+        "update pending_inbound set next_attempt_at = 0 where id = ?",
+        deliveryId,
+      );
+    });
+
+    await runDurableObjectAlarm(mailbox);
+    const stored = await mailbox.getEmail(inboundMessageId(deliveryId));
+    expect(stored).toMatchObject({
+      subject: "AI fallback",
+      aiClassificationJson: null,
+    });
+    expect(await mailbox.getConversationSnapshot(stored!.conversationId))
+      .toMatchObject({ mailboxState: "active", folderId: null });
+    expect(errorLog).toHaveBeenCalledTimes(2);
+    errorLog.mockRestore();
+  });
+
   it("searches every email in the selected folder and reactivates replied-to conversations", async () => {
     const mailbox = mailboxStub(env, `mbx_index_${crypto.randomUUID()}`);
     const userId = "usr_index";

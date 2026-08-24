@@ -521,13 +521,26 @@ function MessageMetadata({
         {message.ccAddresses.length > 0 && <><dt className="text-muted-foreground">Cc</dt><dd className="truncate">{message.ccAddresses.join(", ")}</dd></>}
         {message.bccAddresses.length > 0 && <><dt className="text-muted-foreground">Bcc</dt><dd className="truncate">{message.bccAddresses.join(", ")}</dd></>}
         {message.replyToAddresses.length > 0 && <><dt className="text-muted-foreground">Reply-to</dt><dd className="truncate">{message.replyToAddresses.join(", ")}</dd></>}
+        {message.aiClassification && (
+          <>
+            <dt className="text-muted-foreground">AI check</dt>
+            <dd>
+              <span className={message.aiClassification.spam ? "text-destructive" : "text-success"}>
+                {message.aiClassification.spam ? "Spam" : "Passed"}
+              </span>
+              <span className="text-muted-foreground">
+                {` · Spam score ${Math.round(message.aiClassification.spamConfidence * 100)}% · ${message.aiClassification.reason}`}
+              </span>
+            </dd>
+          </>
+        )}
         {message.hasOriginal && mailboxId && (
           <>
             <dt className="text-muted-foreground">Source</dt>
             <dd>
               <a
                 className="inline-flex items-center gap-1 font-medium text-foreground hover:underline"
-                href={`/api/mail/messages/${message.id}/original?mailboxId=${encodeURIComponent(mailboxId)}`}
+                href={`/mail/${encodeURIComponent(mailboxId)}/messages/${encodeURIComponent(message.id)}/original`}
                 target="_blank"
                 rel="noreferrer"
               >

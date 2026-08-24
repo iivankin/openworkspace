@@ -9,6 +9,8 @@ import {
 import { transportStates } from "../../shared/mail";
 import { mailboxStates } from "./folder-model";
 import type {
+  EmailAiClassification,
+  EmailAuthenticationResults,
   MailAddress,
   RecipientDeliveryStatus,
   StoredAttachment,
@@ -45,6 +47,7 @@ export const pendingInbound = sqliteTable(
     envelopeTo: text("envelope_to").notNull(),
     receivedAt: integer("received_at", { mode: "timestamp_ms" }).notNull(),
     attempts: integer("attempts").notNull().default(0),
+    aiAttempts: integer("ai_attempts").notNull().default(0),
     nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }).notNull(),
   },
   (table) => [
@@ -120,6 +123,10 @@ export const emails = sqliteTable(
     quotedText: text("quoted_text"),
     bodyHtmlR2Key: text("body_html_r2_key"),
     rawMimeR2Key: text("raw_mime_r2_key"),
+    authenticationResultsJson: text("authentication_results_json", { mode: "json" })
+      .$type<EmailAuthenticationResults>(),
+    aiClassificationJson: text("ai_classification_json", { mode: "json" })
+      .$type<EmailAiClassification>(),
     attachmentsJson: text("attachments_json", { mode: "json" })
       .$type<StoredAttachment[]>()
       .notNull()
@@ -191,6 +198,16 @@ export const conversations = sqliteTable(
       table.latestEmailId,
     ),
   ],
+);
+
+export const mailboxAiConfiguration = sqliteTable(
+  "mailbox_ai_configuration",
+  {
+    id: text("id").primaryKey(),
+    instructions: text("instructions").notNull().default(""),
+    confidenceThreshold: integer("confidence_threshold").notNull().default(75),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
 );
 
 /**

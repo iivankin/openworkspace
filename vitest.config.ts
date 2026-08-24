@@ -13,7 +13,9 @@ export default defineConfig({
         extractable: true,
       });
       return {
-        wrangler: { configPath: "./wrangler.jsonc" },
+        // Tests intentionally omit the always-remote Workers AI binding. The
+        // classifier itself receives an injected runner in focused unit tests.
+        wrangler: { configPath: "./wrangler.test.jsonc" },
         miniflare: {
           bindings: {
             TEST_MIGRATIONS: await readD1Migrations(path.resolve("drizzle")),
@@ -29,6 +31,9 @@ export default defineConfig({
   ],
   test: {
     include: ["test/**/*.test.ts"],
+    // A single Workers pool is faster and avoids workerd startup contention on
+    // machines with many logical cores.
+    maxWorkers: 1,
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });

@@ -9,6 +9,35 @@ export type MailAddress = {
   name: string | null;
 };
 
+export type EmailAuthenticationResults = {
+  source: "cloudflare";
+  checkedAt: number;
+  eventAt: number;
+  spf: string | null;
+  dkim: string | null;
+  dmarc: string | null;
+  arc: string | null;
+  isSpam: boolean;
+  spamScore: number | null;
+  spamThreshold: number | null;
+};
+
+export type MailboxAiConfiguration = {
+  instructions: string;
+  confidenceThreshold: number;
+};
+
+export type EmailAiClassification = {
+  source: "workers-ai";
+  model: string;
+  processedAt: number;
+  spam: boolean;
+  spamConfidence: number;
+  folderId: string | null;
+  folderConfidence: number;
+  reason: string;
+};
+
 export type StoredAttachment = {
   id: string;
   r2Key: string;
@@ -21,4 +50,3 @@ export type StoredAttachment = {
   downloadTokenHash: string | null;
   downloadExpiresAt: number | null;
 };
-

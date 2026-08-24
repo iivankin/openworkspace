@@ -261,6 +261,7 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
         folder={folder}
         folders={folders}
         hideMobile={selection.active}
+        mailboxId={mailbox?.id}
         onSelect={selectFolder}
       />
 

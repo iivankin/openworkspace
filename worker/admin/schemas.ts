@@ -41,6 +41,10 @@ export const updateMailboxSchema = z.object({
   members: mailboxMembersSchema,
 });
 
+export const globalAiProcessingSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const updateUserSchema = z.object({
   name: z.string().trim().min(2).max(80),
   status: z.enum(["active", "disabled"]).optional(),

@@ -33,6 +33,7 @@ import {
   users,
 } from "../db/schema";
 import type { AppEnv } from "../env";
+import { setGlobalAiProcessingEnabled } from "../ai/configuration";
 import { randomToken, hashToken } from "../lib/crypto";
 import { apiError } from "../lib/http";
 import { createId, emailDomain, normalizeMailboxAddress } from "../lib/ids";
@@ -46,6 +47,7 @@ import {
   createInvitationSchema,
   createMailboxSchema,
   createOidcClientSchema,
+  globalAiProcessingSchema,
   groupInputSchema,
   updateMailboxSchema,
   updateOidcClientSchema,
@@ -144,7 +146,10 @@ export const adminRoutes = new Hono<AppEnv>()
       clientGroupClaims,
     ] = await Promise.all([
       db
-        .select({ domain: installations.domain })
+        .select({
+          domain: installations.domain,
+          aiProcessingEnabled: installations.aiProcessingEnabled,
+        })
         .from(installations)
         .where(eq(installations.id, INSTALLATION_ID))
         .limit(1),
@@ -213,6 +218,7 @@ export const adminRoutes = new Hono<AppEnv>()
     return c.json({
       ok: true as const,
       domain: installation[0]?.domain ?? null,
+      aiProcessingEnabled: installation[0]?.aiProcessingEnabled ?? false,
       users: userRows,
       mailboxes: mailboxRows.map((mailbox) => ({
         ...mailbox,
@@ -231,6 +237,23 @@ export const adminRoutes = new Hono<AppEnv>()
       })),
     });
   })
+  .put(
+    "/ai",
+    zValidator("json", globalAiProcessingSchema),
+    async (c) => {
+      const setting = await setGlobalAiProcessingEnabled(
+        c.env.DB,
+        c.req.valid("json").enabled,
+      );
+      if (!setting) {
+        return apiError(c, 404, "NOT_FOUND", "Installation not found");
+      }
+      return c.json({
+        ok: true as const,
+        enabled: setting.enabled,
+      });
+    },
+  )
   .post(
     "/mailboxes",
     zValidator("json", createMailboxSchema),

@@ -4,6 +4,7 @@ import {
   MAX_BULK_CONVERSATION_COUNT,
   MAX_COMPOSER_ATTACHMENT_BYTES,
   MAX_COMPOSER_ATTACHMENT_COUNT,
+  MAX_CUSTOM_FOLDER_COUNT,
   MAX_MAIL_RECIPIENTS,
   replyActionModes,
 } from "../../shared/mail";
@@ -11,6 +12,28 @@ import { emailSchema } from "../auth/schemas";
 import { dedupeRecipientFields, recipientCount } from "./recipients";
 
 export const folderSchema = z.string().trim().min(1).max(80);
+
+const customFolderNameSchema = z.string().trim().min(1).max(80);
+
+export const createFolderSchema = z.object({
+  name: customFolderNameSchema,
+});
+
+export const renameFolderSchema = createFolderSchema;
+
+export const mailboxAiConfigurationSchema = z.object({
+  instructions: z.string().trim().max(4_000),
+  confidenceThreshold: z.number().int().min(50).max(100),
+});
+
+export const reorderFoldersSchema = z.object({
+  folderIds: z
+    .array(folderSchema)
+    .max(MAX_CUSTOM_FOLDER_COUNT)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: "Folder order contains duplicate ids",
+    }),
+});
 
 export const mailboxQuerySchema = z.object({
   mailboxId: z.string().min(1),

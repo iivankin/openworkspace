@@ -1,13 +1,21 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../drizzle/mailbox/migrations.js";
 import {
+  MAX_CUSTOM_FOLDER_COUNT,
   MAILBOX_REALTIME_UPDATE,
   type MailboxPushJob,
   type MailboxRealtimeClientMessage,
 } from "../../shared/mail";
+import {
+  classifyInboundEmail,
+  EmailAiClassificationError,
+  MAILBOX_AI_MAX_ATTEMPTS,
+  MAILBOX_AI_MODEL,
+} from "../mail/ai-classification";
+import { globalAiProcessingEnabled } from "../ai/configuration";
 import {
   inboundMessageId,
   MissingRawMimeError,
@@ -35,6 +43,7 @@ import {
   emailReadStates,
   emails,
   folders,
+  mailboxAiConfiguration,
   pendingInbound,
   pendingObjectDeletions,
   type Email,
@@ -43,13 +52,19 @@ import {
   type NewFolder,
   type PendingInbound,
 } from "./schema";
-import type { RecipientDeliveryStatus } from "./model";
+import type {
+  EmailAiClassification,
+  EmailAuthenticationResults,
+  MailboxAiConfiguration,
+  RecipientDeliveryStatus,
+} from "./model";
 
 const schema = {
   conversations,
   emailReadStates,
   emails,
   folders,
+  mailboxAiConfiguration,
   pendingInbound,
   pendingObjectDeletions,
 };
@@ -60,6 +75,7 @@ const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
 const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
 const ALARM_WAKE_DELAY_MS = 1_000;
 const PRESENCE_TTL_MS = 60_000;
+const AI_CONFIGURATION_ID = "default";
 
 type MailboxSocketAttachment = {
   userId: string;
@@ -419,7 +435,14 @@ export class MailboxDO extends DurableObject<Env> {
   ) {
     if (announce) this.publishUpdate();
     try {
-      await this.queueIncomingNotification(email);
+      const conversation = this.db
+        .select({ mailboxState: conversations.mailboxState })
+        .from(conversations)
+        .where(eq(conversations.id, email.conversationId))
+        .all()[0];
+      if (conversation?.mailboxState !== "spam") {
+        await this.queueIncomingNotification(email);
+      }
       this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
     } catch (error) {
       this.retryStoredInboundNotification(job, now, error);
@@ -543,6 +566,163 @@ export class MailboxDO extends DurableObject<Env> {
       .where(eq(folders.id, id))
       .all()[0];
     return custom ? { ...custom, kind: "custom", systemType: null } : null;
+  }
+
+  private folderNameTaken(name: string, excludingId?: string) {
+    const normalized = name.toLocaleLowerCase("en-US");
+    return systemFolderDefinitions.some(
+      (folder) => folder.name.toLocaleLowerCase("en-US") === normalized,
+    ) || this.db
+      .select({ id: folders.id, name: folders.name })
+      .from(folders)
+      .all()
+      .some((folder) =>
+        folder.id !== excludingId
+        && folder.name.toLocaleLowerCase("en-US") === normalized
+      );
+  }
+
+  createFolder(id: string, name: string) {
+    const normalizedName = name.trim();
+    if (!normalizedName || normalizedName.length > 80) {
+      return { status: "invalid" as const };
+    }
+    const existing = this.db
+      .select({ id: folders.id, sortOrder: folders.sortOrder })
+      .from(folders)
+      .orderBy(asc(folders.sortOrder), asc(folders.name))
+      .all();
+    if (existing.length >= MAX_CUSTOM_FOLDER_COUNT) {
+      return { status: "limit" as const };
+    }
+    if (this.folderNameTaken(normalizedName)) {
+      return { status: "conflict" as const };
+    }
+    const folder = this.db.transaction((tx) => {
+      const inserted = tx
+        .insert(folders)
+        .values({ id, name: normalizedName, sortOrder: 100 + existing.length })
+        .returning()
+        .all()[0]!;
+      [...existing.map((item) => item.id), id].forEach((folderId, index) => {
+        tx.update(folders)
+          .set({ sortOrder: 100 + index })
+          .where(eq(folders.id, folderId))
+          .run();
+      });
+      return inserted;
+    });
+    this.publishUpdate();
+    return { status: "ok" as const, folder };
+  }
+
+  renameFolder(id: string, name: string) {
+    const normalizedName = name.trim();
+    if (!normalizedName || normalizedName.length > 80) {
+      return { status: "invalid" as const };
+    }
+    if (!this.getFolder(id) || systemFolderDefinitions.some((item) => item.id === id)) {
+      return { status: "not_found" as const };
+    }
+    if (this.folderNameTaken(normalizedName, id)) {
+      return { status: "conflict" as const };
+    }
+    const folder = this.db
+      .update(folders)
+      .set({ name: normalizedName })
+      .where(eq(folders.id, id))
+      .returning()
+      .all()[0]!;
+    this.publishUpdate();
+    return { status: "ok" as const, folder };
+  }
+
+  deleteFolder(id: string) {
+    const deleted = this.db
+      .delete(folders)
+      .where(eq(folders.id, id))
+      .returning({ id: folders.id })
+      .all()[0];
+    if (!deleted) return { status: "not_found" as const };
+    this.publishUpdate();
+    return { status: "ok" as const };
+  }
+
+  reorderFolders(folderIds: string[]) {
+    const existingIds = this.db
+      .select({ id: folders.id })
+      .from(folders)
+      .all()
+      .map((folder) => folder.id);
+    if (
+      folderIds.length !== existingIds.length
+      || new Set(folderIds).size !== folderIds.length
+      || existingIds.some((id) => !folderIds.includes(id))
+    ) {
+      return { status: "conflict" as const };
+    }
+    this.db.transaction((tx) => {
+      folderIds.forEach((id, index) => {
+        tx.update(folders)
+          .set({ sortOrder: 100 + index })
+          .where(eq(folders.id, id))
+          .run();
+      });
+    });
+    this.publishUpdate();
+    return { status: "ok" as const };
+  }
+
+  private aiConfiguration(): MailboxAiConfiguration {
+    const stored = this.db
+      .select()
+      .from(mailboxAiConfiguration)
+      .where(eq(mailboxAiConfiguration.id, AI_CONFIGURATION_ID))
+      .all()[0];
+    return stored
+      ? {
+          instructions: stored.instructions,
+          confidenceThreshold: stored.confidenceThreshold,
+        }
+      : {
+          instructions: "",
+          confidenceThreshold: 75,
+        };
+  }
+
+  async getMailboxAiSettings() {
+    return {
+      configuration: this.aiConfiguration(),
+      globalEnabled: await globalAiProcessingEnabled(this.bindings.DB),
+    };
+  }
+
+  async setMailboxAiConfiguration(configuration: MailboxAiConfiguration) {
+    if (
+      configuration.confidenceThreshold < 50
+      || configuration.confidenceThreshold > 100
+      || configuration.instructions.length > 4_000
+    ) {
+      throw new Error("Invalid mailbox AI configuration");
+    }
+    this.db
+      .insert(mailboxAiConfiguration)
+      .values({
+        id: AI_CONFIGURATION_ID,
+        instructions: configuration.instructions.trim(),
+        confidenceThreshold: configuration.confidenceThreshold,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: mailboxAiConfiguration.id,
+        set: {
+          instructions: configuration.instructions.trim(),
+          confidenceThreshold: configuration.confidenceThreshold,
+          updatedAt: new Date(),
+        },
+      })
+      .run();
+    return this.getMailboxAiSettings();
   }
 
   getEmail(id: string) {
@@ -857,6 +1037,106 @@ export class MailboxDO extends DurableObject<Env> {
     this.db.insert(emails).values(email).onConflictDoNothing().run();
     this.recentParticipantSources = null;
     return this.getEmail(email.id);
+  }
+
+  private async classifyInbound(email: NewEmail) {
+    let enabled: boolean;
+    try {
+      // D1 owns the installation switch. Reading it per delivery avoids a
+      // second cached flag in every mailbox Durable Object.
+      enabled = await globalAiProcessingEnabled(this.bindings.DB);
+    } catch (error) {
+      throw new EmailAiClassificationError(
+        "Could not read the global AI processing setting",
+        { cause: error },
+      );
+    }
+    if (!enabled) return null;
+    const configuration = this.aiConfiguration();
+    const customFolders = this.db
+      .select({ id: folders.id, name: folders.name })
+      .from(folders)
+      .orderBy(asc(folders.sortOrder), asc(folders.name))
+      .all();
+    return classifyInboundEmail({
+      email,
+      folders: customFolders,
+      configuration,
+      run: (request, signal) => this.bindings.AI.run(
+        MAILBOX_AI_MODEL,
+        request,
+        {
+          signal,
+          tags: ["openworkspace:mail-classification"],
+        },
+      ),
+    });
+  }
+
+  private insertClassifiedInboundEmail(
+    email: NewEmail,
+    classification: EmailAiClassification | null,
+  ) {
+    const stored = this.db.transaction((tx) => {
+      const trustedFolder = classification?.folderId
+        ? tx
+            .select({ id: folders.id })
+            .from(folders)
+            .where(eq(folders.id, classification.folderId))
+            .all()[0]
+        : null;
+      const normalizedClassification = classification?.folderId && !trustedFolder
+        ? { ...classification, folderId: null }
+        : classification;
+      const inserted = tx
+        .insert(emails)
+        .values({
+          ...email,
+          aiClassificationJson: normalizedClassification,
+        })
+        .onConflictDoNothing()
+        .returning()
+        .all()[0];
+      if (!inserted) return null;
+
+      if (normalizedClassification?.spam) {
+        tx.update(conversations)
+          .set({ mailboxState: "spam", folderId: null })
+          .where(and(
+            eq(conversations.id, email.conversationId),
+            eq(conversations.mailboxState, "active"),
+          ))
+          .run();
+      } else if (normalizedClassification?.folderId) {
+        tx.update(conversations)
+          .set({ folderId: normalizedClassification.folderId })
+          .where(and(
+            eq(conversations.id, email.conversationId),
+            eq(conversations.mailboxState, "active"),
+            isNull(conversations.folderId),
+          ))
+          .run();
+      }
+      return tx
+        .select()
+        .from(emails)
+        .where(eq(emails.id, inserted.id))
+        .all()[0] ?? null;
+    });
+    this.recentParticipantSources = null;
+    return stored;
+  }
+
+  setEmailAuthenticationResults(
+    emailId: string,
+    results: EmailAuthenticationResults,
+  ) {
+    return this.db
+      .update(emails)
+      .set({ authenticationResultsJson: results })
+      .where(and(eq(emails.id, emailId), eq(emails.direction, "incoming")))
+      .returning({ id: emails.id })
+      .all().length > 0;
   }
 
   async submitOutgoing(email: NewEmail) {
@@ -1233,7 +1513,33 @@ export class MailboxDO extends DurableObject<Env> {
           resolveParent: (inReplyTo, references) =>
             this.resolveParent(inReplyTo, references),
         });
-        const stored = this.insertEmail(email);
+        let classification: EmailAiClassification | null = null;
+        try {
+          classification = await this.classifyInbound(email);
+        } catch (error) {
+          if (!(error instanceof EmailAiClassificationError)) throw error;
+          const aiAttempts = job.aiAttempts + 1;
+          if (aiAttempts < MAILBOX_AI_MAX_ATTEMPTS) {
+            this.db
+              .update(pendingInbound)
+              .set({
+                aiAttempts,
+                nextAttemptAt: new Date(now + retryDelay(aiAttempts)),
+              })
+              .where(eq(pendingInbound.id, job.id))
+              .run();
+            console.error(
+              `Could not classify inbound delivery ${job.id}; retrying`,
+              error,
+            );
+            continue;
+          }
+          console.error(
+            `Could not classify inbound delivery ${job.id}; delivering to Inbox`,
+            error,
+          );
+        }
+        const stored = this.insertClassifiedInboundEmail(email, classification);
         if (!stored) {
           throw new Error("Parsed inbound email was not persisted");
         }

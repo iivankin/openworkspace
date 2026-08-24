@@ -41,6 +41,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, responseJson } from "@/lib/api";
 import { InviteForm, MailboxForm } from "./admin-forms";
+import { GlobalAiProcessing } from "./global-ai-processing";
 import { MailboxAccessEditor } from "./mailbox-access-editor";
 import type {
   AdminMailbox,
@@ -227,11 +228,17 @@ export function AdminPage() {
               />
             )}
             {view === "mailboxes" && (
-              <MailboxList
-                mailboxes={state.data?.mailboxes}
-                loading={state.isLoading}
-                onManage={(id) => go("mailbox", id)}
-              />
+              <div className="max-w-3xl space-y-6">
+                <GlobalAiProcessing
+                  enabled={state.data?.aiProcessingEnabled ?? false}
+                  loading={state.isLoading}
+                />
+                <MailboxList
+                  mailboxes={state.data?.mailboxes}
+                  loading={state.isLoading}
+                  onManage={(id) => go("mailbox", id)}
+                />
+              </div>
             )}
             {view === "sso-applications" && (
               <SsoApplications

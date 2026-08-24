@@ -36,16 +36,24 @@ import {
 import { participantLabels } from "./participants";
 import { buildReplyPlan } from "./reply-plan";
 import {
+  CLOUDFLARE_EMAIL_ANALYTICS_RETENTION_MS,
+  fetchCloudflareEmailAuthentication,
+} from "./email-authentication";
+import {
   attachmentPreflightSchema,
   bulkConversationActionSchema,
   composeSchema,
   conversationListQuerySchema,
+  createFolderSchema,
   createUploadSchema,
   forwardSchema,
+  mailboxAiConfigurationSchema,
   mailboxQuerySchema,
   messageReadSchema,
   recipientSuggestionQuerySchema,
+  renameFolderSchema,
   remoteProxyQuerySchema,
+  reorderFoldersSchema,
   replySchema,
   uploadIdSchema,
 } from "./schemas";
@@ -109,6 +117,7 @@ function toMessageDetail(
     bodyText: email.bodyText,
     quotedText: email.quotedText,
     bodyHtml,
+    aiClassification: email.aiClassificationJson,
     hasOriginal: Boolean(email.rawMimeR2Key),
     attachments: email.attachmentsJson.map((file) => ({
       id: file.id,
@@ -408,6 +417,114 @@ export const mailRoutes = new Hono<AppEnv>()
       })),
     });
   })
+  .get("/mailboxes/:id/ai", async (c) => {
+    const mailboxId = c.req.param("id");
+    if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+      return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+    }
+    return c.json({
+      ok: true as const,
+      settings: await mailboxStub(c.env, mailboxId).getMailboxAiSettings(),
+    });
+  })
+  .put(
+    "/mailboxes/:id/ai",
+    zValidator("json", mailboxAiConfigurationSchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      return c.json({
+        ok: true as const,
+        settings: await mailboxStub(c.env, mailboxId)
+          .setMailboxAiConfiguration(c.req.valid("json")),
+      });
+    },
+  )
+  .post(
+    "/mailboxes/:id/folders",
+    zValidator("json", createFolderSchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const result = await mailboxStub(c.env, mailboxId).createFolder(
+        createId("fld"),
+        c.req.valid("json").name,
+      );
+      if (result.status === "conflict") {
+        return apiError(c, 409, "CONFLICT", "Folder name already exists");
+      }
+      if (result.status === "limit") {
+        return apiError(c, 409, "CONFLICT", "Mailbox folder limit reached");
+      }
+      if (result.status === "invalid") {
+        return apiError(c, 400, "BAD_REQUEST", "Folder name is invalid");
+      }
+      return c.json({ ok: true as const, folder: result.folder }, 201);
+    },
+  )
+  .put(
+    "/mailboxes/:id/folders/order",
+    zValidator("json", reorderFoldersSchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const result = await mailboxStub(c.env, mailboxId).reorderFolders(
+        c.req.valid("json").folderIds,
+      );
+      if (result.status === "conflict") {
+        return apiError(
+          c,
+          409,
+          "CONFLICT",
+          "Folders changed; refresh and try again",
+        );
+      }
+      return c.json({ ok: true as const });
+    },
+  )
+  .patch(
+    "/mailboxes/:id/folders/:folderId",
+    zValidator("json", renameFolderSchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const result = await mailboxStub(c.env, mailboxId).renameFolder(
+        c.req.param("folderId"),
+        c.req.valid("json").name,
+      );
+      if (result.status === "not_found") {
+        return apiError(c, 404, "NOT_FOUND", "Folder not found");
+      }
+      if (result.status === "conflict") {
+        return apiError(c, 409, "CONFLICT", "Folder name already exists");
+      }
+      if (result.status === "invalid") {
+        return apiError(c, 400, "BAD_REQUEST", "Folder name is invalid");
+      }
+      return c.json({ ok: true as const, folder: result.folder });
+    },
+  )
+  .delete("/mailboxes/:id/folders/:folderId", async (c) => {
+    const mailboxId = c.req.param("id");
+    if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+      return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+    }
+    const result = await mailboxStub(c.env, mailboxId).deleteFolder(
+      c.req.param("folderId"),
+    );
+    if (result.status === "not_found") {
+      return apiError(c, 404, "NOT_FOUND", "Folder not found");
+    }
+    return c.json({ ok: true as const });
+  })
   .get("/conversations", zValidator("query", conversationListQuerySchema), async (c) => {
     const query = c.req.valid("query");
     const access = await accessibleMailbox(c.env, c.get("user").id, query.mailboxId, "read");
@@ -639,6 +756,117 @@ export const mailRoutes = new Hono<AppEnv>()
           "BAD_GATEWAY",
           error instanceof Error ? error.message : "Remote content unavailable",
         );
+      }
+    },
+  )
+  .get(
+    "/messages/:messageId/authentication",
+    zValidator("query", mailboxQuerySchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const userId = c.get("user").id;
+      if (!await accessibleMailbox(c.env, userId, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const mailbox = mailboxStub(c.env, mailboxId);
+      const message = await mailbox.getEmail(c.req.param("messageId"));
+      if (!message?.rawMimeR2Key || message.direction !== "incoming") {
+        return apiError(c, 404, "NOT_FOUND", "Original message not found");
+      }
+      const original = {
+        subject: message.subject,
+        from: message.fromJson[0]?.address ?? "unknown@invalid",
+        to: message.toJson.map((recipient) => recipient.address),
+        messageId: message.messageIdHeader,
+        receivedAt: message.timelineAt.toISOString(),
+      };
+      if (message.authenticationResultsJson) {
+        return c.json({
+          ok: true as const,
+          state: "available" as const,
+          original,
+          authentication: message.authenticationResultsJson,
+        });
+      }
+
+      const zoneId = c.env.CLOUDFLARE_ZONE_ID?.trim();
+      const token = c.env.CLOUDFLARE_ANALYTICS_TOKEN?.trim();
+      if (!zoneId || !token) {
+        return c.json({
+          ok: true as const,
+          state: "unavailable" as const,
+          original,
+          reason: "not_configured" as const,
+        });
+      }
+      if (!message.messageIdHeader) {
+        return c.json({
+          ok: true as const,
+          state: "unavailable" as const,
+          original,
+          reason: "missing_message_id" as const,
+        });
+      }
+      if (
+        Date.now() - message.timelineAt.getTime()
+        > CLOUDFLARE_EMAIL_ANALYTICS_RETENTION_MS
+      ) {
+        return c.json({
+          ok: true as const,
+          state: "unavailable" as const,
+          original,
+          reason: "expired" as const,
+        });
+      }
+
+      const limited = await checkRateLimit(c.env.DB, {
+        action: "mail-email-authentication",
+        identifier: `${userId}:${message.id}`,
+        limit: 4,
+        windowMs: 60_000,
+      });
+      if (!limited.allowed) {
+        return c.json({
+          ok: true as const,
+          state: "unavailable" as const,
+          original,
+          reason: "rate_limited" as const,
+        });
+      }
+
+      try {
+        const authentication = await fetchCloudflareEmailAuthentication({
+          zoneId,
+          token,
+          messageId: message.messageIdHeader,
+          timelineAt: message.timelineAt.getTime(),
+        });
+        if (!authentication) {
+          return c.json({
+            ok: true as const,
+            state: "unavailable" as const,
+            original,
+            reason: "not_found" as const,
+          });
+        }
+        await mailbox.setEmailAuthenticationResults(message.id, authentication);
+        return c.json({
+          ok: true as const,
+          state: "available" as const,
+          original,
+          authentication,
+        });
+      } catch (error) {
+        console.error(
+          `Could not load Cloudflare authentication for ${message.id}`,
+          error,
+        );
+        return c.json({
+          ok: true as const,
+          state: "unavailable" as const,
+          original,
+          reason: "request_failed" as const,
+        });
       }
     },
   )

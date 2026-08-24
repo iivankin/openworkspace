@@ -75,6 +75,7 @@ export type MailboxPushJob = MailboxPushJobBase & (
 export const MAX_COMPOSER_ATTACHMENT_BYTES = 500_000_000;
 export const MAX_COMPOSER_ATTACHMENT_COUNT = 10;
 export const MAX_BULK_CONVERSATION_COUNT = 500;
+export const MAX_CUSTOM_FOLDER_COUNT = 100;
 export const MAX_MAIL_RECIPIENTS = 50;
 export const EMAIL_SERVICE_MAX_BYTES = 5 * 1024 * 1024;
 export const MIME_FIXED_OVERHEAD_BYTES = 128 * 1024;

@@ -1,16 +1,9 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "openworkspace",
+  "name": "openworkspace-test",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": {
-    "enabled": true
-  },
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/.well-known/*", "/oauth/*"]
-  },
   "durable_objects": {
     "bindings": [
       {
@@ -28,21 +21,19 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openworkspace",
+      "database_name": "openworkspace-test",
+      "database_id": "local-test",
       "migrations_dir": "drizzle"
     }
   ],
   "r2_buckets": [
     {
       "binding": "MAIL_STORAGE",
-      "bucket_name": "openworkspace"
+      "bucket_name": "openworkspace-test"
     }
   ],
   "images": {
     "binding": "IMAGES"
-  },
-  "ai": {
-    "binding": "AI"
   },
   "send_email": [
     {
@@ -53,21 +44,15 @@
     "producers": [
       {
         "binding": "PUSH_NOTIFICATIONS",
-        "queue": "openworkspace-push-notifications"
+        "queue": "openworkspace-push-notifications-test"
       }
     ],
     "consumers": [
       {
-        "queue": "openworkspace-delivery-events",
-        "max_batch_size": 10,
-        "max_batch_timeout": 5,
-        "max_retries": 5
+        "queue": "openworkspace-delivery-events-test"
       },
       {
-        "queue": "openworkspace-push-notifications",
-        "max_batch_size": 10,
-        "max_batch_timeout": 2,
-        "max_retries": 5
+        "queue": "openworkspace-push-notifications-test"
       }
     ]
   },

@@ -68,6 +68,85 @@ describe("mail worker", () => {
       ],
     });
     const personalMailboxId = mailboxBody.mailboxes[0]!.id;
+    const adminState = await exports.default.fetch(
+      new Request("http://example.test/api/admin/state", {
+        headers: { cookie: cookie! },
+      }),
+    );
+    expect(await adminState.json()).toMatchObject({
+      ok: true,
+      aiProcessingEnabled: false,
+    });
+    const enableGlobalAi = await exports.default.fetch(
+      new Request("http://example.test/api/admin/ai", {
+        method: "PUT",
+        headers: {
+          cookie: cookie!,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+    expect(await enableGlobalAi.json()).toMatchObject({
+      ok: true,
+      enabled: true,
+    });
+    const defaultAiSettings = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${personalMailboxId}/ai`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    expect(await defaultAiSettings.json()).toMatchObject({
+      ok: true,
+      settings: {
+        globalEnabled: true,
+        configuration: {
+          instructions: "",
+          confidenceThreshold: 75,
+        },
+      },
+    });
+    const updateAiSettings = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${personalMailboxId}/ai`,
+        {
+          method: "PUT",
+          headers: {
+            cookie: cookie!,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            instructions: "Prefer Product for launch discussions.",
+            confidenceThreshold: 80,
+          }),
+        },
+      ),
+    );
+    expect(await updateAiSettings.json()).toMatchObject({
+      ok: true,
+      settings: {
+        globalEnabled: true,
+        configuration: {
+          instructions: "Prefer Product for launch discussions.",
+          confidenceThreshold: 80,
+        },
+      },
+    });
+    const disableGlobalAi = await exports.default.fetch(
+      new Request("http://example.test/api/admin/ai", {
+        method: "PUT",
+        headers: {
+          cookie: cookie!,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+    expect(await disableGlobalAi.json()).toMatchObject({
+      ok: true,
+      enabled: false,
+    });
     const foldersResponse = await exports.default.fetch(
       new Request(
         `http://example.test/api/mail/mailboxes/${personalMailboxId}/folders`,
@@ -319,6 +398,24 @@ describe("mail worker", () => {
     expect(original.headers.get("content-type")).toContain("text/plain");
     expect(original.headers.get("content-disposition")).toContain("inline");
     expect(await original.text()).toBe(inboundRaw);
+    const authentication = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/messages/${inboundMessage!.id}/authentication?mailboxId=${personalMailboxId}`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    expect(authentication.status).toBe(200);
+    expect(await authentication.json()).toMatchObject({
+      ok: true,
+      state: "unavailable",
+      reason: "not_configured",
+      original: {
+        subject: "Alarm inbound",
+        from: "alarm@example.net",
+        to: ["admin@example.test"],
+        messageId: "<alarm-inbound@example.net>",
+      },
+    });
     await expect(mailbox.enqueueInbound({
       id: inboundDeliveryId,
       mailboxId: personalMailboxId,

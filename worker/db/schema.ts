@@ -46,6 +46,9 @@ export const users = sqliteTable(
 export const installations = sqliteTable("installations", {
   id: text("id").primaryKey(),
   domain: text("domain").notNull(),
+  aiProcessingEnabled: integer("ai_processing_enabled", { mode: "boolean" })
+    .notNull()
+    .default(false),
   ownerUserId: text("owner_user_id")
     .notNull()
     .references(() => users.id, { onDelete: "restrict" }),

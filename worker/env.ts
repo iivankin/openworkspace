@@ -1,4 +1,5 @@
 import type { User } from "./db/schema";
+import type { CloudflareEmailAnalyticsBindings } from "./mail/email-authentication";
 
 export type SessionUser = Pick<
   User,
@@ -25,7 +26,11 @@ export type PushBindings = {
 };
 
 export type AppEnv = {
-  Bindings: Env & OidcBindings & R2S3Bindings & PushBindings;
+  Bindings: Env
+    & CloudflareEmailAnalyticsBindings
+    & OidcBindings
+    & R2S3Bindings
+    & PushBindings;
   Variables: {
     user: SessionUser;
     sessionId: string;

@@ -34,6 +34,7 @@
       "Durable Objects",
       "R2",
       "Images",
+      "Workers AI",
       "Email Service",
       "Queues"
     ],
@@ -62,8 +63,17 @@
       "IMAGES": {
         "description": "Cloudflare Images stores profile avatars. Delivery URLs use imagedelivery.net with a public variant."
       },
+      "AI": {
+        "description": "Workers AI optionally checks incoming messages for spam and routes them to mailbox folders before notifications are sent."
+      },
       "EMAIL": {
         "description": "Email Service sends outbound mail. Onboard the sending domain after deployment."
+      },
+      "CLOUDFLARE_ZONE_ID": {
+        "description": "Optional. Zone id used to show Cloudflare SPF, DKIM, DMARC, and spam results in Show original."
+      },
+      "CLOUDFLARE_ANALYTICS_TOKEN": {
+        "description": "Optional secret. Cloudflare API token with Analytics Read for the mail zone."
       },
       "PUSH_NOTIFICATIONS": {
         "description": "Queue for Web Push delivery after incoming mail is committed."

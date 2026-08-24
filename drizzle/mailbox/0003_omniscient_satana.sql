@@ -1,0 +1,1 @@
+ALTER TABLE `emails` ADD `authentication_results_json` text;

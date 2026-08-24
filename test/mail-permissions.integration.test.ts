@@ -100,6 +100,141 @@ describe("read-only mailbox access", () => {
       conversations: [{ conversationId: "conv_visible" }],
     });
 
+    const updateAiRules = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/ai`,
+        {
+          method: "PUT",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            instructions: "Route urgent customer reports to Support.",
+            confidenceThreshold: 85,
+          }),
+        },
+      ),
+    );
+    expect(updateAiRules.status).toBe(200);
+    expect(await updateAiRules.json()).toMatchObject({
+      settings: {
+        globalEnabled: false,
+        configuration: {
+          instructions: "Route urgent customer reports to Support.",
+          confidenceThreshold: 85,
+        },
+      },
+    });
+
+    const createFirstFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders`,
+        {
+          method: "POST",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ name: "Product" }),
+        },
+      ),
+    );
+    expect(createFirstFolder.status).toBe(201);
+    const firstFolder = await createFirstFolder.json<{ folder: { id: string } }>();
+    const createSecondFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders`,
+        {
+          method: "POST",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ name: "Customers" }),
+        },
+      ),
+    );
+    expect(createSecondFolder.status).toBe(201);
+    const secondFolder = await createSecondFolder.json<{ folder: { id: string } }>();
+
+    const reservedFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders`,
+        {
+          method: "POST",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ name: "inbox" }),
+        },
+      ),
+    );
+    expect(reservedFolder.status).toBe(409);
+    await reservedFolder.json();
+
+    const renameFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders/${firstFolder.folder.id}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({ name: "Launch" }),
+        },
+      ),
+    );
+    expect(renameFolder.status).toBe(200);
+    await renameFolder.json();
+
+    const reorderFolders = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders/order`,
+        {
+          method: "PUT",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            folderIds: [secondFolder.folder.id, firstFolder.folder.id],
+          }),
+        },
+      ),
+    );
+    expect(reorderFolders.status).toBe(200);
+    await reorderFolders.json();
+    const reorderedFolders = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders`,
+        { headers: { cookie: cookie! } },
+      ),
+    );
+    const reorderedBody = await reorderedFolders.json<{
+      folders: Array<{ id: string; name: string; kind: string }>;
+    }>();
+    expect(
+      reorderedBody.folders
+        .filter((folder) => folder.kind === "custom")
+        .map((folder) => folder.name),
+    ).toEqual(["Customers", "Launch"]);
+
+    const moveToFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/conversations/bulk?mailboxId=${mailboxId}`,
+        {
+          method: "PATCH",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "update",
+            conversationIds: ["conv_visible"],
+            sourceFolderId: "inbox",
+            update: {
+              mailboxState: "active",
+              folderId: firstFolder.folder.id,
+            },
+          }),
+        },
+      ),
+    );
+    expect(moveToFolder.status).toBe(200);
+    await moveToFolder.json();
+    const deleteFolder = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders/${firstFolder.folder.id}`,
+        { method: "DELETE", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(deleteFolder.status).toBe(200);
+    await deleteFolder.json();
+    expect(await mailbox.getConversationSnapshot("conv_visible"))
+      .toMatchObject({ mailboxState: "active", folderId: null });
+
     const conversation = await exports.default.fetch(
       new Request(
         `http://example.test/api/mail/conversations/conv_visible?mailboxId=${mailboxId}`,

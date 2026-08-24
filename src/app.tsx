@@ -25,6 +25,11 @@ const AccessLinkScreen = lazy(() =>
 const MailShell = lazy(() =>
   import("@/mail/mail-shell").then((module) => ({ default: module.MailShell })),
 );
+const OriginalMessagePage = lazy(() =>
+  import("@/mail/original-message-page").then((module) => ({
+    default: module.OriginalMessagePage,
+  })),
+);
 const OidcConsentScreen = lazy(() =>
   import("@/auth/oidc-consent-screen").then((module) => ({
     default: module.OidcConsentScreen,
@@ -54,6 +59,9 @@ export function App() {
   const auth = useAuth();
   if (auth.loading) return <LoadingScreen />;
   const mail = auth.authenticated ? <MailboxRoute /> : <AuthScreen />;
+  const originalMessage = auth.authenticated
+    ? <OriginalMessagePage />
+    : <Navigate to="/" replace />;
   const settings = auth.authenticated ? <SettingsShell /> : <Navigate to="/" replace />;
   return (
     <Suspense fallback={<LoadingScreen />}>
@@ -74,6 +82,10 @@ export function App() {
         </Route>
         <Route path="/" element={mail} />
         <Route path="/mail/:mailboxId" element={mail} />
+        <Route
+          path="/mail/:mailboxId/messages/:messageId/original"
+          element={originalMessage}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
