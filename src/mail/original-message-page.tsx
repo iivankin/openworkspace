@@ -40,11 +40,13 @@ function verdictTone(value: string | null) {
 function AuthenticationRow({
   label,
   value,
+  displayValue,
   detail,
   href,
 }: {
   label: string;
   value: string | null;
+  displayValue?: string;
   detail?: string;
   href: string;
 }) {
@@ -53,7 +55,7 @@ function AuthenticationRow({
       <dt className="font-medium text-muted-foreground">{label}</dt>
       <dd className="min-w-0">
         <span className={cn("font-semibold tracking-wide", verdictTone(value))}>
-          {value?.toLocaleUpperCase() ?? "UNAVAILABLE"}
+          {displayValue ?? value?.toLocaleUpperCase() ?? "UNAVAILABLE"}
         </span>
         {detail ? <span className="ml-2 text-muted-foreground">{detail}</span> : null}
       </dd>
@@ -256,6 +258,8 @@ export function OriginalMessagePage() {
               <AuthenticationRow
                 label="DMARC"
                 value={authentication.dmarc}
+                displayValue={authentication.dmarc === "none" ? "POLICY NONE" : undefined}
+                detail={authentication.dmarc === "none" ? "Monitoring only" : undefined}
                 href={`${AUTHENTICATION_DOCS}#dmarc-domain-based-message-authentication-reporting--conformance`}
               />
               <AuthenticationRow
