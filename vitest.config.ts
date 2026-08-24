@@ -1,4 +1,5 @@
 import path from "node:path";
+import { generateVapidKeys } from "@mmmike/web-push/vapid";
 import { exportJWK, generateKeyPair } from "jose";
 import {
   cloudflareTest,
@@ -12,6 +13,7 @@ export default defineConfig({
       const { privateKey } = await generateKeyPair("RS256", {
         extractable: true,
       });
+      const vapid = await generateVapidKeys();
       return {
         // Tests intentionally omit the always-remote Workers AI binding. The
         // classifier itself receives an injected runner in focused unit tests.
@@ -24,6 +26,9 @@ export default defineConfig({
             OIDC_SIGNING_PRIVATE_JWK: JSON.stringify(
               await exportJWK(privateKey),
             ),
+            VAPID_PUBLIC_KEY: vapid.publicKey,
+            VAPID_PRIVATE_KEY: vapid.privateKey,
+            VAPID_SUBJECT: "mailto:test@example.test",
           },
         },
       };

@@ -1,6 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import type { MailboxPushJob } from "../shared/mail";
+import type { PushBindings } from "../worker/env";
 import { consumePushNotifications } from "../worker/mail/push-notifications";
 
 function queueBatch(body: unknown) {
@@ -33,7 +34,7 @@ function queueBatch(body: unknown) {
 
 function envWithQueue(
   sendBatch: (messages: MessageSendRequest<MailboxPushJob>[]) => Promise<void>,
-  vapid: Partial<Pick<Env, "VAPID_PUBLIC_KEY" | "VAPID_PRIVATE_KEY" | "VAPID_SUBJECT">> = {},
+  vapid: PushBindings = {},
 ) {
   return {
     DB: env.DB,
@@ -42,7 +43,7 @@ function envWithQueue(
     VAPID_PUBLIC_KEY: vapid.VAPID_PUBLIC_KEY ?? env.VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY: vapid.VAPID_PRIVATE_KEY ?? env.VAPID_PRIVATE_KEY,
     VAPID_SUBJECT: vapid.VAPID_SUBJECT ?? env.VAPID_SUBJECT,
-  } as unknown as Env;
+  } as unknown as Env & PushBindings;
 }
 
 async function registerPushTarget() {
