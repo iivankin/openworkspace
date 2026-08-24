@@ -6,6 +6,10 @@ export type SessionUser = Pick<
   "id" | "name" | "avatarUrl" | "role" | "status"
 >;
 
+export type AuthBindings = {
+  ALLOW_MOCK_AUTH?: string;
+};
+
 export type OidcBindings = {
   OIDC_ISSUER?: string;
   OIDC_SIGNING_PRIVATE_JWK?: string;
@@ -27,6 +31,7 @@ export type PushBindings = {
 
 export type AppEnv = {
   Bindings: Env
+    & AuthBindings
     & CloudflareEmailAnalyticsBindings
     & OidcBindings
     & R2S3Bindings

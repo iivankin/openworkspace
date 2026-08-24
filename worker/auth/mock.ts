@@ -21,7 +21,7 @@ import {
   clearLoginTransactionCookie,
 } from "../oidc/transaction";
 
-function assertMockEnabled(c: { env: Env }) {
+function assertMockEnabled(c: { env: AppEnv["Bindings"] }) {
   return c.env.ALLOW_MOCK_AUTH === "true";
 }
 
