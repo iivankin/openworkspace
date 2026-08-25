@@ -8,6 +8,7 @@ import type { Database } from "../db/client";
 import {
   accessLinkClaims,
   accessLinks,
+  accountApiTokens,
   installations,
   mailboxes,
   passkeyCredentials,
@@ -247,6 +248,9 @@ export async function finishAccessLinkRegistration(
         .delete(passkeyCredentials)
         .where(eq(passkeyCredentials.userId, challenge.userId)),
       db.delete(sessions).where(eq(sessions.userId, challenge.userId)),
+      db
+        .delete(accountApiTokens)
+        .where(eq(accountApiTokens.userId, challenge.userId)),
       insertCredential,
       consumeLink,
     ] as const);

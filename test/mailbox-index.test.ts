@@ -26,6 +26,47 @@ function incoming(input: {
 }
 
 describe("mailbox conversation index", () => {
+  it("paginates conversation messages newest-first without losing full-thread counts", async () => {
+    const mailbox = mailboxStub(env, `mbx_message_pages_${crypto.randomUUID()}`);
+    const conversationId = "conv_message_pages";
+    const messages = Array.from({ length: 30 }, (_, index) => incoming({
+      id: `msg_page_${String(index).padStart(2, "0")}`,
+      conversationId,
+      timelineAt: new Date(1_700_000_000_000 + index),
+      bodyText: `Message ${index}`,
+    }));
+    await mailbox.seedMailbox([], messages);
+    await mailbox.setMessageRead("usr_message_pages", messages[0]!.id, true);
+
+    const first = await mailbox.getConversationPageSnapshot(
+      conversationId,
+      "usr_message_pages",
+      10,
+      null,
+    );
+    expect(first).toMatchObject({
+      messageCount: 30,
+      unreadCount: 29,
+      hasIncoming: true,
+    });
+    expect(first?.messages.map((message) => message.id)).toEqual(
+      messages.slice(20).map((message) => message.id),
+    );
+    expect(first?.next).toBeTruthy();
+
+    const second = await mailbox.getConversationPageSnapshot(
+      conversationId,
+      "usr_message_pages",
+      10,
+      first!.next,
+    );
+    expect(second?.messages.map((message) => message.id)).toEqual(
+      messages.slice(10, 20).map((message) => message.id),
+    );
+    expect(second?.messageCount).toBe(30);
+    expect(second?.unreadCount).toBe(29);
+  });
+
   it("applies successful AI folder and spam decisions before notifications", async () => {
     const mailboxId = `mbx_ai_success_${crypto.randomUUID()}`;
     const mailbox = mailboxStub(env, mailboxId);

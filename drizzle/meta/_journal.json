@@ -36,6 +36,20 @@
       "when": 1787526463672,
       "tag": "0004_superb_yellowjacket",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1787576607154,
+      "tag": "0005_pink_bloodstorm",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787591941682,
+      "tag": "0006_colorful_nocturne",
+      "breakpoints": true
     }
   ]
 }

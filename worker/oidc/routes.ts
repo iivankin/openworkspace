@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { oidcScopes } from "../../shared/oidc";
-import { requireAuth } from "../auth/middleware";
+import { requireSessionAuth } from "../auth/middleware";
 import {
   destroySession,
   readSessionFromContext,
@@ -631,7 +631,7 @@ export const oidcRoutes = new Hono<AppEnv>()
   });
 
 export const oidcLogoutRoutes = new Hono<AppEnv>()
-  .use("*", requireAuth)
+  .use("*", requireSessionAuth)
   .post(
     "/",
     zValidator(
@@ -758,7 +758,7 @@ async function resolveLogoutRequest(
 }
 
 export const oidcConsentRoutes = new Hono<AppEnv>()
-  .use("*", requireAuth)
+  .use("*", requireSessionAuth)
   .get("/:id", async (c) => {
     try {
       const request = await getAuthorizationRequest(

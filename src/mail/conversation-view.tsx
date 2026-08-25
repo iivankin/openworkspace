@@ -4,10 +4,12 @@ import {
   ArrowLeft,
   CircleAlert,
   ChevronDown,
+  ChevronUp,
   Download,
   FileText,
   Forward,
   Inbox,
+  LoaderCircle,
   Mail,
   MailOpen,
   RotateCw,
@@ -61,6 +63,10 @@ type ReplySelection = {
 
 export function ConversationView({
   messages,
+  messageCount,
+  hasOlderMessages,
+  loadingOlder,
+  olderMessagesError,
   loading,
   error,
   mailbox,
@@ -68,6 +74,7 @@ export function ConversationView({
   folderName,
   sharedActionPending,
   onRetry,
+  onLoadOlder,
   onBack,
   onArchive,
   onRestore,
@@ -78,6 +85,10 @@ export function ConversationView({
   onOpenConversation,
 }: {
   messages: MessageDetail[];
+  messageCount: number;
+  hasOlderMessages: boolean;
+  loadingOlder: boolean;
+  olderMessagesError: boolean;
   loading: boolean;
   error?: string;
   mailbox?: Mailbox;
@@ -85,6 +96,7 @@ export function ConversationView({
   folderName: string;
   sharedActionPending: boolean;
   onRetry: () => void;
+  onLoadOlder: () => void;
   onBack: () => void;
   onArchive: () => void;
   onRestore: () => void;
@@ -218,8 +230,8 @@ export function ConversationView({
             </ConversationToolbarButton>
           ) : null}
           <span className="ml-auto hidden truncate pl-4 text-xs text-muted-foreground sm:block">
-            {folderName} · {messages.length}{" "}
-            {messages.length === 1 ? "message" : "messages"}
+            {folderName} · {messageCount}{" "}
+            {messageCount === 1 ? "message" : "messages"}
           </span>
         </header>
       </TooltipProvider>
@@ -227,12 +239,29 @@ export function ConversationView({
       <div className="mx-auto max-w-4xl py-8 sm:py-12">
         <div className="mb-9 border-b border-border/70 pb-7">
           <p className="text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
-            {messages.length} {messages.length === 1 ? "message" : "messages"}
+            {messageCount} {messageCount === 1 ? "message" : "messages"}
           </p>
           <h1 className="mt-2.5 font-display text-[1.75rem] leading-[1.15] font-semibold text-balance sm:text-[2.25rem]">
             {conversationSubject}
           </h1>
         </div>
+
+        {hasOlderMessages ? (
+          <div className="mb-6 flex justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={loadingOlder}
+              onClick={onLoadOlder}
+            >
+              {loadingOlder
+                ? <LoaderCircle className="animate-spin" />
+                : <ChevronUp />}
+              {olderMessagesError ? "Retry earlier messages" : "Load earlier messages"}
+            </Button>
+          </div>
+        ) : null}
 
         <BubbleGroup className="gap-1 pb-3">
           {messages.map((message, index) => {

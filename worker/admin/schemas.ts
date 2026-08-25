@@ -46,9 +46,15 @@ export const globalAiProcessingSchema = z.object({
 });
 
 export const updateUserSchema = z.object({
-  name: z.string().trim().min(2).max(80),
+  name: z.string().trim().min(2).max(80).optional(),
   status: z.enum(["active", "disabled"]).optional(),
-});
+  role: z.enum(["admin", "member"]).optional(),
+}).refine(
+  (input) => input.name !== undefined
+    || input.status !== undefined
+    || input.role !== undefined,
+  "Provide at least one user change",
+);
 
 const uniqueStrings = <T extends z.ZodType<string>>(schema: T, max = 20) =>
   z.array(schema).max(max).refine(

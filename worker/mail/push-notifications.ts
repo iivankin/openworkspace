@@ -12,7 +12,7 @@ import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { MailboxPushJob } from "../../shared/mail";
-import { requireAuth } from "../auth/middleware";
+import { requireSessionAuth } from "../auth/middleware";
 import { createDb } from "../db/client";
 import {
   mailboxMembers,
@@ -179,7 +179,7 @@ function pushConfiguration(env: PushBindings) {
 }
 
 export const pushNotificationRoutes = new Hono<AppEnv>()
-  .use("*", requireAuth)
+  .use("*", requireSessionAuth)
   .get("/config", async (c) => {
     const status = await pushConfiguration(c.env);
     return c.json({

@@ -12,6 +12,7 @@ import {
   UserPlus,
   Users,
   UsersRound,
+  Webhook,
 } from "lucide-react";
 import { Fragment, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -54,12 +55,14 @@ import type {
 import { UserAccessEditor } from "./user-access-editor";
 import { GroupsManager } from "./groups-manager";
 import { SsoApplications } from "./sso-applications";
+import { WebhooksManager } from "./webhooks-manager";
 
 type AdminView =
   | "people"
   | "mailboxes"
   | "sso-applications"
   | "groups"
+  | "webhooks"
   | "invite"
   | "new-mailbox"
   | "user"
@@ -69,6 +72,7 @@ type AdminSection =
   | "mailboxes"
   | "sso-applications"
   | "groups"
+  | "webhooks"
   | "invite"
   | "new-mailbox";
 
@@ -82,6 +86,7 @@ const adminSections: Array<{
   { id: "mailboxes", label: "Mailboxes", Icon: Settings2 },
   { id: "sso-applications", label: "SSO applications", Icon: KeyRound, separatorBefore: true },
   { id: "groups", label: "Identity groups", Icon: UsersRound },
+  { id: "webhooks", label: "Webhooks", Icon: Webhook },
   { id: "invite", label: "Invite person", Icon: UserPlus, separatorBefore: true },
   { id: "new-mailbox", label: "New shared mailbox", Icon: MailPlus },
 ];
@@ -91,6 +96,7 @@ const viewCopy: Record<AdminView, { title: string; description: string }> = {
   mailboxes: { title: "Mailboxes", description: "Personal and shared addresses provisioned for this workspace." },
   "sso-applications": { title: "SSO applications", description: "OIDC clients, callbacks, user assignments, and released claims." },
   groups: { title: "Identity groups", description: "Reusable memberships exposed to approved OIDC applications." },
+  webhooks: { title: "Webhooks", description: "Signed account events delivered to external systems." },
   invite: { title: "Invite person", description: "Create a personal mailbox and a one-time registration link." },
   "new-mailbox": { title: "New shared mailbox", description: "Choose the address and exactly who can read or send from it." },
   user: { title: "Person", description: "Profile details and passkey recovery." },
@@ -255,6 +261,7 @@ export function AdminPage() {
                 loading={state.isLoading}
               />
             )}
+            {view === "webhooks" && <WebhooksManager />}
             {view === "invite" && (
               <div className="max-w-3xl">
                 {state.data?.domain ? (

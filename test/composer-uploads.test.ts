@@ -5,6 +5,7 @@ import {
   composerUploadKey,
   composerUploadMetaKey,
   createComposerUploadIntent,
+  DirectUploadUnavailableError,
   discardComposerUploads,
   finalizeComposerUpload,
   loadComposerUpload,
@@ -13,7 +14,7 @@ import {
 } from "../worker/mail/uploads";
 
 describe("composer upload finalization", () => {
-  it("binds direct R2 uploads to the declared content length", async () => {
+  it("signs direct R2 uploads without requiring a buffered request body", async () => {
     const mailboxId = `mbx_signed_${crypto.randomUUID()}`;
     const userId = `usr_signed_${crypto.randomUUID()}`;
     const signedEnv = {
@@ -31,11 +32,15 @@ describe("composer upload finalization", () => {
       filename: "signed.txt",
       contentType: "text/plain",
       size: 42,
+      directOnly: true,
     });
     const url = new URL(intent.uploadUrl);
 
-    expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";"))
-      .toEqual(expect.arrayContaining(["content-length", "content-type"]));
+    const signedHeaders = url.searchParams
+      .get("X-Amz-SignedHeaders")
+      ?.split(";");
+    expect(signedHeaders).toContain("content-type");
+    expect(signedHeaders).not.toContain("content-length");
     expect(intent.headers).toEqual({ "content-type": "text/plain" });
 
     await discardComposerUploads({
@@ -44,6 +49,27 @@ describe("composer upload finalization", () => {
       userId,
       uploadIds: [intent.id],
     });
+  });
+
+  it("does not expose the internal upload fallback to MCP clients", async () => {
+    const mailboxId = `mbx_direct_${crypto.randomUUID()}`;
+    const userId = `usr_direct_${crypto.randomUUID()}`;
+
+    await expect(createComposerUploadIntent({
+      env,
+      requestOrigin: "https://account-api.internal",
+      mailboxId,
+      userId,
+      filename: "direct.txt",
+      contentType: "text/plain",
+      size: 2,
+      directOnly: true,
+    })).rejects.toBeInstanceOf(DirectUploadUnavailableError);
+
+    const stored = await env.MAIL_STORAGE.list({
+      prefix: `composer-uploads/${mailboxId}/${userId}/`,
+    });
+    expect(stored.objects).toHaveLength(0);
   });
 
   it("seals the declared bytes behind an immutable key before send", async () => {

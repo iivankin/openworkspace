@@ -1,12 +1,10 @@
-import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import { MAX_COMPOSER_ATTACHMENT_BYTES } from "../../shared/mail";
 import type { AppEnv } from "../env";
 import { createId } from "../lib/ids";
+import { signR2PutUrl } from "./r2-presigned-urls";
 
 type Bindings = AppEnv["Bindings"];
-
-const PRESIGN_TTL_SECONDS = 15 * 60;
 
 export type UploadedAttachment = {
   id: string;
@@ -87,15 +85,6 @@ function composerUploadKeys(
   };
 }
 
-function r2S3Credentials(env: Bindings) {
-  const accessKeyId = env.R2_ACCESS_KEY_ID?.trim();
-  const secretAccessKey = env.R2_SECRET_ACCESS_KEY?.trim();
-  const accountId = env.R2_ACCOUNT_ID?.trim();
-  const bucketName = env.R2_BUCKET_NAME?.trim() || "openworkspace";
-  if (!accessKeyId || !secretAccessKey || !accountId) return null;
-  return { accessKeyId, secretAccessKey, accountId, bucketName };
-}
-
 async function putUploadMeta(input: {
   env: Bindings;
   metadataKey: string;
@@ -119,39 +108,6 @@ async function readUploadMeta(env: Bindings, metadataKey: string) {
   }
 }
 
-async function signR2PutUrl(input: {
-  env: Bindings;
-  r2Key: string;
-  contentType: string;
-  size: number;
-}) {
-  const credentials = r2S3Credentials(input.env);
-  if (!credentials) return null;
-
-  const client = new AwsClient({
-    accessKeyId: credentials.accessKeyId,
-    secretAccessKey: credentials.secretAccessKey,
-    service: "s3",
-    region: "auto",
-  });
-  const url = new URL(
-    `https://${credentials.accountId}.r2.cloudflarestorage.com/${credentials.bucketName}/${input.r2Key}`,
-  );
-  url.searchParams.set("X-Amz-Expires", String(PRESIGN_TTL_SECONDS));
-  const signed = await client.sign(url, {
-    method: "PUT",
-    headers: {
-      "content-length": String(input.size),
-      "content-type": input.contentType,
-    },
-    aws: {
-      allHeaders: true,
-      signQuery: true,
-    },
-  });
-  return signed.url;
-}
-
 export async function createComposerUploadIntent(input: {
   env: Bindings;
   requestOrigin: string;
@@ -160,6 +116,7 @@ export async function createComposerUploadIntent(input: {
   filename: string;
   contentType: string;
   size: number;
+  directOnly?: boolean;
 }): Promise<ComposerUploadIntent> {
   if (input.size <= 0) {
     throw new UploadValidationError("Attachment file is empty");
@@ -194,7 +151,6 @@ export async function createComposerUploadIntent(input: {
     env: input.env,
     r2Key: keys.staging,
     contentType,
-    size: input.size,
   });
   if (presignedUrl) {
     return {
@@ -205,6 +161,13 @@ export async function createComposerUploadIntent(input: {
       contentType,
       size: input.size,
     };
+  }
+
+  if (input.directOnly) {
+    await input.env.MAIL_STORAGE.delete(keys.metadata);
+    throw new DirectUploadUnavailableError(
+      "Direct R2 attachment uploads are not configured",
+    );
   }
 
   // Local / Deploy without R2 S3 API tokens: same client flow, Worker receives PUT.
@@ -571,3 +534,4 @@ export async function discardComposerUploads(input: {
 }
 
 export class UploadValidationError extends Error {}
+export class DirectUploadUnavailableError extends Error {}

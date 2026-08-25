@@ -44,7 +44,11 @@
     "producers": [
       {
         "binding": "PUSH_NOTIFICATIONS",
-        "queue": "openworkspace-push-notifications-test"
+        "queue": "openworkspace-push-notifications"
+      },
+      {
+        "binding": "WEBHOOKS",
+        "queue": "openworkspace-webhooks"
       }
     ],
     "consumers": [
@@ -52,7 +56,10 @@
         "queue": "openworkspace-delivery-events-test"
       },
       {
-        "queue": "openworkspace-push-notifications-test"
+        "queue": "openworkspace-push-notifications"
+      },
+      {
+        "queue": "openworkspace-webhooks"
       }
     ]
   },

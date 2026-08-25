@@ -5,7 +5,7 @@ import { createDb } from "../db/client";
 import type { AppEnv } from "../env";
 import { apiError } from "../lib/http";
 import { checkRateLimit, requestIdentifier } from "../lib/rate-limit";
-import { requireAuth } from "./middleware";
+import { requireSessionAuth } from "./middleware";
 import {
   authenticationResponseSchema,
   bootstrapInputSchema,
@@ -39,6 +39,11 @@ import {
   clearLoginTransactionCookie,
 } from "../oidc/transaction";
 import { deleteAvatar, uploadAvatar } from "./avatar";
+import { accountApiTokenRoutes } from "./api-token-routes";
+import {
+  deferWebhookTask,
+  queueUserWebhookEvent,
+} from "../webhooks/service";
 
 function authFailure(c: Parameters<typeof apiError>[0], error: unknown) {
   const message = error instanceof Error ? error.message : "Passkey request failed";
@@ -123,6 +128,17 @@ function accessLinkRoutes(kind: AccessLinkKind) {
           );
           clearChallengeCookie(c);
           await createSession(db, c, userId);
+          if (kind === "invitation") {
+            deferWebhookTask(
+              (task) => c.executionCtx.waitUntil(task),
+              (eventId) => queueUserWebhookEvent(
+                c.env,
+                "user.joined",
+                userId,
+                eventId,
+              ),
+            );
+          }
           return c.json({ ok: true as const });
         } catch (error) {
           return authFailure(c, error);
@@ -228,9 +244,10 @@ export const authRoutes = new Hono<AppEnv>()
   )
   .route("/invitation", accessLinkRoutes("invitation"))
   .route("/recovery", accessLinkRoutes("recovery"))
-  .post("/avatar", requireAuth, (c) => uploadAvatar(c))
-  .delete("/avatar", requireAuth, (c) => deleteAvatar(c))
-  .post("/logout", requireAuth, async (c) => {
+  .route("/api-tokens", accountApiTokenRoutes)
+  .post("/avatar", requireSessionAuth, (c) => uploadAvatar(c))
+  .delete("/avatar", requireSessionAuth, (c) => deleteAvatar(c))
+  .post("/logout", requireSessionAuth, async (c) => {
     await destroySession(createDb(c.env.DB), c);
     return c.json({ ok: true as const });
   });

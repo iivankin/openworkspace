@@ -11,6 +11,7 @@ One Worker, your domain, your data. Invite people with a link, grant mailbox acc
 - **Catch-all routing** — accept every address at your domain; only provisioned mailboxes receive mail
 - **Delivery status** — bounces, deferrals, and complaints surface in the app
 - **Realtime and push** — mailbox-scoped WebSockets plus optional PWA notifications
+- **Signed webhooks** — account-wide email and administration events with retry history
 - **Runs on Cloudflare** — Workers, D1, Durable Objects, R2, Images, Email Service, and Queues
 
 ## Deploy to Cloudflare
@@ -48,7 +49,7 @@ The script merges upstream (`main` or `master`) and keeps your Cloudflare-provis
 5. **First admin** — Open the app. With an empty database, the first-run screen creates your personal mailbox and registers you as administrator with a passkey.
 6. **Profile photos** — Enable **Images** for the account if prompted. Create a public delivery variant named `public` (or `avatar`). Uploaded avatars use custom ids `avatars/<userId>` and are served from `https://imagedelivery.net/<account_hash>/avatars/<userId>/public` (not your Worker domain). Optional later: a custom Images delivery hostname in the dashboard.
 7. **Attachment upload cleanup** — Run `bun run r2:lifecycle:setup` once to expire abandoned composer uploads after seven days. If the provisioned bucket is not named `openworkspace`, run `R2_BUCKET_NAME=<bucket> bun run r2:lifecycle:setup`.
-8. **Direct attachment uploads** — Optional. Create an R2 API token (Object Read & Write) for the mail bucket and set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ACCOUNT_ID`. In the R2 bucket **Settings → CORS**, allow your app origin with methods `PUT` and `HEAD` and headers `Content-Type`. Without these secrets, uploads still work through the Worker.
+8. **Direct attachment transfers** — Optional for the browser and required for MCP attachment transfers. Create an R2 API token (Object Read & Write) for the mail bucket and set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ACCOUNT_ID`. In the R2 bucket **Settings → CORS**, allow your app origin with methods `GET`, `PUT`, and `HEAD` and headers `Content-Type`. Without these secrets, browser uploads still work through the Worker, but MCP attachment upload and download links are unavailable.
 9. **Show original authentication** — Optional.
    1. Open [Cloudflare User API Tokens](https://dash.cloudflare.com/profile/api-tokens) (**My Profile → API Tokens**, not **Account API Tokens**) and choose **Create Token → Custom token**.
    2. Grant **Zone → Analytics → Read** and scope the token to **Include → Specific zone → your mail domain**. Copy the token when Cloudflare shows it; the value is displayed only once.
@@ -135,6 +136,34 @@ Outbound mail is logged locally instead of sent. To test push locally, add a key
 - **Settings** — each person manages their avatar, appearance, current-device push subscription, and per-mailbox notification preferences.
 - **Shared mailboxes** — admin adds members with read-only or read-and-send access. Everyone who is a member can read; there is no send-only mode.
 - **PWA notifications** — desktop and Android browsers can subscribe from Settings. On iPhone and iPad, first add OpenWorkspace to the Home Screen, then enable notifications from the installed app.
+
+### Connect an MCP client
+
+Open **Settings → MCP**, create a named personal token, and copy it immediately; the full secret is shown once. Configure the client with:
+
+```text
+Server URL: https://mail.example.com/mcp
+Authorization: Bearer mcp_…
+```
+
+The token acts as its owner: mailbox access, send permission, account status, and role are checked on every operation. Mail tools can read raw messages in bounded chunks and issue 15-minute private R2 attachment links. To attach a file, call `create_attachment_upload`, PUT the exact declared bytes to the returned URL using the returned headers, then call `complete_attachment_upload` and pass its upload id to the send, reply, or forward tool. Administrator tokens additionally expose user roles, destructive shared-mailbox cleanup, Workers AI, group, and OIDC administration tools. Revoke a token from the same settings page to stop it immediately.
+
+The endpoint supports both current MCP requests and stateless clients using the 2024–2025 protocol revisions.
+
+### Configure outgoing webhooks
+
+Administrators manage account-wide endpoints under **Administration → Webhooks**. Each endpoint chooses from email received/sent, user joined/updated, and mailbox lifecycle events. Email events include both the stored text and HTML bodies plus attachment metadata; attachment contents are not embedded.
+
+Secrets are displayed only when an endpoint is created or rotated. OpenWorkspace signs the exact request body with HMAC-SHA256 and sends:
+
+```text
+x-openworkspace-delivery: whd_…
+x-openworkspace-event: email.received
+x-openworkspace-timestamp: 1787580000
+x-openworkspace-signature: sha256=…
+```
+
+Verify the signature over `<timestamp>.<raw request body>`, reject stale timestamps, and deduplicate retries with `x-openworkspace-delivery`. Delivery runs asynchronously through Cloudflare Queues, retries up to five times, and retains the latest delivery status for 30 days. Administrator MCP tokens can also create, update, test, rotate, and delete webhook endpoints.
 
 ## License
 

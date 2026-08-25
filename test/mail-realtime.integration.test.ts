@@ -136,6 +136,38 @@ describe("mailbox realtime", () => {
     expect(response.status).toBe(403);
   });
 
+  it("rejects API tokens before opening a WebSocket", async () => {
+    const tokenResponse = await exports.default.fetch(
+      new Request("http://example.test/api/auth/api-tokens", {
+        method: "POST",
+        headers: {
+          cookie: session.cookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name: "Realtime rejection" }),
+      }),
+    );
+    expect(tokenResponse.status).toBe(201);
+    const { token } = await tokenResponse.json<{ token: { token: string } }>();
+
+    const response = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${session.mailboxId}/realtime`,
+        {
+          headers: {
+            authorization: `Bearer ${token.token}`,
+            origin: "http://example.test",
+            upgrade: "websocket",
+          },
+        },
+      ),
+    );
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "UNAUTHORIZED" },
+    });
+  });
+
   it("closes a socket before broadcasting after mailbox access is revoked", async () => {
     const { cookie, mailboxId } = session;
     const membership = await env.DB.prepare(

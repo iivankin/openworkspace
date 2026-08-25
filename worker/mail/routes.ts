@@ -25,6 +25,7 @@ import {
   preflightOutgoingAttachments,
 } from "./outbound";
 import {
+  deferEmailSentWebhook,
   OutgoingRequestConflictError,
   submitOutgoing,
 } from "./outbound-service";
@@ -44,6 +45,7 @@ import {
   bulkConversationActionSchema,
   composeSchema,
   conversationListQuerySchema,
+  conversationMessagesQuerySchema,
   createFolderSchema,
   createUploadSchema,
   forwardSchema,
@@ -64,11 +66,13 @@ import {
 import { checkRateLimit } from "../lib/rate-limit";
 import {
   createComposerUploadIntent,
+  DirectUploadUnavailableError,
   discardComposerUploads,
   finalizeComposerUpload,
   storeComposerUploadContent,
   UploadValidationError,
 } from "./uploads";
+import { signR2GetUrl } from "./r2-presigned-urls";
 
 function mediaType(contentType: string) {
   return contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -76,6 +80,61 @@ function mediaType(contentType: string) {
 
 function requestContentLength(value: string | undefined) {
   return value === undefined ? undefined : Number(value);
+}
+
+function returnedObjectRange(object: R2ObjectBody, totalBytes: number) {
+  if (!object.range) return { offset: 0, length: totalBytes };
+  const suffix = "suffix" in object.range ? object.range.suffix : undefined;
+  if (typeof suffix === "number") {
+    const length = Math.min(suffix, totalBytes);
+    return { offset: totalBytes - length, length };
+  }
+
+  const offset = "offset" in object.range ? object.range.offset ?? 0 : 0;
+  const available = Math.max(0, totalBytes - offset);
+  const requestedLength = "length" in object.range
+    ? object.range.length
+    : undefined;
+  const length = Math.min(requestedLength ?? available, available);
+  return { offset, length };
+}
+
+function storedObjectResponse(input: {
+  object: R2ObjectBody;
+  contentType: string;
+  contentDisposition: string;
+  totalBytes: number;
+  rangeRequested: boolean;
+}) {
+  const { object } = input;
+  const returnedRange = returnedObjectRange(object, input.totalBytes);
+  const headers = new Headers({
+    "accept-ranges": "bytes",
+    "cache-control": "private, no-store",
+    "content-disposition": input.contentDisposition,
+    "content-length": String(returnedRange.length),
+    "content-type": input.contentType,
+    "x-content-type-options": "nosniff",
+  });
+  if (!input.rangeRequested || !object.range) {
+    return new Response(object.body, { headers });
+  }
+
+  headers.set(
+    "content-range",
+    `bytes ${returnedRange.offset}-${returnedRange.offset + returnedRange.length - 1}/${input.totalBytes}`,
+  );
+  return new Response(object.body, { status: 206, headers });
+}
+
+function getStoredObject(
+  bucket: R2Bucket,
+  key: string,
+  range: string | undefined,
+) {
+  return range
+    ? bucket.get(key, { range: new Headers({ range }) })
+    : bucket.get(key);
 }
 
 function toMessageSummary(email: Email) {
@@ -182,6 +241,9 @@ function outgoingFailure(
   c: Parameters<typeof apiError>[0],
   error: unknown,
 ) {
+  if (error instanceof DirectUploadUnavailableError) {
+    return apiError(c, 503, "UNAVAILABLE", error.message);
+  }
   if (
     error instanceof ComposerAttachmentLimitError
     || error instanceof UploadValidationError
@@ -226,6 +288,14 @@ export const mailRoutes = new Hono<AppEnv>()
     return c.json({ ok: true as const, mailboxes: rowsWithUnreadCounts });
   })
   .get("/mailboxes/:id/realtime", async (c) => {
+    if (c.get("authKind") !== "session") {
+      return apiError(
+        c,
+        401,
+        "UNAUTHORIZED",
+        "A browser session is required for realtime updates",
+      );
+    }
     const origin = c.req.header("origin");
     if (!origin || origin !== new URL(c.req.url).origin) {
       return apiError(c, 403, "FORBIDDEN", "Cross-origin WebSocket rejected");
@@ -252,10 +322,15 @@ export const mailRoutes = new Hono<AppEnv>()
   })
   .post(
     "/uploads",
-    zValidator("query", mailboxQuerySchema),
+    zValidator(
+      "query",
+      mailboxQuerySchema.extend({
+        directOnly: z.literal("true").optional(),
+      }),
+    ),
     zValidator("json", createUploadSchema),
     async (c) => {
-      const { mailboxId } = c.req.valid("query");
+      const { mailboxId, directOnly } = c.req.valid("query");
       const body = c.req.valid("json");
       const user = c.get("user");
       const access = await accessibleMailbox(c.env, user.id, mailboxId, "send");
@@ -281,6 +356,7 @@ export const mailRoutes = new Hono<AppEnv>()
           filename: body.filename,
           contentType: body.contentType,
           size: body.size,
+          directOnly: directOnly === "true",
         });
         return c.json({ ok: true as const, upload }, 201);
       } catch (error) {
@@ -624,15 +700,26 @@ export const mailRoutes = new Hono<AppEnv>()
   )
   .get(
     "/conversations/:id",
-    zValidator("query", mailboxQuerySchema),
+    zValidator("query", conversationMessagesQuerySchema),
     async (c) => {
-      const { mailboxId } = c.req.valid("query");
-      const access = await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read");
+      const query = c.req.valid("query");
+      const { mailboxId } = query;
+      const currentUserId = c.get("user").id;
+      const access = await accessibleMailbox(c.env, currentUserId, mailboxId, "read");
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
       }
+      const cursor = query.cursor ? decodeConversationCursor(query.cursor) : null;
+      if (query.cursor && !cursor) {
+        return apiError(c, 400, "BAD_REQUEST", "Message cursor is invalid");
+      }
       const snapshot = await mailboxStub(c.env, mailboxId)
-        .getConversationSnapshot(c.req.param("id"));
+        .getConversationPageSnapshot(
+          c.req.param("id"),
+          currentUserId,
+          query.limit,
+          cursor,
+        );
       if (!snapshot) return apiError(c, 404, "NOT_FOUND", "Conversation not found");
       const readerIds = [...new Set(
         snapshot.readStates.map((readState) => readState.userId),
@@ -652,7 +739,6 @@ export const mailRoutes = new Hono<AppEnv>()
         states.push(readState);
         readStatesByEmail.set(readState.emailId, states);
       }
-      const currentUserId = c.get("user").id;
       const messages = await Promise.all(snapshot.messages.map(async (email) => {
         const object = email.bodyHtmlR2Key
           ? await c.env.MAIL_STORAGE.get(email.bodyHtmlR2Key)
@@ -683,6 +769,12 @@ export const mailRoutes = new Hono<AppEnv>()
         ok: true as const,
         mailboxState: snapshot.mailboxState,
         folderId: snapshot.folderId,
+        hasIncoming: snapshot.hasIncoming,
+        messageCount: snapshot.messageCount,
+        unreadCount: snapshot.unreadCount,
+        nextCursor: snapshot.next
+          ? encodeConversationCursor(snapshot.next)
+          : null,
         messages,
       });
     },
@@ -883,17 +975,21 @@ export const mailRoutes = new Hono<AppEnv>()
       if (!message?.rawMimeR2Key) {
         return apiError(c, 404, "NOT_FOUND", "Original message not found");
       }
-      const object = await c.env.MAIL_STORAGE.get(message.rawMimeR2Key);
+      const requestedRange = c.req.header("range");
+      const object = await getStoredObject(
+        c.env.MAIL_STORAGE,
+        message.rawMimeR2Key,
+        requestedRange,
+      );
       if (!object) {
         return apiError(c, 404, "NOT_FOUND", "Original message is missing");
       }
-      return new Response(object.body, {
-        headers: {
-          "cache-control": "private, no-store",
-          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(`${message.id}.eml`)}`,
-          "content-type": "text/plain; charset=utf-8",
-          "x-content-type-options": "nosniff",
-        },
+      return storedObjectResponse({
+        object,
+        contentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(`${message.id}.eml`)}`,
+        contentType: "text/plain; charset=utf-8",
+        totalBytes: object.size,
+        rangeRequested: Boolean(requestedRange),
       });
     },
   )
@@ -910,14 +1006,59 @@ export const mailRoutes = new Hono<AppEnv>()
         c.req.param("attachmentId"),
       );
       if (!file) return apiError(c, 404, "NOT_FOUND", "Attachment not found");
-      const object = await c.env.MAIL_STORAGE.get(file.r2Key);
+      const requestedRange = c.req.header("range");
+      const object = await getStoredObject(
+        c.env.MAIL_STORAGE,
+        file.r2Key,
+        requestedRange,
+      );
       if (!object) return apiError(c, 404, "NOT_FOUND", "Attachment data is missing");
-      return new Response(object.body, {
-        headers: {
-          "cache-control": "private, no-store",
-          "content-type": file.contentType,
-          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
-          "x-content-type-options": "nosniff",
+      return storedObjectResponse({
+        object,
+        contentType: file.contentType,
+        contentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+        totalBytes: file.size,
+        rangeRequested: Boolean(requestedRange),
+      });
+    },
+  )
+  .get(
+    "/messages/:messageId/attachments/:attachmentId/download-url",
+    zValidator("query", mailboxQuerySchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const file = await mailboxStub(c.env, mailboxId).getAttachment(
+        c.req.param("messageId"),
+        c.req.param("attachmentId"),
+      );
+      if (!file) return apiError(c, 404, "NOT_FOUND", "Attachment not found");
+      if (!await c.env.MAIL_STORAGE.head(file.r2Key)) {
+        return apiError(c, 404, "NOT_FOUND", "Attachment data is missing");
+      }
+      const download = await signR2GetUrl({
+        env: c.env,
+        r2Key: file.r2Key,
+      });
+      if (!download) {
+        return apiError(
+          c,
+          503,
+          "UNAVAILABLE",
+          "Direct R2 downloads are not configured",
+        );
+      }
+      return c.json({
+        ok: true as const,
+        attachment: {
+          id: file.id,
+          filename: file.filename,
+          contentType: file.contentType,
+          size: file.size,
+          url: download.url,
+          expiresAt: download.expiresAt,
         },
       });
     },
@@ -974,6 +1115,12 @@ export const mailRoutes = new Hono<AppEnv>()
       if (!resent) {
         return apiError(c, 409, "CONFLICT", "Only failed or unconfirmed messages can be sent again");
       }
+      deferEmailSentWebhook({
+        env: c.env,
+        mailboxId,
+        email: resent,
+        defer: (task) => c.executionCtx.waitUntil(task),
+      });
       return c.json({
         ok: true as const,
         messageId: resent.id,

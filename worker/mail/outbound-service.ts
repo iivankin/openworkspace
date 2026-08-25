@@ -8,6 +8,11 @@ import {
   type OutgoingMessageInput,
 } from "./outbound";
 import { discardComposerUploads } from "./uploads";
+import {
+  deferWebhookTask,
+  emailWebhookEventId,
+  queueWebhookEvent,
+} from "../webhooks/service";
 
 export class OutgoingRequestConflictError extends Error {}
 
@@ -24,6 +29,29 @@ function deferComposerUploadCleanup(input: {
     mailboxId: input.compose.mailboxId,
     userId: input.compose.userId,
     uploadIds,
+  }));
+}
+
+export function deferEmailSentWebhook(input: {
+  env: Env;
+  mailboxId: string;
+  email: Pick<Email, "id" | "timelineAt" | "transportState">;
+  defer: (task: Promise<unknown>) => void;
+}) {
+  if (input.email.transportState !== "submitted") return;
+  deferWebhookTask(input.defer, () => queueWebhookEvent(input.env, {
+    eventId: emailWebhookEventId(
+      "email.sent",
+      input.mailboxId,
+      input.email.id,
+    ),
+    eventType: "email.sent",
+    occurredAt: input.email.timelineAt.getTime(),
+    source: {
+      kind: "email",
+      mailboxId: input.mailboxId,
+      messageId: input.email.id,
+    },
   }));
 }
 
@@ -58,6 +86,12 @@ export async function submitOutgoing(input: {
     deferComposerUploadCleanup({
       ...input,
       uploadIds: compose.attachments.map((attachment) => attachment.uploadId),
+    });
+    deferEmailSentWebhook({
+      env: input.env,
+      mailboxId: compose.mailboxId,
+      email: existing,
+      defer: input.defer,
     });
     return { email: existing, inserted: false };
   }
@@ -97,6 +131,12 @@ export async function submitOutgoing(input: {
   deferComposerUploadCleanup({
     ...input,
     uploadIds: prepared.composerUploadIds,
+  });
+  deferEmailSentWebhook({
+    env: input.env,
+    mailboxId: compose.mailboxId,
+    email: submission.email,
+    defer: input.defer,
   });
   return {
     email: submission.email,

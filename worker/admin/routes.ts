@@ -15,6 +15,7 @@ import { requireAdmin, requireAuth } from "../auth/middleware";
 import { createDb, type Database } from "../db/client";
 import {
   accessLinks,
+  accountApiTokens,
   authChallenges,
   groupMembers,
   identityGroups,
@@ -54,6 +55,14 @@ import {
   updateUserSchema,
 } from "./schemas";
 import { insertOidcAudit } from "../oidc/service";
+import { deleteMailboxStorage } from "../mail/mailbox-deletion";
+import { webhookAdminRoutes } from "./webhook-routes";
+import {
+  deferWebhookTask,
+  mailboxWebhookData,
+  queueMailboxWebhookEvent,
+  queueUserWebhookEvent,
+} from "../webhooks/service";
 
 type MailboxMemberInput = {
   userId: string;
@@ -292,6 +301,18 @@ export const adminRoutes = new Hono<AppEnv>()
       } catch {
         return apiError(c, 409, "CONFLICT", "Mailbox address is already in use");
       }
+      const webhookMailbox = await mailboxWebhookData(db, id);
+      if (webhookMailbox) {
+        deferWebhookTask(
+          (task) => c.executionCtx.waitUntil(task),
+          (eventId) => queueMailboxWebhookEvent(
+            c.env,
+            "mailbox.created",
+            webhookMailbox,
+            eventId,
+          ),
+        );
+      }
       return c.json({ ok: true as const, mailboxId: id }, 201);
     },
   )
@@ -330,9 +351,53 @@ export const adminRoutes = new Hono<AppEnv>()
           }),
           ),
       ]);
+      const webhookMailbox = await mailboxWebhookData(db, mailboxId);
+      if (webhookMailbox) {
+        deferWebhookTask(
+          (task) => c.executionCtx.waitUntil(task),
+          (eventId) => queueMailboxWebhookEvent(
+            c.env,
+            "mailbox.updated",
+            webhookMailbox,
+            eventId,
+          ),
+        );
+      }
       return c.json({ ok: true as const });
     },
   )
+  .delete("/mailboxes/:id", async (c) => {
+    const db = createDb(c.env.DB);
+    const mailboxId = c.req.param("id");
+    const webhookMailbox = await mailboxWebhookData(db, mailboxId);
+    if (webhookMailbox?.kind === "personal") {
+      return apiError(
+        c,
+        400,
+        "BAD_REQUEST",
+        "Personal mailboxes cannot be deleted independently of their owner",
+      );
+    }
+
+    if (webhookMailbox) {
+      // D1 is the access authority. Remove it first so no new authenticated
+      // request can reach mailbox data while the cross-service cleanup runs.
+      await db.delete(mailboxes).where(eq(mailboxes.id, mailboxId));
+      deferWebhookTask(
+        (task) => c.executionCtx.waitUntil(task),
+        (eventId) => queueMailboxWebhookEvent(
+          c.env,
+          "mailbox.deleted",
+          webhookMailbox,
+          eventId,
+        ),
+      );
+    }
+    // Repeating DELETE also retries cleanup if an earlier R2 or DO operation
+    // failed after the authoritative D1 row had already been removed.
+    await deleteMailboxStorage(c.env, mailboxId);
+    return c.json({ ok: true as const, mailboxId });
+  })
   .post(
     "/invitations",
     zValidator("json", createInvitationSchema),
@@ -375,6 +440,19 @@ export const adminRoutes = new Hono<AppEnv>()
         ]);
       } catch {
         return apiError(c, 409, "CONFLICT", "Email address is already in use");
+      }
+
+      const webhookMailbox = await mailboxWebhookData(db, mailboxId);
+      if (webhookMailbox) {
+        deferWebhookTask(
+          (task) => c.executionCtx.waitUntil(task),
+          (eventId) => queueMailboxWebhookEvent(
+            c.env,
+            "mailbox.created",
+            webhookMailbox,
+            eventId,
+          ),
+        );
       }
 
       return c.json(
@@ -442,7 +520,11 @@ export const adminRoutes = new Hono<AppEnv>()
       const userId = c.req.param("id");
       const input = c.req.valid("json");
       const [target] = await db
-        .select({ id: users.id, status: users.status })
+        .select({
+          id: users.id,
+          name: users.name,
+          status: users.status,
+        })
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
@@ -455,28 +537,38 @@ export const adminRoutes = new Hono<AppEnv>()
           "You cannot disable your own account",
         );
       }
+      if (input.role === "member" && userId === c.get("user").id) {
+        return apiError(
+          c,
+          400,
+          "BAD_REQUEST",
+          "You cannot remove your own administrator role",
+        );
+      }
 
       const now = new Date();
-      const updates = [
-        db
-          .update(users)
-          .set({
-            name: input.name,
-            status: input.status ?? target.status,
-            updatedAt: now,
-          })
-          .where(eq(users.id, userId)),
-        db
+      const nameChanged = input.name !== undefined && input.name !== target.name;
+      const userUpdate = db
+        .update(users)
+        .set({
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.role !== undefined ? { role: input.role } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          updatedAt: now,
+        })
+        .where(eq(users.id, userId));
+      const personalMailboxUpdate = input.name !== undefined && nameChanged
+        ? db
           .update(mailboxes)
           .set({
             displayName: input.name,
             updatedAt: now,
           })
-          .where(eq(mailboxes.personalOwnerId, userId)),
-      ] as const;
+          .where(eq(mailboxes.personalOwnerId, userId))
+        : null;
       if (input.status === "disabled" && target.status !== "disabled") {
-        await db.batch([
-          ...updates,
+        const revocations = [
+          db.delete(accountApiTokens).where(eq(accountApiTokens.userId, userId)),
           db.delete(sessions).where(eq(sessions.userId, userId)),
           db.delete(authChallenges).where(eq(authChallenges.userId, userId)),
           db
@@ -500,9 +592,46 @@ export const adminRoutes = new Hono<AppEnv>()
             .delete(oidcRefreshTokens)
             .where(eq(oidcRefreshTokens.userId, userId)),
           db.delete(oidcGrants).where(eq(oidcGrants.userId, userId)),
-        ]);
+        ] as const;
+        if (personalMailboxUpdate) {
+          await db.batch([userUpdate, personalMailboxUpdate, ...revocations]);
+        } else {
+          await db.batch([userUpdate, ...revocations]);
+        }
+      } else if (personalMailboxUpdate) {
+        await db.batch([userUpdate, personalMailboxUpdate]);
       } else {
-        await db.batch(updates);
+        await userUpdate;
+      }
+      deferWebhookTask(
+        (task) => c.executionCtx.waitUntil(task),
+        (eventId) => queueUserWebhookEvent(
+          c.env,
+          "user.updated",
+          userId,
+          eventId,
+        ),
+      );
+      if (nameChanged) {
+        const [personalMailbox] = await db
+          .select({ id: mailboxes.id })
+          .from(mailboxes)
+          .where(eq(mailboxes.personalOwnerId, userId))
+          .limit(1);
+        if (personalMailbox) {
+          const webhookMailbox = await mailboxWebhookData(db, personalMailbox.id);
+          if (webhookMailbox) {
+            deferWebhookTask(
+              (task) => c.executionCtx.waitUntil(task),
+              (eventId) => queueMailboxWebhookEvent(
+                c.env,
+                "mailbox.updated",
+                webhookMailbox,
+                eventId,
+              ),
+            );
+          }
+        }
       }
       return c.json({ ok: true as const });
     },
@@ -868,7 +997,8 @@ export const adminRoutes = new Hono<AppEnv>()
       }),
     ]);
     return c.json({ ok: true as const });
-  });
+  })
+  .route("/webhooks", webhookAdminRoutes);
 
 function groupByKey<T>(items: T[], key: (item: T) => string) {
   const map = new Map<string, T[]>();

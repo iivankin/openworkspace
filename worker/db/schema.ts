@@ -1,6 +1,10 @@
 import { sql } from "drizzle-orm";
 import { accessLinkKinds } from "../../shared/auth";
 import {
+  webhookDeliveryStatuses,
+  webhookEventTypes,
+} from "../../shared/webhooks";
+import {
   index,
   integer,
   primaryKey,
@@ -233,6 +237,88 @@ export const sessions = sqliteTable(
     uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
     index("sessions_user_idx").on(table.userId),
     index("sessions_expiry_idx").on(table.expiresAt),
+  ],
+);
+
+export const accountApiTokens = sqliteTable(
+  "account_api_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    tokenPrefix: text("token_prefix").notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    uniqueIndex("account_api_tokens_hash_unique").on(table.tokenHash),
+    index("account_api_tokens_user_idx").on(table.userId),
+  ],
+);
+
+export const webhookEndpoints = sqliteTable(
+  "webhook_endpoints",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    events: text("events", { mode: "json" })
+      .$type<Array<(typeof webhookEventTypes)[number]>>()
+      .notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    // Delivery needs the original secret to calculate an HMAC. It is never
+    // returned again after create/rotate and is only read by the queue worker.
+    signingSecret: text("signing_secret").notNull(),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    ...timestamps,
+  },
+  (table) => [
+    index("webhook_endpoints_enabled_idx").on(table.enabled),
+  ],
+);
+
+export const webhookDeliveries = sqliteTable(
+  "webhook_deliveries",
+  {
+    id: text("id").primaryKey(),
+    webhookId: text("webhook_id")
+      .notNull()
+      .references(() => webhookEndpoints.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    source: text("source", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    status: text("status", { enum: webhookDeliveryStatuses })
+      .notNull()
+      .default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    responseStatus: integer("response_status"),
+    responseBody: text("response_body"),
+    error: text("error"),
+    lastAttemptAt: integer("last_attempt_at", { mode: "timestamp_ms" }),
+    deliveredAt: integer("delivered_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    uniqueIndex("webhook_deliveries_event_endpoint_unique").on(
+      table.eventId,
+      table.webhookId,
+    ),
+    index("webhook_deliveries_webhook_created_idx").on(
+      table.webhookId,
+      table.createdAt,
+    ),
+    index("webhook_deliveries_created_idx").on(table.createdAt),
   ],
 );
 

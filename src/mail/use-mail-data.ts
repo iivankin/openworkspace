@@ -10,6 +10,7 @@ import { scheduleMailboxRefresh } from "./mail-query-cache";
 import type { Folder } from "./types";
 
 const CONVERSATION_PAGE_SIZE = 25;
+const MESSAGE_PAGE_SIZE = 25;
 
 export function useMailboxes() {
   return useQuery({
@@ -93,15 +94,21 @@ export function useConversation(
   mailboxId: string | undefined,
   conversationId: string | undefined,
 ) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ["conversation", mailboxId, conversationId],
-    queryFn: async ({ signal }) =>
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam, signal }) =>
       responseJson(
         await api.api.mail.conversations[":id"].$get({
           param: { id: conversationId! },
-          query: { mailboxId: mailboxId! },
+          query: {
+            mailboxId: mailboxId!,
+            limit: String(MESSAGE_PAGE_SIZE),
+            cursor: pageParam,
+          },
         }, { init: { signal } }),
       ),
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
     enabled: Boolean(mailboxId && conversationId),
   });
 }

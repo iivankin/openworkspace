@@ -1,4 +1,5 @@
 import type { api, SuccessfulResponse } from "@/lib/api";
+import type { WebhookEventType } from "../../shared/webhooks";
 
 type AdminStateResponse = SuccessfulResponse<
   Awaited<ReturnType<typeof api.api.admin.state.$get>>
@@ -19,6 +20,20 @@ export type UpdateUserInput = Pick<AdminUser, "name"> & {
 
 export type AdminGroup = AdminStateResponse["groups"][number];
 export type AdminOidcClient = AdminStateResponse["oidcClients"][number];
+
+type AdminWebhooksResponse = SuccessfulResponse<
+  Awaited<ReturnType<typeof api.api.admin.webhooks.$get>>
+>;
+
+export type AdminWebhook = AdminWebhooksResponse["webhooks"][number];
+export type AdminWebhookDelivery = AdminWebhooksResponse["deliveries"][number];
+
+export type WebhookInput = {
+  name: string;
+  url: string;
+  events: WebhookEventType[];
+  enabled: boolean;
+};
 
 export type CreateMailboxInput = {
   displayName: string;

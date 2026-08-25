@@ -56,6 +56,11 @@ export const conversationListQuerySchema = mailboxQuerySchema.extend({
   unreadOnly: z.literal("true").optional(),
 });
 
+export const conversationMessagesQuerySchema = mailboxQuerySchema.extend({
+  limit: z.coerce.number().int().min(1).max(25).default(25),
+  cursor: z.string().trim().min(1).max(512).optional(),
+});
+
 export const mailboxStateSchema = z.enum(mailboxStates);
 
 export const messageReadSchema = z.object({
@@ -75,7 +80,7 @@ export const uploadIdSchema = z
   .max(80)
   .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid");
 
-const outboundAttachmentSchema = z.object({
+export const outboundAttachmentSchema = z.object({
   uploadId: uploadIdSchema,
   disposition: z.enum(["attachment", "inline"]).default("attachment"),
   contentId: z
@@ -102,8 +107,7 @@ const outboundAttachmentSchema = z.object({
   }
 });
 
-const outboundContentFields = {
-  mailboxId: z.string().min(1),
+export const outboundMessageContentFields = {
   bodyText: z.string().max(500_000).default(""),
   bodyHtml: z.string().max(1_000_000).optional(),
   attachments: z
@@ -126,12 +130,17 @@ const outboundContentFields = {
     ),
 };
 
+export const outboundContentFields = {
+  mailboxId: z.string().min(1),
+  ...outboundMessageContentFields,
+};
+
 const outboundRequestFields = {
   requestId: z.uuid(),
   ...outboundContentFields,
 };
 
-const recipientFields = {
+export const outboundRecipientFields = {
   to: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
   cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
   bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
@@ -140,7 +149,7 @@ const recipientFields = {
 export const composeSchema = z
   .object({
     ...outboundRequestFields,
-    ...recipientFields,
+    ...outboundRecipientFields,
     replyTo: emailSchema.optional(),
     subject: z.string().trim().max(998).default(""),
   })
@@ -167,7 +176,7 @@ export const replySchema = z.object({
 export const forwardSchema = z
   .object({
     ...outboundRequestFields,
-    ...recipientFields,
+    ...outboundRecipientFields,
     replyTo: emailSchema.optional(),
   })
   .transform((value) => ({

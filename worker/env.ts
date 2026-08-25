@@ -38,6 +38,7 @@ export type AppEnv = {
     & PushBindings;
   Variables: {
     user: SessionUser;
+    authKind: "session" | "api-token";
     sessionId: string;
     sessionTokenHash: string;
   };

@@ -14,6 +14,7 @@ import { UnreadDocumentIndicator } from "@/mail/unread-document-indicator";
 import {
   SettingsAppearancePage,
   SettingsIndexRedirect,
+  SettingsMcpPage,
   SettingsNotificationsPage,
   SettingsProfilePage,
   SettingsShell,
@@ -79,6 +80,7 @@ export function App() {
           <Route path="profile" element={<SettingsProfilePage />} />
           <Route path="appearance" element={<SettingsAppearancePage />} />
           <Route path="notifications" element={<SettingsNotificationsPage />} />
+          <Route path="mcp" element={<SettingsMcpPage />} />
         </Route>
         <Route path="/" element={mail} />
         <Route path="/mail/:mailboxId" element={mail} />

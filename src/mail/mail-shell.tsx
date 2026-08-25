@@ -116,6 +116,14 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
     () => conversationsQuery.data?.pages.flatMap((page) => page.conversations) ?? [],
     [conversationsQuery.data?.pages],
   );
+  const conversationPages = conversationQuery.data?.pages;
+  const conversationMessages = useMemo(
+    () => conversationPages
+      ? [...conversationPages].reverse().flatMap((page) => page.messages)
+      : [],
+    [conversationPages],
+  );
+  const conversation = conversationPages?.[0];
   const folderName = folderDisplayName(folder, folders);
   const activeFolder = folders?.find((item) => item.id === folder);
   const selection = useConversationSelection({
@@ -268,26 +276,29 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {conversationId ? (
           <ConversationView
-            messages={conversationQuery.data?.messages ?? []}
+            messages={conversationMessages}
+            messageCount={conversation?.messageCount ?? conversationMessages.length}
+            hasOlderMessages={Boolean(
+              conversationPages?.at(-1)?.nextCursor,
+            )}
+            loadingOlder={conversationQuery.isFetchingNextPage}
+            olderMessagesError={conversationQuery.isFetchNextPageError}
             loading={conversationQuery.isLoading}
-            error={conversationQuery.error?.message}
+            error={conversationPages?.length ? undefined : conversationQuery.error?.message}
             mailbox={mailbox}
-            mailboxState={conversationQuery.data?.mailboxState ?? "active"}
+            mailboxState={conversation?.mailboxState ?? "active"}
             folderName={folderName}
             sharedActionPending={sharedConversationAction.isPending}
             onRetry={() => void conversationQuery.refetch()}
+            onLoadOlder={() => void conversationQuery.fetchNextPage()}
             onBack={() => navigate({ conversation: null })}
             onArchive={() => mutateConversation({ mailboxState: "archive" }, true)}
             onRestore={() => mutateConversation({ mailboxState: "active" }, true)}
             onTrash={() => mutateConversation({ mailboxState: "trash" }, true)}
-            onMarkRead={conversationQuery.data?.messages.some(
-                (message) => message.direction === "incoming" && !message.isRead,
-              )
+            onMarkRead={(conversation?.unreadCount ?? 0) > 0
               ? () => void changeConversationRead(true)
               : undefined}
-            onMarkUnread={conversationQuery.data?.messages.some(
-                (message) => message.direction === "incoming",
-              )
+            onMarkUnread={conversation?.hasIncoming
               ? () => void changeConversationRead(false, true)
               : undefined}
             onForward={openForward}

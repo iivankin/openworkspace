@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Bell,
   Inbox,
+  KeyRound,
   Menu,
   Palette,
   UserRound,
@@ -24,8 +25,9 @@ import { useState } from "react";
 import { AppearanceSettings } from "./appearance-page";
 import { ProfileSettings } from "./profile-page";
 import { NotificationsSettings } from "./notifications-page";
+import { McpSettings } from "./mcp-page";
 
-type SettingsSection = "profile" | "appearance" | "notifications";
+type SettingsSection = "profile" | "appearance" | "notifications" | "mcp";
 
 const settingsSections: Array<{
   id: SettingsSection;
@@ -34,6 +36,13 @@ const settingsSections: Array<{
   Icon: LucideIcon;
   path: string;
 }> = [
+  {
+    id: "mcp",
+    label: "MCP",
+    description: "Connect AI clients with a personal account token.",
+    Icon: KeyRound,
+    path: "/settings/mcp",
+  },
   {
     id: "notifications",
     label: "Notifications",
@@ -58,6 +67,7 @@ const settingsSections: Array<{
 ];
 
 function sectionFromPath(pathname: string): SettingsSection {
+  if (pathname.startsWith("/settings/mcp")) return "mcp";
   if (pathname.startsWith("/settings/notifications")) return "notifications";
   if (pathname.startsWith("/settings/appearance")) return "appearance";
   return "profile";
@@ -191,4 +201,8 @@ export function SettingsProfilePage() {
 
 export function SettingsNotificationsPage() {
   return <NotificationsSettings />;
+}
+
+export function SettingsMcpPage() {
+  return <McpSettings />;
 }

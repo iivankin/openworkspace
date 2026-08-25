@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../drizzle/mailbox/migrations.js";
@@ -30,6 +30,11 @@ import {
 } from "../mail/participants";
 import { listActiveMailboxSessions } from "../mail/mailbox-directory";
 import { buildEmailSearchQuery } from "../mail/search";
+import {
+  deferWebhookTask,
+  emailWebhookEventId,
+  queueWebhookEvent,
+} from "../webhooks/service";
 import {
   customFolderPredicate,
   folderAggregateJoinPredicate,
@@ -175,6 +180,11 @@ type ConversationRow = {
   has_incoming: number;
 };
 
+type ConversationSnapshotCountRow = {
+  message_count: number;
+  unread_count: number;
+};
+
 type FolderCountRow = {
   total_count: number;
   unread_count: number;
@@ -282,6 +292,14 @@ export class MailboxDO extends DurableObject<Env> {
 
   webSocketError(socket: WebSocket) {
     socket.close(1011, "Realtime connection failed");
+  }
+
+  async deleteMailboxData() {
+    for (const socket of this.state.getWebSockets()) {
+      socket.close(1001, "Mailbox deleted");
+    }
+    this.recentParticipantSources = null;
+    await this.state.storage.deleteAll();
   }
 
   async shouldSuppressPush(messageId: string, userId: string, sessionId: string) {
@@ -433,8 +451,18 @@ export class MailboxDO extends DurableObject<Env> {
     now: number,
     announce: boolean,
   ) {
-    if (announce) this.publishUpdate();
     try {
+      const mailboxId = this.state.id.name ?? "unknown-mailbox";
+      deferWebhookTask(
+        (task) => this.state.waitUntil(task),
+        () => queueWebhookEvent(this.bindings, {
+          eventId: emailWebhookEventId("email.received", mailboxId, email.id),
+          eventType: "email.received",
+          occurredAt: email.timelineAt.getTime(),
+          source: { kind: "email", mailboxId, messageId: email.id },
+        }),
+      );
+      if (announce) this.publishUpdate();
       const conversation = this.db
         .select({ mailboxState: conversations.mailboxState })
         .from(conversations)
@@ -772,6 +800,89 @@ export class MailboxDO extends DurableObject<Env> {
         .where(eq(emails.conversationId, conversationId))
         .orderBy(asc(emailReadStates.readAt))
         .all(),
+    };
+  }
+
+  getConversationPageSnapshot(
+    conversationId: string,
+    userId: string,
+    limit: number,
+    cursor: ConversationCursorPosition | null,
+  ) {
+    const conversation = this.db
+      .select({
+        mailboxState: conversations.mailboxState,
+        folderId: conversations.folderId,
+        hasIncoming: conversations.hasIncoming,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .all()[0];
+    if (!conversation) return null;
+
+    const pageLimit = Math.max(1, Math.min(limit, 25));
+    const cursorDate = cursor ? new Date(cursor.timelineAt) : null;
+    const predicate = cursor && cursorDate
+      ? and(
+          eq(emails.conversationId, conversationId),
+          or(
+            lt(emails.timelineAt, cursorDate),
+            and(
+              eq(emails.timelineAt, cursorDate),
+              lt(emails.id, cursor.emailId),
+            ),
+          ),
+        )
+      : eq(emails.conversationId, conversationId);
+    const descending = this.db
+      .select()
+      .from(emails)
+      .where(predicate)
+      .orderBy(desc(emails.timelineAt), desc(emails.id))
+      .limit(pageLimit + 1)
+      .all();
+    const page = descending.slice(0, pageLimit);
+    const oldest = page.at(-1);
+    const messageIds = page.map((email) => email.id);
+    const counts = this.state.storage.sql.exec<ConversationSnapshotCountRow>(`
+      select
+        count(*) as message_count,
+        coalesce(sum(
+          case
+            when message.direction = 'incoming' and not exists (
+              select 1
+              from email_read_states read_state
+              where read_state.user_id = ?
+                and read_state.email_id = message.id
+            ) then 1
+            else 0
+          end
+        ), 0) as unread_count
+      from emails message
+      where message.conversation_id = ?
+    `, userId, conversationId).one();
+    return {
+      mailboxState: conversation.mailboxState,
+      folderId: conversation.folderId,
+      hasIncoming: conversation.hasIncoming,
+      messageCount: Number(counts.message_count),
+      unreadCount: Number(counts.unread_count),
+      messages: page.reverse(),
+      next: descending.length > pageLimit && oldest
+        ? { timelineAt: oldest.timelineAt.getTime(), emailId: oldest.id }
+        : null,
+      readStates: messageIds.length
+        ? this.db
+          .select({
+            emailId: emailReadStates.emailId,
+            userId: emailReadStates.userId,
+            readAt: emailReadStates.readAt,
+          })
+          .from(emailReadStates)
+          .where(inArray(emailReadStates.emailId, messageIds))
+          .orderBy(asc(emailReadStates.readAt))
+          .all()
+        : [],
     };
   }
 

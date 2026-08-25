@@ -11,7 +11,7 @@
 #   wrangler secret put OIDC_SIGNING_PRIVATE_JWK
 # OIDC_SIGNING_PRIVATE_JWK=
 
-# Optional R2 S3 API tokens for direct browser attachment uploads (presigned PUT).
+# Optional R2 S3 API tokens for direct attachment transfers (presigned GET/PUT).
 # Without these, uploads fall back to the Worker. Create an R2 API token with
 # Object Read & Write on the mail bucket, then:
 #   wrangler secret put R2_ACCESS_KEY_ID

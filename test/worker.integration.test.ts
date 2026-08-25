@@ -398,6 +398,48 @@ describe("mail worker", () => {
     expect(original.headers.get("content-type")).toContain("text/plain");
     expect(original.headers.get("content-disposition")).toContain("inline");
     expect(await original.text()).toBe(inboundRaw);
+
+    const suffixLength = 12;
+    const originalSuffix = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/messages/${inboundMessage!.id}/original?mailboxId=${personalMailboxId}`,
+        {
+          headers: {
+            cookie: cookie!,
+            range: `bytes=-${suffixLength}`,
+          },
+        },
+      ),
+    );
+    expect(originalSuffix.status).toBe(206);
+    expect(originalSuffix.headers.get("content-length")).toBe(
+      String(suffixLength),
+    );
+    expect(originalSuffix.headers.get("content-range")).toBe(
+      `bytes ${inboundRaw.length - suffixLength}-${inboundRaw.length - 1}/${inboundRaw.length}`,
+    );
+    expect(await originalSuffix.text()).toBe(inboundRaw.slice(-suffixLength));
+
+    const openRangeOffset = 10;
+    const originalTail = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/messages/${inboundMessage!.id}/original?mailboxId=${personalMailboxId}`,
+        {
+          headers: {
+            cookie: cookie!,
+            range: `bytes=${openRangeOffset}-`,
+          },
+        },
+      ),
+    );
+    expect(originalTail.status).toBe(206);
+    expect(originalTail.headers.get("content-length")).toBe(
+      String(inboundRaw.length - openRangeOffset),
+    );
+    expect(originalTail.headers.get("content-range")).toBe(
+      `bytes ${openRangeOffset}-${inboundRaw.length - 1}/${inboundRaw.length}`,
+    );
+    expect(await originalTail.text()).toBe(inboundRaw.slice(openRangeOffset));
     const authentication = await exports.default.fetch(
       new Request(
         `http://example.test/api/mail/messages/${inboundMessage!.id}/authentication?mailboxId=${personalMailboxId}`,
@@ -983,6 +1025,25 @@ describe("mail worker", () => {
     );
     expect(invalidCursor.status).toBe(400);
     await invalidCursor.json();
+
+    const directUploadUnavailable = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/mail/uploads?mailboxId=${personalMailboxId}&directOnly=true`,
+        {
+          method: "POST",
+          headers: { cookie: cookie!, "content-type": "application/json" },
+          body: JSON.stringify({
+            filename: "direct.txt",
+            contentType: "text/plain",
+            size: 2,
+          }),
+        },
+      ),
+    );
+    expect(directUploadUnavailable.status).toBe(503);
+    expect(await directUploadUnavailable.json()).toMatchObject({
+      error: { code: "UNAVAILABLE" },
+    });
 
     const concurrentRequestId = crypto.randomUUID();
     async function uploadAttachment(filename: string, body: string) {

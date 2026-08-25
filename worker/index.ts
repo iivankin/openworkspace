@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
-import { adminRoutes } from "./admin/routes";
+import { accountApi } from "./account-api";
 import { verifySameOrigin } from "./auth/middleware";
 import { mockAuthRoutes } from "./auth/mock";
 import { authRoutes } from "./auth/routes";
@@ -10,13 +10,13 @@ import type { AppEnv } from "./env";
 import { mailDownloadRoutes } from "./mail/downloads";
 import { consumeDeliveryEvents } from "./mail/delivery-events";
 import { inboundDeliveryId } from "./mail/inbound-delivery";
-import { mailRoutes } from "./mail/routes";
 import {
   consumePushNotifications,
   PUSH_NOTIFICATION_QUEUE,
   pushNotificationRoutes,
 } from "./mail/push-notifications";
 import { mailboxStub } from "./mailbox";
+import { mcpRoutes } from "./mcp/routes";
 import {
   oidcConsentRoutes,
   oidcLoginRoutes,
@@ -26,6 +26,8 @@ import {
 } from "./oidc/routes";
 export { MailboxDO } from "./mailbox";
 import { normalizeMailboxAddress } from "./lib/ids";
+import { consumeWebhooks } from "./webhooks/delivery";
+import { WEBHOOK_QUEUE } from "./webhooks/service";
 
 const app = new Hono<AppEnv>()
   .use("/api/*", verifySameOrigin)
@@ -36,9 +38,9 @@ const app = new Hono<AppEnv>()
   .route("/api/oidc/login", oidcLoginRoutes)
   .route("/api/oidc/logout", oidcLogoutRoutes)
   .route("/api/downloads", mailDownloadRoutes)
-  .route("/api/mail", mailRoutes)
+  .route("/api", accountApi)
   .route("/api/notifications", pushNotificationRoutes)
-  .route("/api/admin", adminRoutes)
+  .route("/mcp", mcpRoutes)
   .route("/.well-known", wellKnownRoutes)
   .route("/oauth", oidcRoutes)
   .notFound((c) =>
@@ -98,8 +100,12 @@ export default {
     );
   },
   queue(batch, env) {
-    return batch.queue === PUSH_NOTIFICATION_QUEUE
-      ? consumePushNotifications(batch, env)
-      : consumeDeliveryEvents(batch, env);
+    if (batch.queue === PUSH_NOTIFICATION_QUEUE) {
+      return consumePushNotifications(batch, env);
+    }
+    if (batch.queue === WEBHOOK_QUEUE) {
+      return consumeWebhooks(batch, env);
+    }
+    return consumeDeliveryEvents(batch, env);
   },
 } satisfies ExportedHandler<Env>;
