@@ -5,6 +5,7 @@ import {
   webhookEventTypes,
 } from "../../shared/webhooks";
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -42,21 +43,32 @@ export const users = sqliteTable(
   ],
 );
 
-/**
- * The singleton installation row is created atomically with the first user.
- * Its primary key prevents two concurrent bootstrap requests from creating
- * multiple initial administrators.
- */
-export const installations = sqliteTable("installations", {
-  id: text("id").primaryKey(),
-  domain: text("domain").notNull(),
-  aiProcessingEnabled: integer("ai_processing_enabled", { mode: "boolean" })
-    .notNull()
-    .default(false),
-  ownerUserId: text("owner_user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "restrict" }),
-  createdAt: integer("created_at", { mode: "timestamp_ms" })
+export const domains = sqliteTable(
+  "domains",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    cloudflareZoneId: text("cloudflare_zone_id"),
+    isPrimary: integer("is_primary", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("domains_name_unique").on(table.name),
+    uniqueIndex("domains_primary_unique")
+      .on(table.isPrimary)
+      .where(sql`${table.isPrimary} = 1`),
+  ],
+);
+
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
 });
@@ -65,21 +77,33 @@ export const mailboxes = sqliteTable(
   "mailboxes",
   {
     id: text("id").primaryKey(),
-    address: text("address").notNull(),
+    localPart: text("local_part").notNull(),
+    domainId: text("domain_id")
+      .notNull()
+      .references(() => domains.id, { onDelete: "restrict" }),
     displayName: text("display_name").notNull(),
-    kind: text("kind", { enum: ["personal", "shared"] }).notNull(),
-    personalOwnerId: text("personal_owner_id").references(() => users.id, {
+    ownerUserId: text("owner_user_id").references(() => users.id, {
       onDelete: "restrict",
     }),
+    isPrimary: integer("is_primary", { mode: "boolean" })
+      .notNull()
+      .default(false),
     createdByUserId: text("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("mailboxes_address_unique").on(table.address),
-    uniqueIndex("mailboxes_personal_owner_unique").on(table.personalOwnerId),
-    index("mailboxes_kind_idx").on(table.kind),
+    uniqueIndex("mailboxes_address_unique").on(table.domainId, table.localPart),
+    uniqueIndex("mailboxes_owner_primary_unique")
+      .on(table.ownerUserId)
+      .where(sql`${table.isPrimary} = 1`),
+    index("mailboxes_owner_idx").on(table.ownerUserId),
+    index("mailboxes_domain_idx").on(table.domainId),
+    check(
+      "mailboxes_primary_owner_check",
+      sql`${table.isPrimary} = 0 OR ${table.ownerUserId} IS NOT NULL`,
+    ),
   ],
 );
 

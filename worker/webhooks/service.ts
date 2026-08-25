@@ -1,13 +1,15 @@
-import { desc, eq, lt } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import type { WebhookEventType } from "../../shared/webhooks";
 import { createDb, type Database } from "../db/client";
 import {
+  domains,
   webhookDeliveries,
   webhookEndpoints,
   mailboxMembers,
   mailboxes,
   users,
 } from "../db/schema";
+import { mailboxAddressSql, mailboxKind } from "../db/mailboxes";
 import { randomToken } from "../lib/crypto";
 import { createId } from "../lib/ids";
 import type { WebhookEndpointInput } from "./schemas";
@@ -196,10 +198,17 @@ async function userWebhookData(db: Database, userId: string) {
       status: users.status,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
-      email: mailboxes.address,
+      email: mailboxAddressSql,
     })
     .from(users)
-    .leftJoin(mailboxes, eq(mailboxes.personalOwnerId, users.id))
+    .leftJoin(
+      mailboxes,
+      and(
+        eq(mailboxes.ownerUserId, users.id),
+        eq(mailboxes.isPrimary, true),
+      ),
+    )
+    .leftJoin(domains, eq(mailboxes.domainId, domains.id))
     .where(eq(users.id, userId))
     .limit(1);
   return user
@@ -232,13 +241,16 @@ export async function mailboxWebhookData(db: Database, mailboxId: string) {
     db
       .select({
         id: mailboxes.id,
-        address: mailboxes.address,
+        address: mailboxAddressSql,
         displayName: mailboxes.displayName,
-        kind: mailboxes.kind,
+        ownerUserId: mailboxes.ownerUserId,
+        isPrimary: mailboxes.isPrimary,
+        domainId: mailboxes.domainId,
         createdAt: mailboxes.createdAt,
         updatedAt: mailboxes.updatedAt,
       })
       .from(mailboxes)
+      .innerJoin(domains, eq(mailboxes.domainId, domains.id))
       .where(eq(mailboxes.id, mailboxId))
       .limit(1)
       .then((rows) => rows[0] ?? null),
@@ -253,6 +265,7 @@ export async function mailboxWebhookData(db: Database, mailboxId: string) {
   return mailbox
     ? {
         ...mailbox,
+        kind: mailboxKind(mailbox.ownerUserId),
         createdAt: mailbox.createdAt.toISOString(),
         updatedAt: mailbox.updatedAt.toISOString(),
         members,

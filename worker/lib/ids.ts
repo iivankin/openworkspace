@@ -14,7 +14,7 @@ export function normalizeEmail(value: string): string {
 }
 
 /**
- * Addresses provisioned in this installation use one explicit,
+ * Addresses provisioned for this account use one explicit,
  * case-insensitive mailbox namespace. Keep this policy separate from external
  * transport normalization.
  */
@@ -24,4 +24,13 @@ export function normalizeMailboxAddress(value: string): string {
 
 export function emailDomain(value: string): string {
   return normalizeEmail(value).split("@").at(-1) ?? "";
+}
+
+export function mailboxAddressParts(value: string) {
+  const normalized = normalizeMailboxAddress(value);
+  const separator = normalized.lastIndexOf("@");
+  return {
+    localPart: normalized.slice(0, separator),
+    domain: normalized.slice(separator + 1),
+  };
 }

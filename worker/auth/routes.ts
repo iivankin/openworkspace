@@ -20,7 +20,7 @@ import {
   finishBootstrap,
   finishLogin,
   getAccessLinkPreview,
-  hasInstallation,
+  hasUsers,
 } from "./service";
 import {
   createSession,
@@ -151,7 +151,7 @@ export const authRoutes = new Hono<AppEnv>()
   .get("/state", async (c) => {
     const db = createDb(c.env.DB);
     const [installed, session] = await Promise.all([
-      hasInstallation(db),
+      hasUsers(db),
       readSessionFromContext(c),
     ]);
     return c.json({

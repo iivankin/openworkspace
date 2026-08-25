@@ -3,11 +3,15 @@ import {
   ArrowLeft,
   Check,
   Copy,
+  Ellipsis,
+  Globe2,
   Inbox,
   KeyRound,
   MailPlus,
   Settings2,
   SlidersHorizontal,
+  Star,
+  Trash2,
   type LucideIcon,
   UserPlus,
   Users,
@@ -21,6 +25,21 @@ import type { AccessLinkKind } from "../../shared/auth";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   InputGroup,
   InputGroupAddon,
@@ -56,10 +75,12 @@ import { UserAccessEditor } from "./user-access-editor";
 import { GroupsManager } from "./groups-manager";
 import { SsoApplications } from "./sso-applications";
 import { WebhooksManager } from "./webhooks-manager";
+import { DomainsManager } from "./domains-manager";
 
 type AdminView =
   | "people"
   | "mailboxes"
+  | "domains"
   | "sso-applications"
   | "groups"
   | "webhooks"
@@ -70,6 +91,7 @@ type AdminView =
 type AdminSection =
   | "people"
   | "mailboxes"
+  | "domains"
   | "sso-applications"
   | "groups"
   | "webhooks"
@@ -84,21 +106,23 @@ const adminSections: Array<{
 }> = [
   { id: "people", label: "People", Icon: Users },
   { id: "mailboxes", label: "Mailboxes", Icon: Settings2 },
+  { id: "domains", label: "Domains", Icon: Globe2 },
   { id: "sso-applications", label: "SSO applications", Icon: KeyRound, separatorBefore: true },
   { id: "groups", label: "Identity groups", Icon: UsersRound },
   { id: "webhooks", label: "Webhooks", Icon: Webhook },
   { id: "invite", label: "Invite person", Icon: UserPlus, separatorBefore: true },
-  { id: "new-mailbox", label: "New shared mailbox", Icon: MailPlus },
+  { id: "new-mailbox", label: "New mailbox", Icon: MailPlus },
 ];
 
 const viewCopy: Record<AdminView, { title: string; description: string }> = {
   people: { title: "People", description: "Workspace members and their mailbox access." },
   mailboxes: { title: "Mailboxes", description: "Personal and shared addresses provisioned for this workspace." },
+  domains: { title: "Domains", description: "Mail domains and Cloudflare zone IDs." },
   "sso-applications": { title: "SSO applications", description: "OIDC clients, callbacks, user assignments, and released claims." },
   groups: { title: "Identity groups", description: "Reusable memberships exposed to approved OIDC applications." },
   webhooks: { title: "Webhooks", description: "Signed account events delivered to external systems." },
   invite: { title: "Invite person", description: "Create a personal mailbox and a one-time registration link." },
-  "new-mailbox": { title: "New shared mailbox", description: "Choose the address and exactly who can read or send from it." },
+  "new-mailbox": { title: "New mailbox", description: "Personal or shared address." },
   user: { title: "Person", description: "Profile details and passkey recovery." },
   mailbox: { title: "Mailbox access", description: "Display name and member permissions for this shared address." },
 };
@@ -139,9 +163,29 @@ export function AdminPage() {
   const createMailbox = useMutation({
     mutationFn: async (input: CreateMailboxInput) => responseJson(await api.api.admin.mailboxes.$post({ json: input })),
     onSuccess: async () => {
-      toast.success("Shared mailbox created");
+      toast.success("Mailbox created");
       await invalidateAdminData(client);
       go("mailboxes");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const setPrimaryMailbox = useMutation({
+    mutationFn: async (id: string) => responseJson(
+      await api.api.admin.mailboxes[":id"].primary.$post({ param: { id } }),
+    ),
+    onSuccess: async () => {
+      toast.success("Primary mailbox updated");
+      await invalidateAdminData(client);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const deleteMailbox = useMutation({
+    mutationFn: async (id: string) => responseJson(
+      await api.api.admin.mailboxes[":id"].$delete({ param: { id } }),
+    ),
+    onSuccess: async () => {
+      toast.success("Mailbox deleted");
+      await invalidateAdminData(client);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -243,6 +287,17 @@ export function AdminPage() {
                   mailboxes={state.data?.mailboxes}
                   loading={state.isLoading}
                   onManage={(id) => go("mailbox", id)}
+                  onMakePrimary={(id) => setPrimaryMailbox.mutate(id)}
+                  onDelete={(id) => deleteMailbox.mutate(id)}
+                  pending={setPrimaryMailbox.isPending || deleteMailbox.isPending}
+                />
+              </div>
+            )}
+            {view === "domains" && (
+              <div className="max-w-3xl">
+                <DomainsManager
+                  domains={state.data?.domains ?? []}
+                  loading={state.isLoading}
                 />
               </div>
             )}
@@ -264,10 +319,10 @@ export function AdminPage() {
             {view === "webhooks" && <WebhooksManager />}
             {view === "invite" && (
               <div className="max-w-3xl">
-                {state.data?.domain ? (
+                {state.data?.domains.length ? (
                   <InviteForm
                     pending={invite.isPending}
-                    domain={state.data.domain}
+                    domains={state.data.domains}
                     onSubmit={(input) => invite.mutate(input)}
                   />
                 ) : null}
@@ -276,10 +331,10 @@ export function AdminPage() {
             )}
             {view === "new-mailbox" && (
               <div className="max-w-3xl">
-                {state.data?.domain ? (
+                {state.data?.domains.length ? (
                   <MailboxForm
                     pending={createMailbox.isPending}
-                    domain={state.data.domain}
+                    domains={state.data.domains}
                     users={state.data?.users ?? []}
                     onSubmit={(input) => createMailbox.mutate(input)}
                   />
@@ -398,22 +453,125 @@ function PeopleList({ users, loading, onManage }: { users?: AdminUser[]; loading
   );
 }
 
-function MailboxList({ mailboxes, loading, onManage }: { mailboxes?: AdminMailbox[]; loading: boolean; onManage: (id: string) => void }) {
+function MailboxList({
+  mailboxes,
+  loading,
+  pending,
+  onManage,
+  onMakePrimary,
+  onDelete,
+}: {
+  mailboxes?: AdminMailbox[];
+  loading: boolean;
+  pending: boolean;
+  onManage: (id: string) => void;
+  onMakePrimary: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [deleteCandidate, setDeleteCandidate] = useState<AdminMailbox | null>(null);
   if (loading) return <ListSkeleton />;
   if (!mailboxes?.length) {
     return <AdminEmptyState Icon={Settings2} title="No mailboxes yet" description="Personal mailboxes appear here once people are invited." />;
   }
   return (
-    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
-      {mailboxes.map((mailbox) => (
-        <div key={mailbox.id} className="flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-accent/45">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70"><MailPlus className="size-4.5" /></span>
-          <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{mailbox.displayName}</p><p className="truncate text-xs text-muted-foreground">{mailbox.address}</p></div>
-          <Badge variant="outline" className="capitalize">{mailbox.kind}</Badge>
-          {mailbox.kind === "shared" && <Button aria-label={`Manage ${mailbox.displayName}`} variant="outline" size="sm" onClick={() => onManage(mailbox.id)}><SlidersHorizontal /> Manage</Button>}
-        </div>
-      ))}
-    </div>
+    <>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+        {mailboxes.map((mailbox) => {
+          const canMakePrimary = mailbox.kind === "personal" && !mailbox.isPrimary;
+          const canDelete = mailbox.kind === "shared" || canMakePrimary;
+          return (
+            <div
+              key={mailbox.id}
+              className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3.5 transition-colors hover:bg-accent/45 sm:gap-4"
+            >
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70"><MailPlus className="size-4.5" /></span>
+              <div className="min-w-0"><p className="truncate text-sm font-semibold">{mailbox.displayName}</p><p className="truncate text-xs text-muted-foreground">{mailbox.address}</p></div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Badge variant="outline" className="hidden capitalize sm:inline-flex">{mailbox.kind}</Badge>
+                {mailbox.isPrimary ? <Badge>Primary</Badge> : null}
+                {canDelete ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={(
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={pending}
+                          aria-label={`Actions for ${mailbox.displayName}`}
+                        />
+                      )}
+                    >
+                      <Ellipsis />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {mailbox.kind === "shared" ? (
+                        <DropdownMenuItem onClick={() => onManage(mailbox.id)}>
+                          <SlidersHorizontal /> Manage access
+                        </DropdownMenuItem>
+                      ) : null}
+                      {canMakePrimary ? (
+                        <DropdownMenuItem onClick={() => onMakePrimary(mailbox.id)}>
+                          <Star /> Make primary
+                        </DropdownMenuItem>
+                      ) : null}
+                      {canDelete ? <DropdownMenuSeparator /> : null}
+                      {canDelete ? (
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteCandidate(mailbox)}
+                        >
+                          <Trash2 /> Delete
+                        </DropdownMenuItem>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <Dialog
+        open={deleteCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open && !pending) setDeleteCandidate(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete {deleteCandidate?.displayName}?</DialogTitle>
+            <DialogDescription>
+              Messages, attachments, settings, and mailbox access are permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => setDeleteCandidate(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={pending || !deleteCandidate}
+              onClick={() => {
+                if (!deleteCandidate) return;
+                const id = deleteCandidate.id;
+                setDeleteCandidate(null);
+                onDelete(id);
+              }}
+            >
+              <Trash2 /> Delete mailbox
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

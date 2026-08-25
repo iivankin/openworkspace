@@ -8,13 +8,14 @@ import {
   urlBase64ToUint8Array,
 } from "@mmmike/web-push/vapid";
 import { zValidator } from "@hono/zod-validator";
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { MailboxPushJob } from "../../shared/mail";
 import { requireSessionAuth } from "../auth/middleware";
 import { createDb } from "../db/client";
 import {
+  domains,
   mailboxMembers,
   mailboxNotificationPreferences,
   mailboxes,
@@ -22,6 +23,7 @@ import {
   sessions,
   users,
 } from "../db/schema";
+import { mailboxAddressSql, mailboxKindOrderSql } from "../db/mailboxes";
 import type { AppEnv, PushBindings } from "../env";
 import { apiError } from "../lib/http";
 import { createId } from "../lib/ids";
@@ -195,11 +197,12 @@ export const pushNotificationRoutes = new Hono<AppEnv>()
       .select({
         mailboxId: mailboxes.id,
         displayName: mailboxes.displayName,
-        address: mailboxes.address,
+        address: mailboxAddressSql,
         enabled: mailboxNotificationPreferences.enabled,
       })
       .from(mailboxMembers)
       .innerJoin(mailboxes, eq(mailboxMembers.mailboxId, mailboxes.id))
+      .innerJoin(domains, eq(mailboxes.domainId, domains.id))
       .leftJoin(
         mailboxNotificationPreferences,
         and(
@@ -208,7 +211,11 @@ export const pushNotificationRoutes = new Hono<AppEnv>()
         ),
       )
       .where(eq(mailboxMembers.userId, userId))
-      .orderBy(mailboxes.kind, mailboxes.displayName);
+      .orderBy(
+        mailboxKindOrderSql,
+        desc(mailboxes.isPrimary),
+        mailboxes.displayName,
+      );
     return c.json({
       ok: true as const,
       preferences: rows.map((row) => ({ ...row, enabled: row.enabled ?? true })),

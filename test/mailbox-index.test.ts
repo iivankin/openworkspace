@@ -80,9 +80,8 @@ describe("mailbox conversation index", () => {
         values ('usr_ai_success_owner', 'AI owner', 'admin', 'active')
       `),
       env.DB.prepare(`
-        insert or replace into installations (
-          id, domain, owner_user_id, ai_processing_enabled
-        ) values ('primary', 'example.test', 'usr_ai_success_owner', true)
+        insert or replace into settings (key, value)
+        values ('ai_processing_enabled', 'true')
       `),
     ]);
 
@@ -188,9 +187,8 @@ describe("mailbox conversation index", () => {
         values ('usr_ai_owner', 'AI owner', 'admin', 'active')
       `),
       env.DB.prepare(`
-        insert or replace into installations (
-          id, domain, owner_user_id, ai_processing_enabled
-        ) values ('primary', 'example.test', 'usr_ai_owner', true)
+        insert or replace into settings (key, value)
+        values ('ai_processing_enabled', 'true')
       `),
     ]);
     await mailbox.setMailboxAiConfiguration({

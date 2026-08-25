@@ -165,6 +165,108 @@ describe("mail worker", () => {
     ).first<{ id: string }>();
     expect(adminRow?.id).toBeTruthy();
 
+    const addDomain = await exports.default.fetch(
+      new Request("http://example.test/api/admin/domains", {
+        method: "POST",
+        headers: { cookie: cookie!, "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "secondary.test",
+          cloudflareZoneId: null,
+        }),
+      }),
+    );
+    expect(addDomain.status).toBe(201);
+    const addedDomain = await addDomain.json<{ domainId: string }>();
+    const createSecondaryPersonal = await exports.default.fetch(
+      new Request("http://example.test/api/admin/mailboxes", {
+        method: "POST",
+        headers: { cookie: cookie!, "content-type": "application/json" },
+        body: JSON.stringify({
+          displayName: "Test Admin Secondary",
+          address: "admin@secondary.test",
+          ownerUserId: adminRow!.id,
+          members: [],
+        }),
+      }),
+    );
+    expect(createSecondaryPersonal.status).toBe(201);
+    const secondaryPersonal = await createSecondaryPersonal.json<{
+      mailboxId: string;
+    }>();
+    let secondaryRejection: string | undefined;
+    await worker.email({
+      from: "sender@example.net",
+      to: "admin@secondary.test",
+      raw: new Response(
+        "From: Sender <sender@example.net>\r\nTo: admin@secondary.test\r\nSubject: Secondary domain\r\nMessage-ID: <secondary-domain@example.net>\r\n\r\nHello from the second domain.",
+      ).body!,
+      headers: new Headers(),
+      rawSize: 172,
+      setReject: (reason: string) => {
+        secondaryRejection = reason;
+      },
+    } as unknown as ForwardableEmailMessage, env);
+    expect(secondaryRejection).toBeUndefined();
+    const secondaryRaw = await env.MAIL_STORAGE.list({
+      prefix: `mailboxes/${secondaryPersonal.mailboxId}/raw/`,
+    });
+    expect(secondaryRaw.objects).toHaveLength(1);
+    await env.DB.prepare("UPDATE users SET updated_at = 1 WHERE id = ?")
+      .bind(adminRow!.id)
+      .run();
+    const setSecondaryPrimary = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/admin/mailboxes/${secondaryPersonal.mailboxId}/primary`,
+        { method: "POST", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(setSecondaryPrimary.status).toBe(200);
+    await setSecondaryPrimary.json();
+    const stateWithSecondaryPrimary = await exports.default.fetch(
+      new Request("http://example.test/api/admin/state", {
+        headers: { cookie: cookie! },
+      }),
+    );
+    expect(await stateWithSecondaryPrimary.json()).toMatchObject({
+      users: [{ personalEmail: "admin@secondary.test" }],
+    });
+    const userAfterPrimaryChange = await env.DB.prepare(
+      "SELECT updated_at AS updatedAt FROM users WHERE id = ?",
+    ).bind(adminRow!.id).first<{ updatedAt: number }>();
+    expect(userAfterPrimaryChange!.updatedAt).toBeGreaterThan(1);
+    const restorePrimary = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/admin/mailboxes/${personalMailboxId}/primary`,
+        { method: "POST", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(restorePrimary.status).toBe(200);
+    await restorePrimary.json();
+    const blockedDomainDelete = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/admin/domains/${addedDomain.domainId}`,
+        { method: "DELETE", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(blockedDomainDelete.status).toBe(409);
+    await blockedDomainDelete.json();
+    const deleteSecondary = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/admin/mailboxes/${secondaryPersonal.mailboxId}`,
+        { method: "DELETE", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(deleteSecondary.status).toBe(200);
+    await deleteSecondary.json();
+    const deleteDomain = await exports.default.fetch(
+      new Request(
+        `http://example.test/api/admin/domains/${addedDomain.domainId}`,
+        { method: "DELETE", headers: { cookie: cookie! } },
+      ),
+    );
+    expect(deleteDomain.status).toBe(200);
+    await deleteDomain.json();
+
     const createShared = await exports.default.fetch(
       new Request("http://example.test/api/admin/mailboxes", {
         method: "POST",
@@ -175,6 +277,7 @@ describe("mail worker", () => {
         body: JSON.stringify({
           displayName: "Support",
           address: "support@example.test",
+          ownerUserId: null,
           members: [
             {
               userId: adminRow!.id,
@@ -253,7 +356,7 @@ describe("mail worker", () => {
     expect(updateUser.status).toBe(200);
     await updateUser.json();
     const renamedPersonalMailbox = await env.DB.prepare(
-      "SELECT display_name AS displayName FROM mailboxes WHERE personal_owner_id = ?",
+      "SELECT display_name AS displayName FROM mailboxes WHERE owner_user_id = ? AND is_primary = 1",
     )
       .bind(invitationBody.accessLink.userId)
       .first<{ displayName: string }>();

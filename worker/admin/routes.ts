@@ -3,7 +3,6 @@ import {
   and,
   desc,
   eq,
-  inArray,
   isNull,
   notInArray,
   type AnyColumn,
@@ -12,14 +11,14 @@ import {
 import { Hono } from "hono";
 import type { AccessLinkKind } from "../../shared/auth";
 import { requireAdmin, requireAuth } from "../auth/middleware";
-import { createDb, type Database } from "../db/client";
+import { createDb } from "../db/client";
 import {
   accessLinks,
   accountApiTokens,
   authChallenges,
+  domains,
   groupMembers,
   identityGroups,
-  installations,
   mailboxMembers,
   mailboxes,
   oidcAccessTokens,
@@ -34,28 +33,27 @@ import {
   users,
 } from "../db/schema";
 import type { AppEnv } from "../env";
-import { setGlobalAiProcessingEnabled } from "../ai/configuration";
+import {
+  globalAiProcessingEnabled,
+  setGlobalAiProcessingEnabled,
+} from "../ai/configuration";
 import { randomToken, hashToken } from "../lib/crypto";
 import { apiError } from "../lib/http";
-import { createId, emailDomain, normalizeMailboxAddress } from "../lib/ids";
+import { createId } from "../lib/ids";
 import {
-  INSTALLATION_ID,
   INVITATION_TTL_MS,
   RECOVERY_TTL_MS,
 } from "../auth/constants";
 import { personalAccountRecords } from "../auth/personal-account";
 import {
   createInvitationSchema,
-  createMailboxSchema,
   createOidcClientSchema,
   globalAiProcessingSchema,
   groupInputSchema,
-  updateMailboxSchema,
   updateOidcClientSchema,
   updateUserSchema,
 } from "./schemas";
 import { insertOidcAudit } from "../oidc/service";
-import { deleteMailboxStorage } from "../mail/mailbox-deletion";
 import { webhookAdminRoutes } from "./webhook-routes";
 import {
   deferWebhookTask,
@@ -63,47 +61,18 @@ import {
   queueMailboxWebhookEvent,
   queueUserWebhookEvent,
 } from "../webhooks/service";
-
-type MailboxMemberInput = {
-  userId: string;
-  canSend: boolean;
-};
-
-async function hasKnownUsers(db: Database, members: MailboxMemberInput[]) {
-  const ids = members.map((member) => member.userId);
-  const rows = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(inArray(users.id, ids));
-  return rows.length === ids.length;
-}
-
-async function hasKnownUserIds(db: Database, ids: string[]) {
-  if (ids.length === 0) return true;
-  const rows = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(inArray(users.id, ids));
-  return rows.length === ids.length;
-}
-
-async function hasKnownGroupIds(db: Database, ids: string[]) {
-  if (ids.length === 0) return true;
-  const rows = await db
-    .select({ id: identityGroups.id })
-    .from(identityGroups)
-    .where(inArray(identityGroups.id, ids));
-  return rows.length === ids.length;
-}
-
-async function installationDomain(db: Database) {
-  const [installation] = await db
-    .select({ domain: installations.domain })
-    .from(installations)
-    .where(eq(installations.id, INSTALLATION_ID))
-    .limit(1);
-  return installation?.domain ?? null;
-}
+import {
+  mailboxAddressSql,
+  mailboxKind,
+  mailboxKindOrderSql,
+} from "../db/mailboxes";
+import { domainAdminRoutes } from "./domain-routes";
+import { mailboxAdminRoutes } from "./mailbox-routes";
+import {
+  domainForAddress,
+  hasKnownGroupIds,
+  hasKnownUserIds,
+} from "./records";
 
 async function prepareAccessLink(input: {
   kind: AccessLinkKind;
@@ -144,7 +113,8 @@ export const adminRoutes = new Hono<AppEnv>()
   .get("/state", async (c) => {
     const db = createDb(c.env.DB);
     const [
-      installation,
+      aiProcessingEnabled,
+      domainRows,
       userRows,
       mailboxRows,
       memberships,
@@ -154,14 +124,18 @@ export const adminRoutes = new Hono<AppEnv>()
       groupMemberships,
       clientGroupClaims,
     ] = await Promise.all([
+      globalAiProcessingEnabled(c.env.DB),
       db
         .select({
-          domain: installations.domain,
-          aiProcessingEnabled: installations.aiProcessingEnabled,
+          id: domains.id,
+          name: domains.name,
+          cloudflareZoneId: domains.cloudflareZoneId,
+          isPrimary: domains.isPrimary,
+          createdAt: domains.createdAt,
+          updatedAt: domains.updatedAt,
         })
-        .from(installations)
-        .where(eq(installations.id, INSTALLATION_ID))
-        .limit(1),
+        .from(domains)
+        .orderBy(desc(domains.isPrimary), domains.name),
       db
         .select({
           id: users.id,
@@ -170,21 +144,44 @@ export const adminRoutes = new Hono<AppEnv>()
           role: users.role,
           status: users.status,
           createdAt: users.createdAt,
-          personalEmail: mailboxes.address,
+          personalEmail: mailboxAddressSql,
         })
         .from(users)
-        .leftJoin(mailboxes, eq(mailboxes.personalOwnerId, users.id))
+        .leftJoin(
+          mailboxes,
+          and(
+            eq(mailboxes.ownerUserId, users.id),
+            eq(mailboxes.isPrimary, true),
+          ),
+        )
+        .leftJoin(domains, eq(mailboxes.domainId, domains.id))
         .orderBy(desc(users.createdAt)),
-      db.select().from(mailboxes).orderBy(mailboxes.kind, mailboxes.displayName),
+      db
+        .select({
+          id: mailboxes.id,
+          address: mailboxAddressSql,
+          displayName: mailboxes.displayName,
+          ownerUserId: mailboxes.ownerUserId,
+          isPrimary: mailboxes.isPrimary,
+          domainId: mailboxes.domainId,
+          createdByUserId: mailboxes.createdByUserId,
+          createdAt: mailboxes.createdAt,
+          updatedAt: mailboxes.updatedAt,
+        })
+        .from(mailboxes)
+        .innerJoin(domains, eq(mailboxes.domainId, domains.id))
+        .orderBy(
+          mailboxKindOrderSql,
+          desc(mailboxes.isPrimary),
+          mailboxes.displayName,
+        ),
       db
         .select({
           mailboxId: mailboxMembers.mailboxId,
           userId: mailboxMembers.userId,
           canSend: mailboxMembers.canSend,
         })
-        .from(mailboxMembers)
-        .innerJoin(mailboxes, eq(mailboxMembers.mailboxId, mailboxes.id))
-        .where(eq(mailboxes.kind, "shared")),
+        .from(mailboxMembers),
       db.select({
         id: oidcClients.id,
         name: oidcClients.name,
@@ -226,11 +223,12 @@ export const adminRoutes = new Hono<AppEnv>()
     );
     return c.json({
       ok: true as const,
-      domain: installation[0]?.domain ?? null,
-      aiProcessingEnabled: installation[0]?.aiProcessingEnabled ?? false,
+      aiProcessingEnabled,
+      domains: domainRows,
       users: userRows,
       mailboxes: mailboxRows.map((mailbox) => ({
         ...mailbox,
+        kind: mailboxKind(mailbox.ownerUserId),
         members: (mailboxMembersById.get(mailbox.id) ?? []).map(
           ({ userId, canSend }) => ({ userId, canSend }),
         ),
@@ -246,6 +244,7 @@ export const adminRoutes = new Hono<AppEnv>()
       })),
     });
   })
+  .route("/", domainAdminRoutes)
   .put(
     "/ai",
     zValidator("json", globalAiProcessingSchema),
@@ -254,159 +253,22 @@ export const adminRoutes = new Hono<AppEnv>()
         c.env.DB,
         c.req.valid("json").enabled,
       );
-      if (!setting) {
-        return apiError(c, 404, "NOT_FOUND", "Installation not found");
-      }
       return c.json({
         ok: true as const,
         enabled: setting.enabled,
       });
     },
   )
-  .post(
-    "/mailboxes",
-    zValidator("json", createMailboxSchema),
-    async (c) => {
-      const input = c.req.valid("json");
-      const db = createDb(c.env.DB);
-      const domain = await installationDomain(db);
-      if (!domain || emailDomain(input.address) !== domain) {
-        return apiError(c, 400, "BAD_REQUEST", `Mailbox must use @${domain ?? "the workspace domain"}`);
-      }
-      if (!(await hasKnownUsers(db, input.members))) {
-        return apiError(c, 400, "BAD_REQUEST", "Unknown mailbox member");
-      }
-      const id = createId("mbx");
-      const now = new Date();
-      try {
-        await db.batch([
-          db.insert(mailboxes).values({
-            id,
-            address: normalizeMailboxAddress(input.address),
-            displayName: input.displayName,
-            kind: "shared",
-            createdByUserId: c.get("user").id,
-            createdAt: now,
-            updatedAt: now,
-          }),
-          ...input.members.map((member) =>
-            db.insert(mailboxMembers).values({
-              mailboxId: id,
-              userId: member.userId,
-              canSend: member.canSend,
-              createdAt: now,
-            }),
-          ),
-        ]);
-      } catch {
-        return apiError(c, 409, "CONFLICT", "Mailbox address is already in use");
-      }
-      const webhookMailbox = await mailboxWebhookData(db, id);
-      if (webhookMailbox) {
-        deferWebhookTask(
-          (task) => c.executionCtx.waitUntil(task),
-          (eventId) => queueMailboxWebhookEvent(
-            c.env,
-            "mailbox.created",
-            webhookMailbox,
-            eventId,
-          ),
-        );
-      }
-      return c.json({ ok: true as const, mailboxId: id }, 201);
-    },
-  )
-  .patch(
-    "/mailboxes/:id",
-    zValidator("json", updateMailboxSchema),
-    async (c) => {
-      const db = createDb(c.env.DB);
-      const mailboxId = c.req.param("id");
-      const input = c.req.valid("json");
-      const [mailbox] = await db
-        .select({ id: mailboxes.id, kind: mailboxes.kind })
-        .from(mailboxes)
-        .where(eq(mailboxes.id, mailboxId))
-        .limit(1);
-      if (!mailbox) return apiError(c, 404, "NOT_FOUND", "Mailbox not found");
-      if (mailbox.kind !== "shared") {
-        return apiError(c, 400, "BAD_REQUEST", "Personal mailbox access follows its owner");
-      }
-      if (!(await hasKnownUsers(db, input.members))) {
-        return apiError(c, 400, "BAD_REQUEST", "Unknown mailbox member");
-      }
-      const now = new Date();
-      await db.batch([
-        db
-          .update(mailboxes)
-          .set({ displayName: input.displayName, updatedAt: now })
-          .where(eq(mailboxes.id, mailboxId)),
-        db.delete(mailboxMembers).where(eq(mailboxMembers.mailboxId, mailboxId)),
-        ...input.members.map((member) =>
-          db.insert(mailboxMembers).values({
-            mailboxId,
-            userId: member.userId,
-            canSend: member.canSend,
-            createdAt: now,
-          }),
-          ),
-      ]);
-      const webhookMailbox = await mailboxWebhookData(db, mailboxId);
-      if (webhookMailbox) {
-        deferWebhookTask(
-          (task) => c.executionCtx.waitUntil(task),
-          (eventId) => queueMailboxWebhookEvent(
-            c.env,
-            "mailbox.updated",
-            webhookMailbox,
-            eventId,
-          ),
-        );
-      }
-      return c.json({ ok: true as const });
-    },
-  )
-  .delete("/mailboxes/:id", async (c) => {
-    const db = createDb(c.env.DB);
-    const mailboxId = c.req.param("id");
-    const webhookMailbox = await mailboxWebhookData(db, mailboxId);
-    if (webhookMailbox?.kind === "personal") {
-      return apiError(
-        c,
-        400,
-        "BAD_REQUEST",
-        "Personal mailboxes cannot be deleted independently of their owner",
-      );
-    }
-
-    if (webhookMailbox) {
-      // D1 is the access authority. Remove it first so no new authenticated
-      // request can reach mailbox data while the cross-service cleanup runs.
-      await db.delete(mailboxes).where(eq(mailboxes.id, mailboxId));
-      deferWebhookTask(
-        (task) => c.executionCtx.waitUntil(task),
-        (eventId) => queueMailboxWebhookEvent(
-          c.env,
-          "mailbox.deleted",
-          webhookMailbox,
-          eventId,
-        ),
-      );
-    }
-    // Repeating DELETE also retries cleanup if an earlier R2 or DO operation
-    // failed after the authoritative D1 row had already been removed.
-    await deleteMailboxStorage(c.env, mailboxId);
-    return c.json({ ok: true as const, mailboxId });
-  })
+  .route("/", mailboxAdminRoutes)
   .post(
     "/invitations",
     zValidator("json", createInvitationSchema),
     async (c) => {
       const input = c.req.valid("json");
       const db = createDb(c.env.DB);
-      const domain = await installationDomain(db);
-      if (!domain || emailDomain(input.email) !== domain) {
-        return apiError(c, 400, "BAD_REQUEST", `Personal mailbox must use @${domain ?? "the workspace domain"}`);
+      const domain = await domainForAddress(db, input.email);
+      if (!domain) {
+        return apiError(c, 400, "BAD_REQUEST", "Personal mailbox domain is not configured");
       }
       const admin = c.get("user");
       const userId = createId("usr");
@@ -415,6 +277,7 @@ export const adminRoutes = new Hono<AppEnv>()
       const account = personalAccountRecords({
         userId,
         mailboxId,
+        domainId: domain.id,
         name: input.name,
         email: input.email,
         avatarUrl: null,
@@ -564,7 +427,10 @@ export const adminRoutes = new Hono<AppEnv>()
             displayName: input.name,
             updatedAt: now,
           })
-          .where(eq(mailboxes.personalOwnerId, userId))
+          .where(and(
+            eq(mailboxes.ownerUserId, userId),
+            eq(mailboxes.isPrimary, true),
+          ))
         : null;
       if (input.status === "disabled" && target.status !== "disabled") {
         const revocations = [
@@ -616,7 +482,10 @@ export const adminRoutes = new Hono<AppEnv>()
         const [personalMailbox] = await db
           .select({ id: mailboxes.id })
           .from(mailboxes)
-          .where(eq(mailboxes.personalOwnerId, userId))
+          .where(and(
+            eq(mailboxes.ownerUserId, userId),
+            eq(mailboxes.isPrimary, true),
+          ))
           .limit(1);
         if (personalMailbox) {
           const webhookMailbox = await mailboxWebhookData(db, personalMailbox.id);

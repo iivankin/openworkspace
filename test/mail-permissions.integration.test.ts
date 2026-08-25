@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { createDb } from "../worker/db/client";
-import { mailboxMembers, mailboxes, users } from "../worker/db/schema";
+import { domains, mailboxMembers, mailboxes, users } from "../worker/db/schema";
 import { mailboxStub } from "../worker/mailbox";
 
 describe("read-only mailbox access", () => {
@@ -23,6 +23,11 @@ describe("read-only mailbox access", () => {
       .from(users)
       .where(eq(users.role, "admin"))
       .limit(1);
+    const [domain] = await db
+      .select({ id: domains.id })
+      .from(domains)
+      .where(eq(domains.isPrimary, true))
+      .limit(1);
     const userId = `usr_read_only_${crypto.randomUUID()}`;
     const mailboxId = `mbx_read_only_${crypto.randomUUID()}`;
     const now = new Date();
@@ -37,9 +42,10 @@ describe("read-only mailbox access", () => {
       }),
       db.insert(mailboxes).values({
         id: mailboxId,
-        address: "readonly@example.test",
+        localPart: "readonly",
+        domainId: domain!.id,
         displayName: "Read only",
-        kind: "shared",
+        ownerUserId: null,
         createdByUserId: admin!.id,
         createdAt: now,
         updatedAt: now,

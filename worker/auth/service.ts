@@ -9,7 +9,7 @@ import {
   accessLinkClaims,
   accessLinks,
   accountApiTokens,
-  installations,
+  domains,
   mailboxes,
   passkeyCredentials,
   sessions,
@@ -17,7 +17,7 @@ import {
 } from "../db/schema";
 import { hashToken } from "../lib/crypto";
 import { createId, normalizeMailboxAddress } from "../lib/ids";
-import { INSTALLATION_ID } from "./constants";
+import { mailboxAddressSql } from "../db/mailboxes";
 import {
   beginAuthentication,
   beginRegistration,
@@ -25,15 +25,14 @@ import {
   finishAuthentication,
   finishRegistration,
 } from "./webauthn";
-import { provisionInstallationAccount } from "./personal-account";
+import { provisionBootstrapAccount } from "./personal-account";
 
-export async function hasInstallation(db: Database) {
-  const [installation] = await db
-    .select({ id: installations.id })
-    .from(installations)
-    .where(eq(installations.id, INSTALLATION_ID))
+export async function hasUsers(db: Database) {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
     .limit(1);
-  return Boolean(installation);
+  return Boolean(user);
 }
 
 export async function beginBootstrap(
@@ -41,7 +40,7 @@ export async function beginBootstrap(
   request: Request,
   input: { name: string; email: string },
 ) {
-  if (await hasInstallation(db)) throw new Error("Installation is already set up");
+  if (await hasUsers(db)) throw new Error("Account is already set up");
   const userId = createId("usr");
   // userId lives in payload only — the users row is created on verify, so the
   // auth_challenges.user_id FK must stay null during bootstrap.
@@ -81,7 +80,7 @@ export async function finishBootstrap(
   const credential = await finishRegistration(challenge, response);
   const mailboxId = createId("mbx");
   const now = new Date();
-  await provisionInstallationAccount(db, {
+  await provisionBootstrapAccount(db, {
     userId,
     mailboxId,
     name: payload.name,
@@ -106,7 +105,7 @@ export async function beginLogin(
   request: Request,
   oidcRequestId?: string,
 ) {
-  if (!(await hasInstallation(db))) throw new Error("Set up the first account first");
+  if (!(await hasUsers(db))) throw new Error("Set up the first account first");
   return beginAuthentication(
     db,
     request,
@@ -142,11 +141,18 @@ async function findAccessLink(
       userId: users.id,
       name: users.name,
       status: users.status,
-      email: mailboxes.address,
+      email: mailboxAddressSql,
     })
     .from(accessLinks)
     .innerJoin(users, eq(accessLinks.userId, users.id))
-    .leftJoin(mailboxes, eq(mailboxes.personalOwnerId, users.id))
+    .leftJoin(
+      mailboxes,
+      and(
+        eq(mailboxes.ownerUserId, users.id),
+        eq(mailboxes.isPrimary, true),
+      ),
+    )
+    .leftJoin(domains, eq(mailboxes.domainId, domains.id))
     .where(
       and(
         eq(accessLinks.kind, kind),

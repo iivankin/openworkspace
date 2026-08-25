@@ -50,6 +50,13 @@
       "when": 1787591941682,
       "tag": "0006_colorful_nocturne",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787684959291,
+      "tag": "0007_silent_nextwave",
+      "breakpoints": true
     }
   ]
 }

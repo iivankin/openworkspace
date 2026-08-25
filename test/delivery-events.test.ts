@@ -49,7 +49,7 @@ describe("Email Service delivery events", () => {
     const [mailbox] = await createDb(env.DB)
       .select({ id: mailboxes.id })
       .from(mailboxes)
-      .where(eq(mailboxes.address, "admin@example.test"))
+      .where(eq(mailboxes.isPrimary, true))
       .limit(1);
     const stub = mailboxStub(env, mailbox!.id);
     await stub.insertEmail({

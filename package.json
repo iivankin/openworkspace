@@ -40,7 +40,7 @@
     ],
     "bindings": {
       "DB": {
-        "description": "D1 stores users, passkeys, sessions, mailbox permissions, and one-time access links."
+        "description": "D1 stores domains, users, passkeys, sessions, mailbox ownership and permissions, global settings, and one-time access links."
       },
       "MAILBOX": {
         "description": "One SQLite-backed Durable Object per mailbox stores RFC metadata and conversation state."
@@ -69,11 +69,8 @@
       "EMAIL": {
         "description": "Email Service sends outbound mail. Onboard the sending domain after deployment."
       },
-      "CLOUDFLARE_ZONE_ID": {
-        "description": "Optional. Zone id used to show Cloudflare SPF, DKIM, DMARC, and spam results in Show original."
-      },
       "CLOUDFLARE_ANALYTICS_TOKEN": {
-        "description": "Optional secret. Cloudflare API token with Analytics Read for the mail zone."
+        "description": "Optional secret. Cloudflare API token with Analytics Read for every configured mail zone."
       },
       "PUSH_NOTIFICATIONS": {
         "description": "Queue for Web Push delivery after incoming mail is committed."

@@ -6,6 +6,7 @@ type AdminStateResponse = SuccessfulResponse<
 >;
 
 export type AdminMailbox = AdminStateResponse["mailboxes"][number];
+export type AdminDomain = AdminStateResponse["domains"][number];
 export type AdminUser = AdminStateResponse["users"][number];
 export type MailboxMemberPermission = AdminMailbox["members"][number];
 
@@ -38,7 +39,13 @@ export type WebhookInput = {
 export type CreateMailboxInput = {
   displayName: string;
   address: string;
+  ownerUserId: string | null;
   members: MailboxMemberPermission[];
+};
+
+export type DomainInput = {
+  name: string;
+  cloudflareZoneId: string | null;
 };
 
 export type UpdateMailboxInput = Pick<

@@ -1,12 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  createDomainSchema,
   createInvitationSchema,
   createMailboxSchema,
   createOidcClientSchema,
   globalAiProcessingSchema,
   groupInputSchema,
   updateMailboxSchema,
+  updateDomainSchema,
   updateOidcClientSchema,
   updateUserSchema,
 } from "../admin/schemas";
@@ -27,7 +29,7 @@ export function registerAdminTools(server: McpServer, api: AccountApiClient) {
     "get_administration",
     {
       title: "Get account administration",
-      description: "List installation settings, users, shared mailboxes, memberships, identity groups, and OIDC applications.",
+      description: "List domains, global settings, users, mailboxes, memberships, identity groups, and OIDC applications.",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -36,6 +38,53 @@ export function registerAdminTools(server: McpServer, api: AccountApiClient) {
       },
     },
     () => runTool(() => api.json("/admin/state")),
+  );
+
+  server.registerTool(
+    "add_domain",
+    {
+      title: "Add mail domain",
+      description: "Allow mailboxes on a domain that an administrator has already configured in Cloudflare.",
+      inputSchema: createDomainSchema,
+      annotations: adminWrite,
+    },
+    (input) => runTool(() => api.json("/admin/domains", {
+      method: "POST",
+      json: input,
+    })),
+  );
+
+  server.registerTool(
+    "update_domain",
+    {
+      title: "Update mail domain",
+      inputSchema: updateDomainSchema.safeExtend({
+        domainId: entityIdSchema,
+      }),
+      annotations: { ...adminWrite, idempotentHint: true },
+    },
+    ({ domainId, ...input }) => runTool(() => api.json(
+      `/admin/domains/${encodeURIComponent(domainId)}`,
+      { method: "PATCH", json: input },
+    )),
+  );
+
+  server.registerTool(
+    "delete_domain",
+    {
+      title: "Delete mail domain",
+      description: "Delete a non-primary domain after all of its mailboxes are removed.",
+      inputSchema: z.object({ domainId: entityIdSchema }),
+      annotations: {
+        ...adminWrite,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    ({ domainId }) => runTool(() => api.json(
+      `/admin/domains/${encodeURIComponent(domainId)}`,
+      { method: "DELETE" },
+    )),
   );
 
   server.registerTool(
@@ -164,9 +213,10 @@ export function registerAdminTools(server: McpServer, api: AccountApiClient) {
   );
 
   server.registerTool(
-    "create_shared_mailbox",
+    "create_mailbox",
     {
-      title: "Create shared mailbox",
+      title: "Create mailbox",
+      description: "Create a personal mailbox for one owner or a shared mailbox with explicit members.",
       inputSchema: createMailboxSchema,
       annotations: adminWrite,
     },
@@ -174,6 +224,19 @@ export function registerAdminTools(server: McpServer, api: AccountApiClient) {
       method: "POST",
       json: input,
     })),
+  );
+
+  server.registerTool(
+    "set_primary_mailbox",
+    {
+      title: "Set primary personal mailbox",
+      inputSchema: z.object({ mailboxId: entityIdSchema }),
+      annotations: { ...adminWrite, idempotentHint: true },
+    },
+    ({ mailboxId }) => runTool(() => api.json(
+      `/admin/mailboxes/${encodeURIComponent(mailboxId)}/primary`,
+      { method: "POST" },
+    )),
   );
 
   server.registerTool(
@@ -194,10 +257,10 @@ export function registerAdminTools(server: McpServer, api: AccountApiClient) {
   );
 
   server.registerTool(
-    "delete_shared_mailbox",
+    "delete_mailbox",
     {
-      title: "Delete shared mailbox",
-      description: "Permanently delete a shared mailbox, its messages, attachments, settings, and member access. Personal mailboxes cannot be deleted with this tool.",
+      title: "Delete mailbox",
+      description: "Permanently delete a shared or secondary personal mailbox and its data. A primary personal mailbox must be replaced first.",
       inputSchema: z.object({ mailboxId: entityIdSchema }),
       annotations: {
         ...adminWrite,

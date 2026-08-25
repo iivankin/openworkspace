@@ -1,11 +1,11 @@
-import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { accountApi } from "./account-api";
 import { verifySameOrigin } from "./auth/middleware";
 import { mockAuthRoutes } from "./auth/mock";
 import { authRoutes } from "./auth/routes";
 import { createDb } from "./db/client";
-import { mailboxes } from "./db/schema";
+import { domains, mailboxes } from "./db/schema";
+import { mailboxAddressPredicate } from "./db/mailboxes";
 import type { AppEnv } from "./env";
 import { mailDownloadRoutes } from "./mail/downloads";
 import { consumeDeliveryEvents } from "./mail/delivery-events";
@@ -70,7 +70,7 @@ export default {
     const [mailbox] = await createDb(env.DB)
       .select({ id: mailboxes.id })
       .from(mailboxes)
-      .where(eq(mailboxes.address, recipient))
+      .innerJoin(domains, mailboxAddressPredicate(recipient))
       .limit(1);
     if (!mailbox) {
       message.setReject(`Mailbox ${recipient} does not exist`);

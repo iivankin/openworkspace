@@ -5,6 +5,7 @@ import {
   oidcScopes,
 } from "../../shared/oidc";
 import { emailSchema } from "../auth/schemas";
+import { isValidExternalEmailAddress } from "../../shared/mail";
 import {
   isAllowedOidcRedirectUri,
   normalizeAllowedOidcOrigin,
@@ -25,6 +26,35 @@ const mailboxMembersSchema = z
     { message: "A user may only be assigned once" },
   );
 
+export const domainNameSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .max(253)
+  .refine(
+    (domain) => !domain.includes("@")
+      && isValidExternalEmailAddress(`mailbox@${domain}`),
+    "Enter a valid domain",
+  );
+
+const cloudflareZoneIdSchema = z.string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-f0-9]{32}$/u, "Zone ID must contain 32 hexadecimal characters")
+  .nullable();
+
+export const createDomainSchema = z.object({
+  name: domainNameSchema,
+  cloudflareZoneId: cloudflareZoneIdSchema.default(null),
+});
+
+export const updateDomainSchema = z.object({
+  cloudflareZoneId: cloudflareZoneIdSchema.optional(),
+  isPrimary: z.literal(true).optional(),
+}).refine(
+  (input) => input.cloudflareZoneId !== undefined || input.isPrimary === true,
+  "Provide at least one domain change",
+);
+
 export const createInvitationSchema = z.object({
   name: z.string().trim().min(2).max(80),
   email: emailSchema,
@@ -33,7 +63,22 @@ export const createInvitationSchema = z.object({
 export const createMailboxSchema = z.object({
   address: emailSchema,
   displayName: z.string().trim().min(2).max(80),
-  members: mailboxMembersSchema,
+  ownerUserId: z.string().min(1).nullable(),
+  members: z.array(mailboxMemberSchema).max(100),
+}).superRefine((input, context) => {
+  if (input.ownerUserId && input.members.length > 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["members"],
+      message: "Personal mailbox access follows its owner",
+    });
+  }
+  if (!input.ownerUserId) {
+    const parsed = mailboxMembersSchema.safeParse(input.members);
+    for (const issue of parsed.error?.issues ?? []) {
+      context.addIssue({ ...issue, path: ["members", ...issue.path] });
+    }
+  }
 });
 
 export const updateMailboxSchema = z.object({

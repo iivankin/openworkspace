@@ -7,7 +7,7 @@ describe("mailbox local-part helpers", () => {
     expect(mailboxLocalPart("ilya")).toBe("ilya");
   });
 
-  it("builds addresses on the installation domain", () => {
+  it("builds addresses on the configured domain", () => {
     expect(mailboxAddress("support", "looma.llc")).toBe("support@looma.llc");
     expect(mailboxAddress("a@other.test", "looma.llc")).toBe("a@looma.llc");
   });

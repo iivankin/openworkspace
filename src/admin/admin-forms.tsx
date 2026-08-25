@@ -11,10 +11,15 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
-  InputGroupAddon,
   InputGroupInput,
-  InputGroupText,
 } from "@/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   adminPanelClass,
   AdminPanelBody,
@@ -22,6 +27,7 @@ import {
   AdminPanelHeader,
 } from "./admin-panel";
 import type {
+  AdminDomain,
   AdminUser,
   CreateMailboxInput,
   InvitationInput,
@@ -32,59 +38,85 @@ import { SharedUserAccess } from "./shared-user-access";
 
 function DomainAddressField({
   id,
-  domain,
+  domains,
+  domainId,
+  onDomainChange,
   placeholder,
   value,
   onChange,
   required,
 }: {
   id: string;
-  domain: string;
+  domains: AdminDomain[];
+  domainId: string;
+  onDomainChange: (domainId: string) => void;
   placeholder: string;
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
 }) {
+  const selectedDomain = domains.find((domain) => domain.id === domainId)?.name ?? "";
+
   return (
-    <InputGroup className="h-9">
-      <InputGroupInput
-        id={id}
-        type="text"
-        inputMode="email"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => onChange(mailboxLocalPart(event.target.value))}
-        required={required}
-        aria-label="Mailbox local part"
-      />
-      <InputGroupAddon align="inline-end">
-        <InputGroupText className="font-mono text-xs">@{domain}</InputGroupText>
-      </InputGroupAddon>
-    </InputGroup>
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(9rem,auto)]">
+      <InputGroup className="h-9 rounded-r-none border-r-0">
+        <InputGroupInput
+          id={id}
+          type="text"
+          inputMode="email"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={placeholder}
+          value={value}
+          onChange={(event) => onChange(mailboxLocalPart(event.target.value))}
+          required={required}
+          aria-label="Mailbox local part"
+        />
+      </InputGroup>
+      <Select
+        value={domainId}
+        onValueChange={(value) => value && onDomainChange(value)}
+      >
+        <SelectTrigger
+          className="w-full rounded-l-none font-mono text-xs"
+          aria-label="Mailbox domain"
+        >
+          <SelectValue>{`@${selectedDomain}`}</SelectValue>
+        </SelectTrigger>
+        <SelectContent align="start" alignItemWithTrigger={false}>
+          {domains.map((domain) => (
+            <SelectItem key={domain.id} value={domain.id}>{domain.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
 export function InviteForm({
   pending,
-  domain,
+  domains,
   onSubmit,
 }: {
   pending: boolean;
-  domain: string;
+  domains: AdminDomain[];
   onSubmit: (input: InvitationInput) => void;
 }) {
   const [name, setName] = useState("");
   const [localPart, setLocalPart] = useState("");
+  const [domainId, setDomainId] = useState(
+    () => domains.find((domain) => domain.isPrimary)?.id ?? domains[0]?.id ?? "",
+  );
 
   function submit(event: FormEvent) {
     event.preventDefault();
     const local = mailboxLocalPart(localPart);
     if (!local) return;
+    const domain = domains.find((candidate) => candidate.id === domainId);
+    if (!domain) return;
     onSubmit({
       name,
-      email: mailboxAddress(local, domain),
+      email: mailboxAddress(local, domain.name),
     });
   }
 
@@ -96,31 +128,33 @@ export function InviteForm({
         description="They receive a one-time link to register a passkey."
       />
       <AdminPanelBody>
-      <FieldGroup className="grid gap-4 sm:grid-cols-2">
-        <Field>
-          <FieldLabel className="sr-only" htmlFor="invite-name">Name</FieldLabel>
-          <Input
-            id="invite-name"
-            placeholder="Full name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            required
-          />
-        </Field>
-        <Field>
-          <FieldLabel className="sr-only" htmlFor="invite-email">
-            Personal mailbox
-          </FieldLabel>
-          <DomainAddressField
-            id="invite-email"
-            domain={domain}
-            placeholder="name"
-            value={localPart}
-            onChange={setLocalPart}
-            required
-          />
-        </Field>
-      </FieldGroup>
+        <FieldGroup className="grid gap-4 sm:grid-cols-2">
+          <Field>
+            <FieldLabel className="sr-only" htmlFor="invite-name">Name</FieldLabel>
+            <Input
+              id="invite-name"
+              placeholder="Full name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+            />
+          </Field>
+          <Field>
+            <FieldLabel className="sr-only" htmlFor="invite-email">
+              Personal mailbox
+            </FieldLabel>
+            <DomainAddressField
+              id="invite-email"
+              domains={domains}
+              domainId={domainId}
+              onDomainChange={setDomainId}
+              placeholder="name"
+              value={localPart}
+              onChange={setLocalPart}
+              required
+            />
+          </Field>
+        </FieldGroup>
       </AdminPanelBody>
       <AdminPanelFooter>
         <Button type="submit" disabled={pending || !mailboxLocalPart(localPart)}>
@@ -134,39 +168,82 @@ export function InviteForm({
 
 export function MailboxForm({
   pending,
-  domain,
+  domains,
   users,
   onSubmit,
 }: {
   pending: boolean;
-  domain: string;
+  domains: AdminDomain[];
   users: AdminUser[];
   onSubmit: (input: CreateMailboxInput) => void;
 }) {
   const [displayName, setDisplayName] = useState("");
   const [localPart, setLocalPart] = useState("");
+  const [domainId, setDomainId] = useState(
+    () => domains.find((domain) => domain.isPrimary)?.id ?? domains[0]?.id ?? "",
+  );
+  const [mailboxType, setMailboxType] = useState<"shared" | "personal">("shared");
+  const [ownerUserId, setOwnerUserId] = useState("");
   const [members, setMembers] = useState<MailboxMemberPermission[]>([]);
   function submit(event: FormEvent) {
     event.preventDefault();
     const local = mailboxLocalPart(localPart);
     if (!local) return;
+    const domain = domains.find((candidate) => candidate.id === domainId);
+    if (!domain || (mailboxType === "personal" && !ownerUserId)) return;
     onSubmit({
       displayName,
-      address: mailboxAddress(local, domain),
-      members,
+      address: mailboxAddress(local, domain.name),
+      ownerUserId: mailboxType === "personal" ? ownerUserId : null,
+      members: mailboxType === "shared" ? members : [],
     });
   }
   return (
     <form className={adminPanelClass} onSubmit={submit}>
       <AdminPanelHeader
         Icon={MailPlus}
-        title="Create a shared mailbox"
-        description="Choose the address and exactly who can read or send from it."
+        title="Create a mailbox"
       />
       <AdminPanelBody className="space-y-6">
-        <FieldGroup className="grid gap-4 sm:grid-cols-[1fr_1.3fr]">
+        <FieldGroup className="grid gap-4 sm:grid-cols-2">
           <Field>
-            <FieldLabel className="sr-only" htmlFor="mailbox-display-name">Display name</FieldLabel>
+            <FieldLabel htmlFor="mailbox-type">Type</FieldLabel>
+            <Select
+              value={mailboxType}
+              onValueChange={(value) =>
+                setMailboxType((value ?? "shared") as "shared" | "personal")}
+            >
+              <SelectTrigger id="mailbox-type" className="w-full">
+                <SelectValue>{mailboxType === "shared" ? "Shared" : "Personal"}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start" alignItemWithTrigger={false}>
+                <SelectItem value="shared">Shared</SelectItem>
+                <SelectItem value="personal">Personal</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {mailboxType === "personal" ? (
+            <Field>
+              <FieldLabel htmlFor="mailbox-owner">Owner</FieldLabel>
+              <Select
+                value={ownerUserId}
+                onValueChange={(value) => setOwnerUserId(value ?? "")}
+              >
+                <SelectTrigger id="mailbox-owner" className="w-full">
+                  <SelectValue placeholder="Select owner">
+                    {users.find((user) => user.id === ownerUserId)?.name}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" alignItemWithTrigger={false}>
+                  {users.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : null}
+          <Field className={mailboxType === "personal" ? "sm:col-span-2" : undefined}>
+            <FieldLabel htmlFor="mailbox-display-name">Display name</FieldLabel>
             <Input
               id="mailbox-display-name"
               placeholder="Support"
@@ -175,11 +252,13 @@ export function MailboxForm({
               required
             />
           </Field>
-          <Field>
-            <FieldLabel className="sr-only" htmlFor="mailbox-address">Address</FieldLabel>
+          <Field className="sm:col-span-2">
+            <FieldLabel htmlFor="mailbox-address">Address</FieldLabel>
             <DomainAddressField
               id="mailbox-address"
-              domain={domain}
+              domains={domains}
+              domainId={domainId}
+              onDomainChange={setDomainId}
               placeholder="support"
               value={localPart}
               onChange={setLocalPart}
@@ -187,15 +266,21 @@ export function MailboxForm({
             />
           </Field>
         </FieldGroup>
-        <FieldSet>
-          <FieldLegend variant="label">Mailbox access</FieldLegend>
-          <SharedUserAccess users={users} value={members} onChange={setMembers} />
-        </FieldSet>
+        {mailboxType === "shared" ? (
+          <FieldSet>
+            <FieldLegend variant="label">Mailbox access</FieldLegend>
+            <SharedUserAccess users={users} value={members} onChange={setMembers} />
+          </FieldSet>
+        ) : null}
       </AdminPanelBody>
       <AdminPanelFooter>
         <Button
           type="submit"
-          disabled={pending || members.length === 0 || !mailboxLocalPart(localPart)}
+          disabled={
+            pending
+            || !mailboxLocalPart(localPart)
+            || (mailboxType === "shared" ? members.length === 0 : !ownerUserId)
+          }
         >
           {pending ? <LoaderCircle className="animate-spin" /> : <MailPlus />}
           Create

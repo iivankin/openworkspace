@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { createDb } from "../db/client";
-import { mailboxes } from "../db/schema";
+import { domains, mailboxes } from "../db/schema";
+import { mailboxAddressPredicate } from "../db/mailboxes";
 import { normalizeMailboxAddress } from "../lib/ids";
 import { mailboxStub } from "../mailbox";
 import {
@@ -63,7 +63,7 @@ async function processDeliveryEvent(env: Env, event: DeliveryEvent) {
   const [mailbox] = await createDb(env.DB)
     .select({ id: mailboxes.id })
     .from(mailboxes)
-    .where(eq(mailboxes.address, sender))
+    .innerJoin(domains, mailboxAddressPredicate(sender))
     .limit(1);
   if (!mailbox) return "ignored" as const;
   return mailboxStub(env, mailbox.id).recordDeliveryStatus(

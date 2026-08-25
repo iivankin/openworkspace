@@ -76,7 +76,7 @@ function AuthenticationRow({
 const unavailableMessages = {
   expired: "Cloudflare no longer retains analytics for this message.",
   missing_message_id: "This message has no Message-ID to match with Cloudflare.",
-  not_configured: "Cloudflare authentication details are not configured for this installation.",
+  not_configured: "Cloudflare authentication details are not configured for this account.",
   not_found: "Cloudflare has not published analytics for this message yet.",
   rate_limited: "Authentication details were requested too often. Try again shortly.",
   request_failed: "Cloudflare authentication details are temporarily unavailable.",

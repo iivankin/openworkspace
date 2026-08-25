@@ -65,7 +65,7 @@ const eventCopy: Record<
   },
   "mailbox.deleted": {
     label: "Mailbox deleted",
-    description: "A shared mailbox was permanently removed.",
+    description: "A mailbox was permanently removed.",
   },
 };
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
   baseSubject,
@@ -8,7 +8,12 @@ import {
 } from "../../shared/mail";
 import { requireAuth } from "../auth/middleware";
 import { createDb } from "../db/client";
-import { mailboxMembers, mailboxes } from "../db/schema";
+import { domains, mailboxMembers, mailboxes } from "../db/schema";
+import {
+  mailboxAddressSql,
+  mailboxKind,
+  mailboxKindOrderSql,
+} from "../db/mailboxes";
 import type { AppEnv } from "../env";
 import { apiError } from "../lib/http";
 import { createId } from "../lib/ids";
@@ -266,21 +271,29 @@ export const mailRoutes = new Hono<AppEnv>()
     const rows = await createDb(c.env.DB)
       .select({
         id: mailboxes.id,
-        address: mailboxes.address,
+        address: mailboxAddressSql,
         displayName: mailboxes.displayName,
-        kind: mailboxes.kind,
+        ownerUserId: mailboxes.ownerUserId,
+        isPrimary: mailboxes.isPrimary,
         canSend: mailboxMembers.canSend,
       })
       .from(mailboxMembers)
       .innerJoin(mailboxes, eq(mailboxMembers.mailboxId, mailboxes.id))
+      .innerJoin(domains, eq(mailboxes.domainId, domains.id))
       .where(eq(mailboxMembers.userId, userId))
-      .orderBy(mailboxes.kind, mailboxes.displayName);
+      .orderBy(
+        mailboxKindOrderSql,
+        desc(mailboxes.isPrimary),
+        mailboxes.displayName,
+      );
 
     const rowsWithUnreadCounts = await Promise.all(rows.map(async (mailbox) => {
       const inbox = await mailboxStub(c.env, mailbox.id)
         .getFolderCounts(userId, "inbox");
+      const { ownerUserId, isPrimary: _isPrimary, ...publicMailbox } = mailbox;
       return {
-        ...mailbox,
+        ...publicMailbox,
+        kind: mailboxKind(ownerUserId),
         unreadCount: inbox?.unreadCount ?? 0,
       };
     }));
@@ -857,7 +870,8 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const { mailboxId } = c.req.valid("query");
       const userId = c.get("user").id;
-      if (!await accessibleMailbox(c.env, userId, mailboxId, "read")) {
+      const access = await accessibleMailbox(c.env, userId, mailboxId, "read");
+      if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
       }
       const mailbox = mailboxStub(c.env, mailboxId);
@@ -881,7 +895,7 @@ export const mailRoutes = new Hono<AppEnv>()
         });
       }
 
-      const zoneId = c.env.CLOUDFLARE_ZONE_ID?.trim();
+      const zoneId = access.cloudflareZoneId?.trim();
       const token = c.env.CLOUDFLARE_ANALYTICS_TOKEN?.trim();
       if (!zoneId || !token) {
         return c.json({

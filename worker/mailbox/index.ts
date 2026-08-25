@@ -1153,7 +1153,7 @@ export class MailboxDO extends DurableObject<Env> {
   private async classifyInbound(email: NewEmail) {
     let enabled: boolean;
     try {
-      // D1 owns the installation switch. Reading it per delivery avoids a
+      // D1 owns the account-wide switch. Reading it per delivery avoids a
       // second cached flag in every mailbox Durable Object.
       enabled = await globalAiProcessingEnabled(this.bindings.DB);
     } catch (error) {

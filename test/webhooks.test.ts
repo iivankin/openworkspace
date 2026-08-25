@@ -2,7 +2,8 @@ import { env, exports } from "cloudflare:workers";
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createDb } from "../worker/db/client";
-import { mailboxes, webhookDeliveries } from "../worker/db/schema";
+import { mailboxAddressSql } from "../worker/db/mailboxes";
+import { domains, mailboxes, webhookDeliveries } from "../worker/db/schema";
 import { mailboxStub } from "../worker/mailbox";
 import { deferEmailSentWebhook } from "../worker/mail/outbound-service";
 import { consumeWebhooks } from "../worker/webhooks/delivery";
@@ -202,8 +203,9 @@ describe("account webhooks", () => {
       webhook: { id: string };
     }>();
     const [mailbox] = await createDb(env.DB)
-      .select({ id: mailboxes.id, address: mailboxes.address })
+      .select({ id: mailboxes.id, address: mailboxAddressSql })
       .from(mailboxes)
+      .innerJoin(domains, eq(mailboxes.domainId, domains.id))
       .limit(1);
     expect(mailbox).toBeTruthy();
     const messageId = "msg_webhook_body";

@@ -1,17 +1,17 @@
 import type { Database } from "../db/client";
 import {
-  installations,
+  domains,
   mailboxMembers,
   mailboxes,
   passkeyCredentials,
   users,
 } from "../db/schema";
-import { emailDomain, normalizeMailboxAddress } from "../lib/ids";
-import { INSTALLATION_ID } from "./constants";
+import { createId, emailDomain, mailboxAddressParts } from "../lib/ids";
 
 type PersonalAccountInput = {
   userId: string;
   mailboxId: string;
+  domainId: string;
   name: string;
   email: string;
   role: "admin" | "member";
@@ -34,10 +34,11 @@ export function personalAccountRecords(input: PersonalAccountInput) {
     },
     mailbox: {
       id: input.mailboxId,
-      address: normalizeMailboxAddress(input.email),
+      localPart: mailboxAddressParts(input.email).localPart,
+      domainId: input.domainId,
       displayName: input.name,
-      kind: "personal" as const,
-      personalOwnerId: input.userId,
+      ownerUserId: input.userId,
+      isPrimary: true,
       createdByUserId: input.createdByUserId,
       createdAt: input.now,
       updatedAt: input.now,
@@ -51,20 +52,23 @@ export function personalAccountRecords(input: PersonalAccountInput) {
   };
 }
 
-export async function provisionInstallationAccount(
+export async function provisionBootstrapAccount(
   db: Database,
-  input: PersonalAccountInput & {
+  input: Omit<PersonalAccountInput, "domainId"> & {
     credential?: typeof passkeyCredentials.$inferInsert;
   },
 ) {
-  const account = personalAccountRecords(input);
+  const domainId = createId("dom");
+  const account = personalAccountRecords({ ...input, domainId });
   const base = [
     db.insert(users).values(account.user),
-    db.insert(installations).values({
-      id: INSTALLATION_ID,
-      domain: emailDomain(input.email),
-      ownerUserId: input.userId,
+    db.insert(domains).values({
+      id: domainId,
+      name: emailDomain(input.email),
+      isPrimary: true,
+      createdByUserId: input.userId,
       createdAt: input.now,
+      updatedAt: input.now,
     }),
     db.insert(mailboxes).values(account.mailbox),
     db.insert(mailboxMembers).values(account.membership),

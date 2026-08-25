@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client";
-import { mailboxMembers, mailboxes } from "../db/schema";
+import { domains, mailboxMembers, mailboxes } from "../db/schema";
+import { mailboxAddressSql, mailboxKind } from "../db/mailboxes";
 
 export async function getMailboxAccess(
   db: Database,
@@ -10,13 +11,15 @@ export async function getMailboxAccess(
   const [access] = await db
     .select({
       id: mailboxes.id,
-      address: mailboxes.address,
+      address: mailboxAddressSql,
       displayName: mailboxes.displayName,
-      kind: mailboxes.kind,
+      ownerUserId: mailboxes.ownerUserId,
+      cloudflareZoneId: domains.cloudflareZoneId,
       canSend: mailboxMembers.canSend,
     })
     .from(mailboxMembers)
     .innerJoin(mailboxes, eq(mailboxMembers.mailboxId, mailboxes.id))
+    .innerJoin(domains, eq(mailboxes.domainId, domains.id))
     .where(
       and(
         eq(mailboxMembers.userId, userId),
@@ -24,5 +27,5 @@ export async function getMailboxAccess(
       ),
     )
     .limit(1);
-  return access ?? null;
+  return access ? { ...access, kind: mailboxKind(access.ownerUserId) } : null;
 }

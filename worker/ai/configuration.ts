@@ -1,25 +1,33 @@
 import { eq } from "drizzle-orm";
 import { createDb } from "../db/client";
-import { installations } from "../db/schema";
-import { INSTALLATION_ID } from "../auth/constants";
+import { settings } from "../db/schema";
+
+const GLOBAL_AI_PROCESSING_KEY = "ai_processing_enabled";
 
 export async function globalAiProcessingEnabled(binding: D1Database) {
-  const [installation] = await createDb(binding)
-    .select({ enabled: installations.aiProcessingEnabled })
-    .from(installations)
-    .where(eq(installations.id, INSTALLATION_ID))
+  const [setting] = await createDb(binding)
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, GLOBAL_AI_PROCESSING_KEY))
     .limit(1);
-  return installation?.enabled ?? false;
+  return setting?.value === "true";
 }
 
 export async function setGlobalAiProcessingEnabled(
   binding: D1Database,
   enabled: boolean,
 ) {
-  const updated = await createDb(binding)
-    .update(installations)
-    .set({ aiProcessingEnabled: enabled })
-    .where(eq(installations.id, INSTALLATION_ID))
-    .returning({ enabled: installations.aiProcessingEnabled });
-  return updated[0] ?? null;
+  const now = new Date();
+  await createDb(binding)
+    .insert(settings)
+    .values({
+      key: GLOBAL_AI_PROCESSING_KEY,
+      value: String(enabled),
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: String(enabled), updatedAt: now },
+    });
+  return { enabled };
 }

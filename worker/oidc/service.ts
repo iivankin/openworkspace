@@ -12,6 +12,7 @@ import {
 import type { OidcScope } from "../../shared/oidc";
 import type { Database } from "../db/client";
 import {
+  domains,
   groupMembers,
   identityGroups,
   mailboxes,
@@ -26,6 +27,7 @@ import {
   oidcRefreshTokens,
   users,
 } from "../db/schema";
+import { mailboxAddressSql } from "../db/mailboxes";
 import type { AppEnv } from "../env";
 import { hashToken, randomToken } from "../lib/crypto";
 import { createId } from "../lib/ids";
@@ -531,15 +533,21 @@ async function identityClaims(
     .select({
       name: users.name,
       avatarUrl: users.avatarUrl,
-      email: mailboxes.address,
+      email: mailboxAddressSql,
     })
     .from(users)
-    .innerJoin(mailboxes, eq(mailboxes.personalOwnerId, users.id))
+    .innerJoin(
+      mailboxes,
+      and(
+        eq(mailboxes.ownerUserId, users.id),
+        eq(mailboxes.isPrimary, true),
+      ),
+    )
+    .innerJoin(domains, eq(mailboxes.domainId, domains.id))
     .where(
       and(
         eq(users.id, input.userId),
         eq(users.status, "active"),
-        eq(mailboxes.kind, "personal"),
       ),
     )
     .limit(1);

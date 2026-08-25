@@ -23,10 +23,9 @@
 # R2_ACCOUNT_ID=
 # R2_BUCKET_NAME=openworkspace
 
-# Optional authentication summary in Show original. Create a Cloudflare API
-# token with Analytics Read for the mail zone, then set its zone id and token.
+# Optional authentication summary in Show original. Set an Analytics Read token
+# here, then enter each mail domain's Zone ID in Administration → Domains.
 # Cloudflare Email Routing analytics are retained for 31 days.
-# CLOUDFLARE_ZONE_ID=
 # CLOUDFLARE_ANALYTICS_TOKEN=
 
 # Optional Web Push. Generate one persistent key pair with

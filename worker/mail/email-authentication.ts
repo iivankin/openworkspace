@@ -2,7 +2,6 @@ import { z } from "zod";
 import type { EmailAuthenticationResults } from "../mailbox/model";
 
 export type CloudflareEmailAnalyticsBindings = {
-  CLOUDFLARE_ZONE_ID?: string;
   CLOUDFLARE_ANALYTICS_TOKEN?: string;
 };
 

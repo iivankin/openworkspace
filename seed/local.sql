@@ -6,15 +6,15 @@ VALUES
   ('usr_demo_member', 'Maya Chen', NULL, 'member', 'active', unixepoch() * 1000 - 604800000, unixepoch() * 1000),
   ('usr_demo_invited', 'Alex Rivera', NULL, 'member', 'invited', unixepoch() * 1000 - 86400000, unixepoch() * 1000);
 
-INSERT OR IGNORE INTO installations (id, domain, owner_user_id, created_at)
-VALUES ('primary', 'demo.example', 'usr_demo_admin', unixepoch() * 1000 - 864000000);
+INSERT OR IGNORE INTO domains (id, name, cloudflare_zone_id, is_primary, created_by_user_id, created_at, updated_at)
+VALUES ('dom_demo_primary', 'demo.example', NULL, 1, 'usr_demo_admin', unixepoch() * 1000 - 864000000, unixepoch() * 1000);
 
-INSERT OR IGNORE INTO mailboxes (id, address, display_name, kind, personal_owner_id, created_by_user_id, created_at, updated_at)
+INSERT OR IGNORE INTO mailboxes (id, local_part, domain_id, display_name, owner_user_id, is_primary, created_by_user_id, created_at, updated_at)
 VALUES
-  ('mbx_demo_personal', 'ilya@demo.example', 'Ilya Morozov', 'personal', 'usr_demo_admin', 'usr_demo_admin', unixepoch() * 1000 - 864000000, unixepoch() * 1000),
-  ('mbx_demo_maya', 'maya@demo.example', 'Maya Chen', 'personal', 'usr_demo_member', 'usr_demo_admin', unixepoch() * 1000 - 604800000, unixepoch() * 1000),
-  ('mbx_demo_alex', 'alex@demo.example', 'Alex Rivera', 'personal', 'usr_demo_invited', 'usr_demo_admin', unixepoch() * 1000 - 86400000, unixepoch() * 1000),
-  ('mbx_demo_support', 'support@demo.example', 'Customer care', 'shared', NULL, 'usr_demo_admin', unixepoch() * 1000 - 691200000, unixepoch() * 1000);
+  ('mbx_demo_personal', 'ilya', 'dom_demo_primary', 'Ilya Morozov', 'usr_demo_admin', 1, 'usr_demo_admin', unixepoch() * 1000 - 864000000, unixepoch() * 1000),
+  ('mbx_demo_maya', 'maya', 'dom_demo_primary', 'Maya Chen', 'usr_demo_member', 1, 'usr_demo_admin', unixepoch() * 1000 - 604800000, unixepoch() * 1000),
+  ('mbx_demo_alex', 'alex', 'dom_demo_primary', 'Alex Rivera', 'usr_demo_invited', 1, 'usr_demo_admin', unixepoch() * 1000 - 86400000, unixepoch() * 1000),
+  ('mbx_demo_support', 'support', 'dom_demo_primary', 'Customer care', NULL, 0, 'usr_demo_admin', unixepoch() * 1000 - 691200000, unixepoch() * 1000);
 
 INSERT OR IGNORE INTO mailbox_members (mailbox_id, user_id, can_send, created_at)
 VALUES

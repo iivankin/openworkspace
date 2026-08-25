@@ -12,7 +12,7 @@ import {
   demoMailboxFolders,
 } from "../mailbox/demo";
 import { mailboxStub } from "../mailbox";
-import { provisionInstallationAccount } from "./personal-account";
+import { provisionBootstrapAccount } from "./personal-account";
 import { mockBootstrapSchema, mockLoginSchema } from "./schemas";
 import { createSession, reauthenticateSession } from "./session";
 import {
@@ -36,7 +36,7 @@ export const mockAuthRoutes = new Hono<AppEnv>()
     const mailboxId = createId("mbx");
     const now = new Date();
     try {
-      await provisionInstallationAccount(db, {
+      await provisionBootstrapAccount(db, {
         userId,
         mailboxId,
         name: input.name,
@@ -47,7 +47,7 @@ export const mockAuthRoutes = new Hono<AppEnv>()
         now,
       });
     } catch {
-      return apiError(c, 409, "CONFLICT", "Installation is already set up");
+      return apiError(c, 409, "CONFLICT", "Account is already set up");
     }
     await createSession(db, c, userId);
     return c.json({ ok: true as const });

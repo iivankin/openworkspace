@@ -144,7 +144,7 @@ describe("account MCP", () => {
     expect(adminToolNames).toContain("get_administration");
     expect(adminToolNames).toContain("list_webhooks");
     expect(adminToolNames).toContain("create_webhook");
-    expect(adminToolNames).toContain("delete_shared_mailbox");
+    expect(adminToolNames).toContain("delete_mailbox");
     expect(adminToolNames).toContain("get_attachment_download_url");
     expect(adminToolNames).toContain("create_attachment_upload");
     expect(adminToolNames).toContain("complete_attachment_upload");
@@ -294,10 +294,11 @@ describe("account MCP", () => {
       adminToken.token,
       "tools/call",
       {
-        name: "create_shared_mailbox",
+        name: "create_mailbox",
         arguments: {
           address: "mcp-shared@example.test",
           displayName: "MCP shared",
+          ownerUserId: null,
           members: [{ userId: adminUser!.id, canSend: true }],
         },
       },
@@ -313,7 +314,7 @@ describe("account MCP", () => {
       adminToken.token,
       "tools/call",
       {
-        name: "delete_shared_mailbox",
+        name: "delete_mailbox",
         arguments: { mailboxId: sharedMailboxId },
       },
     );
@@ -332,7 +333,7 @@ describe("account MCP", () => {
       adminToken.token,
       "tools/call",
       {
-        name: "delete_shared_mailbox",
+        name: "delete_mailbox",
         arguments: { mailboxId: sharedMailboxId },
       },
     );
@@ -343,7 +344,7 @@ describe("account MCP", () => {
       adminToken.token,
       "tools/call",
       {
-        name: "delete_shared_mailbox",
+        name: "delete_mailbox",
         arguments: { mailboxId },
       },
     );

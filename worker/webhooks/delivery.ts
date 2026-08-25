@@ -3,10 +3,12 @@ import { z } from "zod";
 import { webhookEventTypes } from "../../shared/webhooks";
 import { createDb } from "../db/client";
 import {
+  domains,
   mailboxes,
   webhookDeliveries,
   webhookEndpoints,
 } from "../db/schema";
+import { mailboxAddressSql, mailboxKind } from "../db/mailboxes";
 import { hashToken } from "../lib/crypto";
 import { mailboxStub } from "../mailbox";
 import type { Email } from "../mailbox/schema";
@@ -99,14 +101,17 @@ async function eventData(env: Env, source: WebhookEventSource) {
     createDb(env.DB)
       .select({
         id: mailboxes.id,
-        address: mailboxes.address,
+        address: mailboxAddressSql,
         displayName: mailboxes.displayName,
-        kind: mailboxes.kind,
+        ownerUserId: mailboxes.ownerUserId,
       })
       .from(mailboxes)
+      .innerJoin(domains, eq(mailboxes.domainId, domains.id))
       .where(eq(mailboxes.id, source.mailboxId))
       .limit(1)
-      .then((rows) => rows[0] ?? null),
+      .then((rows) => rows[0]
+        ? { ...rows[0], kind: mailboxKind(rows[0].ownerUserId) }
+        : null),
     mailboxStub(env, source.mailboxId).getEmail(source.messageId),
   ]);
   if (!mailbox || !email) throw new Error("Webhook email no longer exists");
