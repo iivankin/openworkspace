@@ -94,7 +94,7 @@ function SettingsNavigation({
           to={path}
           onClick={onNavigate}
           className={cn(
-            "flex items-center gap-2.5 rounded-xl px-3 py-2 text-[0.8125rem] font-medium transition-colors",
+            "flex items-center gap-2.5 rounded-md px-3 py-2 text-[0.8125rem] font-medium transition-colors",
             value === id
               ? "bg-primary/14 text-foreground"
               : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -123,7 +123,7 @@ function MobileSettingsMenu({ value }: { value: SettingsSection }) {
       </SheetTrigger>
       <SheetContent side="left" className="w-72 gap-0 p-0" showCloseButton>
         <SheetHeader className="border-b border-border/70 pr-12">
-          <SheetTitle className="font-display font-semibold">OpenWorkspace</SheetTitle>
+          <SheetTitle className="font-semibold tracking-[-0.01em]">OpenWorkspace</SheetTitle>
           <SheetDescription>Settings</SheetDescription>
         </SheetHeader>
         <SettingsNavigation value={value} onNavigate={() => setOpen(false)} />
@@ -152,13 +152,13 @@ export function SettingsShell() {
 
   return (
     <main className="flex h-dvh min-h-0 bg-background">
-      <aside className="hidden w-68 shrink-0 flex-col border-r border-border/70 bg-sidebar md:flex">
-        <div className="flex h-18 shrink-0 items-center gap-2.5 border-b border-border/70 px-5">
-          <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-4">
+          <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
             <Inbox className="size-4.5" strokeWidth={2.25} />
           </span>
           <div>
-            <p className="font-display text-[0.9375rem] leading-tight font-semibold">
+            <p className="text-[0.875rem] leading-tight font-semibold tracking-[-0.01em]">
               OpenWorkspace
             </p>
             <p className="text-[11px] leading-tight text-muted-foreground">Settings</p>
@@ -173,10 +173,10 @@ export function SettingsShell() {
       </aside>
 
       <section className="paper-grain flex min-w-0 flex-1 flex-col">
-        <header className="flex h-18 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-4 sm:px-6 lg:px-8">
           <MobileSettingsMenu value={section} />
           <div className="min-w-0">
-            <h1 className="truncate font-display text-xl font-semibold">{copy.label}</h1>
+            <h1 className="truncate text-lg font-semibold tracking-[-0.02em]">{copy.label}</h1>
             <p className="hidden truncate text-xs text-muted-foreground sm:block">
               {copy.description}
             </p>

@@ -35,16 +35,16 @@ export function AuthScreen() {
       <section className="paper-grain flex items-center justify-center bg-background px-6 py-14 sm:px-10">
         <div className="w-full max-w-sm animate-rise">
           <div className="mb-10 flex items-center gap-2.5 lg:hidden">
-            <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+            <span className="grid size-9 place-items-center rounded-md bg-primary text-primary-foreground">
               <Inbox className="size-4.5" strokeWidth={2.25} />
             </span>
-            <span className="font-display text-base font-semibold">OpenWorkspace</span>
+            <span className="text-base font-semibold tracking-[-0.01em]">OpenWorkspace</span>
           </div>
 
           <p className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
             {auth.needsBootstrap ? "Initial setup" : "Authentication"}
           </p>
-          <h1 className="mt-3 font-display text-[2.5rem] leading-none font-semibold">
+          <h1 className="mt-3 text-[2.125rem] leading-none font-semibold tracking-[-0.03em]">
             {auth.needsBootstrap ? "Create administrator" : "Sign in"}
           </h1>
           <p className="mt-4 text-sm leading-6 text-muted-foreground text-pretty">
@@ -108,34 +108,16 @@ export function AuthScreen() {
 
 function BrandPanel() {
   return (
-    <aside className="relative hidden overflow-hidden bg-[oklch(0.2178_0.0125_67.2)] p-14 text-[oklch(0.96_0.008_84)] lg:flex lg:flex-col lg:justify-between">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 opacity-70"
-        style={{
-          backgroundImage:
-            "radial-gradient(38rem 30rem at 78% 6%, oklch(0.7642 0.1442 68.5 / 0.28), transparent 68%), radial-gradient(32rem 26rem at 6% 92%, oklch(0.5482 0.1155 245 / 0.22), transparent 70%)",
-        }}
-      />
-      {/* Airmail edging: the striped border of a par-avion envelope. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 left-0 w-2.5 opacity-60"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(135deg, oklch(0.7642 0.1442 68.5) 0 10px, transparent 10px 20px, oklch(0.5482 0.1155 245) 20px 30px, transparent 30px 40px)",
-        }}
-      />
-
-      <div className="relative flex items-center gap-3">
-        <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-lg">
+    <aside className="hidden border-r border-white/8 bg-[oklch(0.19_0.035_250)] p-14 text-[oklch(0.96_0.012_240)] lg:flex lg:flex-col lg:justify-between">
+      <div className="flex items-center gap-3">
+        <span className="grid size-10 place-items-center rounded-md bg-primary text-primary-foreground">
           <Inbox className="size-5" strokeWidth={2.25} />
         </span>
-        <span className="font-display text-lg font-semibold">OpenWorkspace</span>
+        <span className="text-lg font-semibold tracking-[-0.015em]">OpenWorkspace</span>
       </div>
 
-      <div className="relative max-w-md">
-        <p className="font-display text-[2.75rem] leading-[1.05] font-semibold text-balance">
+      <div className="max-w-md">
+        <p className="text-[2.25rem] leading-[1.08] font-semibold tracking-[-0.035em] text-balance">
           Mail that belongs to your workspace, not to a vendor.
         </p>
         <p className="mt-6 text-sm leading-7 text-[oklch(0.96_0.008_84_/_0.62)] text-pretty">
@@ -144,14 +126,14 @@ function BrandPanel() {
         </p>
       </div>
 
-      <dl className="relative grid grid-cols-3 gap-6 border-t border-white/10 pt-8 text-xs">
+      <dl className="grid grid-cols-3 gap-6 border-t border-white/10 pt-8 text-xs">
         {[
           ["Passkeys", "No passwords, ever"],
           ["Shared", "Team mailboxes"],
           ["SSO", "OIDC provider"],
         ].map(([term, detail]) => (
           <div key={term}>
-            <dt className="font-display text-base font-semibold text-primary">{term}</dt>
+            <dt className="text-base font-semibold text-primary">{term}</dt>
             <dd className="mt-1 text-[oklch(0.96_0.008_84_/_0.55)]">{detail}</dd>
           </div>
         ))}

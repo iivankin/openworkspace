@@ -306,12 +306,12 @@ export function MailShell({ mailboxId }: { mailboxId?: string }) {
           />
         ) : (
           <section className="w-full px-3 pb-24 sm:px-6 lg:px-8 lg:pb-10">
-            <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pt-7 pb-5 sm:pt-9 sm:pb-6">
+            <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pt-6 pb-4 sm:pt-8 sm:pb-5">
               <div className="min-w-0">
                 <p className="truncate text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
                   {mailbox?.address}
                 </p>
-                <h1 className="mt-1.5 font-display text-[2rem] leading-none font-semibold sm:text-[2.5rem]">
+                <h1 className="mt-1 text-[1.625rem] leading-tight font-semibold tracking-[-0.025em] sm:text-[1.875rem]">
                   {folderName}
                 </h1>
               </div>

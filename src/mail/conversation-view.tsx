@@ -121,10 +121,10 @@ export function ConversationView({
         </div>
         <div className="grid min-h-72 place-items-center py-16 text-center">
           <div>
-            <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+            <span className="mx-auto grid size-12 place-items-center rounded-lg bg-destructive/10 text-destructive">
               <CircleAlert className="size-6" strokeWidth={1.75} />
             </span>
-            <p className="mt-5 font-display text-lg font-semibold">Could not load this conversation</p>
+            <p className="mt-4 text-base font-semibold">Could not load this conversation</p>
             <p className="mx-auto mt-1.5 max-w-sm text-sm leading-6 text-muted-foreground">{error}</p>
             <Button className="mt-5" variant="outline" size="sm" onClick={onRetry}>
               <RotateCw /> Retry
@@ -181,7 +181,7 @@ export function ConversationView({
   return (
     <article className="w-full px-3 pb-24 sm:px-6 lg:pb-10">
       <TooltipProvider delay={300}>
-        <header className="sticky top-0 z-30 -mx-3 flex h-14 items-center gap-1 border-b border-border/70 bg-background/85 px-3 backdrop-blur-xl sm:-mx-6 sm:px-6">
+        <header className="sticky top-0 z-30 -mx-3 flex h-12 items-center gap-1 border-b border-border bg-surface px-3 sm:-mx-6 sm:px-6">
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft /> Back
           </Button>
@@ -236,12 +236,12 @@ export function ConversationView({
         </header>
       </TooltipProvider>
 
-      <div className="mx-auto max-w-4xl py-8 sm:py-12">
-        <div className="mb-9 border-b border-border/70 pb-7">
+      <div className="mx-auto max-w-4xl py-7 sm:py-10">
+        <div className="mb-8 border-b border-border/70 pb-6">
           <p className="text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
             {messageCount} {messageCount === 1 ? "message" : "messages"}
           </p>
-          <h1 className="mt-2.5 font-display text-[1.75rem] leading-[1.15] font-semibold text-balance sm:text-[2.25rem]">
+          <h1 className="mt-2 text-[1.5rem] leading-[1.2] font-semibold tracking-[-0.025em] text-balance sm:text-[1.875rem]">
             {conversationSubject}
           </h1>
         </div>
@@ -356,7 +356,7 @@ function MessageBubble({
       {!outgoing && (
         showAvatar
           ? (
-              <Avatar className="mt-6 size-9 shrink-0 shadow-xs">
+              <Avatar className="mt-6 size-9 shrink-0">
                 <AvatarFallback className="text-[11px]">{initials(sender)}</AvatarFallback>
               </Avatar>
             )

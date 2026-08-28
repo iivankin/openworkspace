@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  ChevronRight,
   Copy,
   LoaderCircle,
   Plus,
@@ -28,7 +29,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, responseJson } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import {
   adminPanelClass,
   AdminPanelBody,
@@ -83,18 +83,21 @@ export function SsoApplications({
   users,
   groups,
   loading = false,
+  selectedId,
+  onSelect,
 }: {
   clients: AdminOidcClient[];
   users: AdminUser[];
   groups: AdminGroup[];
   loading?: boolean;
+  selectedId?: string;
+  onSelect: (id?: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
   const [secret, setSecret] = useState<string>();
   const selected = selectedId === "new"
     ? undefined
-    : clients.find((client) => client.id === selectedId) ?? clients[0];
+    : clients.find((client) => client.id === selectedId);
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["admin-state"] });
@@ -110,83 +113,76 @@ export function SsoApplications({
     );
   }
 
-  return (
-    <div className="grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
-      <aside>
-        <div className="mb-3 flex items-center justify-between px-1">
-          <div>
-            <p className="text-sm font-semibold">SSO applications</p>
-            <p className="text-xs text-muted-foreground">{clients.length} registered</p>
-          </div>
-          <Button
-            size="icon-sm"
-            aria-label="Create SSO application"
-            onClick={() => {
-              setSelectedId("new");
-              setSecret(undefined);
-            }}
-          >
-            <Plus />
+  if (!selectedId) {
+    return (
+      <div className="max-w-3xl space-y-3">
+        <div className="flex items-center justify-between gap-4 px-1">
+          <p className="text-xs text-muted-foreground">{clients.length} registered</p>
+          <Button size="sm" onClick={() => onSelect("new")}>
+            <Plus /> Add application
           </Button>
         </div>
-        <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
-          {clients.map((client) => {
-            const active = client.id === selected?.id;
-            return (
-              <button
-                key={client.id}
-                type="button"
-                aria-current={active}
-                className={cn(
-                  "relative flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors",
-                  "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:transition-opacity",
-                  active ? "bg-accent/60 before:opacity-100" : "before:opacity-0 hover:bg-accent/40",
-                )}
-                onClick={() => {
-                  setSelectedId(client.id);
-                  setSecret(undefined);
-                }}
-              >
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
-                  <Shield className="size-4" />
+        <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
+          {clients.map((client) => (
+            <button
+              key={client.id}
+              type="button"
+              className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/45"
+              onClick={() => {
+                setSecret(undefined);
+                onSelect(client.id);
+              }}
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
+                <Shield className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold">{client.name}</span>
+                <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                  {client.id}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[0.8125rem] font-semibold">{client.name}</span>
-                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                    {client.id}
-                  </span>
-                </span>
-                {!client.enabled && <Badge variant="outline">Off</Badge>}
-              </button>
-            );
-          })}
-          {clients.length === 0 && (
-            <p className="py-10 text-center text-xs text-muted-foreground">
+              </span>
+              {!client.enabled ? <Badge variant="outline">Off</Badge> : null}
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+          {clients.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">
               No applications yet
             </p>
-          )}
+          ) : null}
         </div>
-      </aside>
+      </div>
+    );
+  }
 
-      <section className="min-w-0">
-        <ClientEditor
-          key={selected?.id ?? "new"}
-          client={selected}
-          users={users}
-          groups={groups}
-          secret={secret}
-          onSecret={setSecret}
-          onSaved={async (clientId) => {
-            await refresh();
-            setSelectedId(clientId);
-          }}
-          onDeleted={async () => {
-            await refresh();
-            setSelectedId("new");
-            setSecret(undefined);
-          }}
-        />
-      </section>
+  if (selectedId !== "new" && !selected) {
+    return (
+      <div className={`${adminPanelClass} max-w-3xl px-6 py-12 text-center`}>
+        <p className="text-sm text-muted-foreground">SSO application not found.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <ClientEditor
+        key={selected?.id ?? "new"}
+        client={selected}
+        users={users}
+        groups={groups}
+        secret={secret}
+        onSecret={setSecret}
+        onSaved={async (clientId) => {
+          await refresh();
+          onSelect(clientId);
+        }}
+        onDeleted={async () => {
+          await refresh();
+          setSecret(undefined);
+          onSelect();
+        }}
+      />
     </div>
   );
 }
@@ -305,7 +301,7 @@ function ClientEditor({
           <p className="truncate font-mono text-[11px] tracking-[0.06em] text-muted-foreground">
             {client ? client.id : "New client"}
           </p>
-          <h2 className="mt-1.5 truncate font-display text-xl font-semibold">
+          <h2 className="mt-1.5 truncate text-lg font-semibold tracking-[-0.02em]">
             {client?.name ?? "Register application"}
           </h2>
         </div>

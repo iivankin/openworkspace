@@ -60,12 +60,12 @@ export function MailHeader({
     : String(otherMailboxUnreadCount);
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/80 px-3 backdrop-blur-xl sm:px-5">
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-3 sm:px-5">
       <div className="flex shrink-0 items-center gap-2.5 lg:mr-1">
-        <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+        <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
           <Inbox className="size-4.5" strokeWidth={2.25} />
         </span>
-        <span className="hidden font-display text-base leading-none font-semibold xl:inline">
+        <span className="hidden text-sm leading-none font-semibold tracking-[-0.01em] xl:inline">
           OpenWorkspace
         </span>
       </div>
@@ -75,7 +75,7 @@ export function MailHeader({
           <label className="relative hidden w-48 xl:block 2xl:w-72">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              className="h-9 rounded-full bg-surface-sunken pr-3 pl-9 shadow-none"
+              className="h-9 bg-surface-sunken pr-3 pl-9"
               placeholder={searchPlaceholder}
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
@@ -98,7 +98,7 @@ export function MailHeader({
                   ? `Account and mailboxes, ${otherMailboxUnreadCount} unread in other mailboxes`
                   : "Account and mailboxes"}
                 variant="ghost"
-                className="h-11 max-w-60 gap-2.5 rounded-full py-0 pr-2.5 pl-1.5 hover:bg-accent"
+                className="h-10 max-w-60 gap-2.5 rounded-md border border-border bg-surface py-0 pr-2.5 pl-1.5 hover:bg-accent"
               />
             )}
           >
@@ -146,7 +146,7 @@ export function MailHeader({
                   <DropdownMenuItem key={item.id} onClick={() => onMailboxChange(item.id)}>
                     <span
                       className={cn(
-                        "grid size-7 shrink-0 place-items-center rounded-lg",
+                        "grid size-7 shrink-0 place-items-center rounded-md",
                         active
                           ? "bg-primary/20 text-foreground"
                           : "bg-surface-sunken text-muted-foreground",

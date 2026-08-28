@@ -78,7 +78,7 @@ function sessionDevice(userAgent: string | null) {
 function LoadingRows() {
   return Array.from({ length: 2 }, (_, index) => (
     <div key={index} className="flex items-center gap-4 border-t border-border/70 px-5 py-4 first:border-t-0">
-      <Skeleton className="size-10 rounded-xl" />
+      <Skeleton className="size-10 rounded-lg" />
       <div className="flex-1 space-y-2">
         <Skeleton className="h-4 w-40" />
         <Skeleton className="h-3 w-64 max-w-full" />
@@ -126,7 +126,7 @@ export function SessionsPanel({
               key={record.id}
               className="flex items-start gap-4 border-t border-border/70 px-5 py-4 first:border-t-0"
             >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-surface-sunken text-muted-foreground ring-1 ring-border/80">
+              <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-sunken text-muted-foreground ring-1 ring-border/80">
                 <DeviceIcon className="size-4.5" />
               </span>
               <div className="min-w-0 flex-1">

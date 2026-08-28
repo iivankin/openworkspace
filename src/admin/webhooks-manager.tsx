@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  ChevronRight,
   Clipboard,
+  History,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -22,7 +24,6 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, responseJson } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { adminPanelClass } from "./admin-panel";
 import type { AdminWebhook, AdminWebhookDelivery } from "./types";
 import { WebhookEditor, webhookEventLabels } from "./webhook-editor";
@@ -38,22 +39,32 @@ function formatDate(value: string | Date | null) {
 function DeliveryHistory({
   deliveries,
   webhooks,
+  refreshing,
+  onRefresh,
 }: {
   deliveries: AdminWebhookDelivery[];
   webhooks: AdminWebhook[];
+  refreshing: boolean;
+  onRefresh: () => void;
 }) {
   const endpointNames = new Map(
     webhooks.map((webhook) => [webhook.id, webhook.name]),
   );
   return (
-    <section className={adminPanelClass}>
-      <div className="border-b border-border/70 bg-surface-sunken/60 px-5 py-4">
-        <p className="text-sm font-semibold">Recent deliveries</p>
-        <p className="text-xs text-muted-foreground">Latest 50 attempts across the account.</p>
+    <section>
+      <div className="flex items-end justify-between gap-4 px-1">
+        <div>
+          <p className="text-sm font-semibold">Recent deliveries</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Latest 50 attempts across the account.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          Refresh
+        </Button>
       </div>
-      {deliveries.length ? (
-        <div className="divide-y divide-border/60">
-          {deliveries.map((delivery) => (
+      <div className="mt-3 divide-y divide-border/70 border-y border-border/70">
+        {deliveries.length ? (
+          deliveries.map((delivery) => (
             <div key={delivery.id} className="grid gap-2 px-5 py-3.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -84,20 +95,28 @@ function DeliveryHistory({
                 {formatDate(delivery.lastAttemptAt ?? delivery.createdAt)}
               </p>
             </div>
-          ))}
-        </div>
-      ) : (
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">
-          No deliveries yet. Save an endpoint and send a test.
-        </p>
-      )}
+          ))
+        ) : (
+          <div className="flex items-center gap-3 px-1 py-5 text-muted-foreground">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-sunken">
+              <History className="size-4" />
+            </span>
+            <p className="text-sm">No deliveries yet</p>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
 
-export function WebhooksManager() {
+export function WebhooksManager({
+  selectedId,
+  onSelect,
+}: {
+  selectedId?: string;
+  onSelect: (id?: string) => void;
+}) {
   const queryClient = useQueryClient();
-  const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
   const [secret, setSecret] = useState<string>();
   const [copied, setCopied] = useState(false);
   const settings = useQuery({
@@ -107,10 +126,7 @@ export function WebhooksManager() {
 
   if (settings.isLoading) {
     return (
-      <div className="grid gap-6 lg:grid-cols-[17rem_minmax(0,1fr)]">
-        <Skeleton className="h-72" />
-        <Skeleton className="h-[34rem]" />
-      </div>
+      <Skeleton className={selectedId ? "h-[34rem] max-w-3xl" : "h-72 max-w-3xl"} />
     );
   }
   if (settings.isError) {
@@ -128,8 +144,8 @@ export function WebhooksManager() {
   const deliveries = settings.data?.deliveries ?? [];
   const selected = selectedId === "new"
     ? undefined
-    : webhooks.find((webhook) => webhook.id === selectedId) ?? webhooks[0];
-  const editingNew = selectedId === "new" || (!selected && webhooks.length === 0);
+    : webhooks.find((webhook) => webhook.id === selectedId);
+  const editingNew = selectedId === "new";
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["admin-webhooks"] });
@@ -137,80 +153,79 @@ export function WebhooksManager() {
 
   return (
     <>
-      <div className="space-y-8">
-        <div className="grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
-          <aside>
-            <div className="mb-3 flex items-center justify-between px-1">
+      {!selectedId ? (
+        <div className="max-w-3xl space-y-10">
+          <section>
+            <div className="flex items-end justify-between gap-4 px-1">
               <div>
                 <p className="text-sm font-semibold">Endpoints</p>
-                <p className="text-xs text-muted-foreground">{webhooks.length} configured</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{webhooks.length} configured</p>
               </div>
-              <Button size="sm" onClick={() => setSelectedId("new")}>
+              <Button size="sm" onClick={() => onSelect("new")}>
                 <Plus /> Add endpoint
               </Button>
             </div>
-            <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
-              {webhooks.map((webhook) => {
-                const active = !editingNew && webhook.id === selected?.id;
-                return (
-                  <button
-                    key={webhook.id}
-                    type="button"
-                    aria-current={active}
-                    className={cn(
-                      "relative flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors",
-                      "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:transition-opacity",
-                      active ? "bg-accent/60 before:opacity-100" : "before:opacity-0 hover:bg-accent/40",
-                    )}
-                    onClick={() => setSelectedId(webhook.id)}
-                  >
-                    <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
-                      <Webhook className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[0.8125rem] font-semibold">{webhook.name}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">{webhook.url}</span>
-                    </span>
-                    {!webhook.enabled ? <Badge variant="outline">Off</Badge> : null}
-                  </button>
-                );
-              })}
+            <div className="mt-3 divide-y divide-border/70 border-y border-border/70">
+              {webhooks.map((webhook) => (
+                <button
+                  key={webhook.id}
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/45"
+                  onClick={() => onSelect(webhook.id)}
+                >
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
+                    <Webhook className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{webhook.name}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{webhook.url}</span>
+                  </span>
+                  {!webhook.enabled ? <Badge variant="outline">Off</Badge> : null}
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+              ))}
               {!webhooks.length ? (
-                <p className="px-4 py-10 text-center text-xs text-muted-foreground">
-                  No webhook endpoints yet
-                </p>
+                <div className="flex items-center gap-3 px-1 py-5 text-muted-foreground">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-surface-sunken">
+                    <Webhook className="size-4" />
+                  </span>
+                  <p className="text-sm">No webhook endpoints yet</p>
+                </div>
               ) : null}
             </div>
-          </aside>
-
-          <section className="min-w-0">
-            <WebhookEditor
-              key={editingNew ? "new" : selected?.id}
-              webhook={editingNew ? undefined : selected}
-              onSecret={(value) => {
-                setCopied(false);
-                setSecret(value);
-              }}
-              onSaved={async (id) => {
-                await refresh();
-                setSelectedId(id);
-              }}
-              onDeleted={async () => {
-                await refresh();
-                setSelectedId("new");
-              }}
-            />
           </section>
-        </div>
 
-        <div className="flex justify-end">
-          <Button variant="outline" size="sm" onClick={() => void settings.refetch()} disabled={settings.isFetching}>
-            {settings.isFetching ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
-            Refresh deliveries
-          </Button>
+          <DeliveryHistory
+            deliveries={deliveries}
+            webhooks={webhooks}
+            refreshing={settings.isFetching}
+            onRefresh={() => void settings.refetch()}
+          />
         </div>
-        <DeliveryHistory deliveries={deliveries} webhooks={webhooks} />
-      </div>
+      ) : selectedId !== "new" && !selected ? (
+        <div className={`${adminPanelClass} max-w-3xl px-6 py-12 text-center`}>
+          <p className="text-sm text-muted-foreground">Webhook endpoint not found.</p>
+        </div>
+      ) : (
+        <div className="max-w-3xl">
+          <WebhookEditor
+            key={editingNew ? "new" : selected?.id}
+            webhook={editingNew ? undefined : selected}
+            onSecret={(value) => {
+              setCopied(false);
+              setSecret(value);
+            }}
+            onSaved={async (id) => {
+              await refresh();
+              onSelect(id);
+            }}
+            onDeleted={async () => {
+              await refresh();
+              onSelect();
+            }}
+          />
+        </div>
+      )}
 
       <Dialog open={Boolean(secret)} onOpenChange={(open) => {
         if (!open) setSecret(undefined);

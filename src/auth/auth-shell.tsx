@@ -12,7 +12,7 @@ export function BrandMark({
   return (
     <span
       className={cn(
-        "grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25",
+        "grid size-10 place-items-center rounded-md bg-primary text-primary-foreground",
         className,
       )}
     >
@@ -40,13 +40,13 @@ export function AuthShell({
         <div className="mb-6 flex items-center gap-3">
           <BrandMark Icon={Icon} />
           <div>
-            <p className="font-display text-[0.9375rem] leading-tight font-semibold">{title}</p>
+            <p className="text-[0.9375rem] leading-tight font-semibold tracking-[-0.01em]">{title}</p>
             {subtitle ? (
               <p className="text-xs leading-tight text-muted-foreground">{subtitle}</p>
             ) : null}
           </div>
         </div>
-        <div className="rounded-2xl bg-surface p-6 shadow-lg ring-1 ring-border sm:p-7">
+        <div className="rounded-xl border border-border bg-surface p-6 sm:p-7">
           {children}
         </div>
       </section>
@@ -70,7 +70,7 @@ export function AuthHeading({
           {eyebrow}
         </p>
       ) : null}
-      <h1 className="mt-2.5 font-display text-[1.75rem] leading-tight font-semibold text-balance">
+      <h1 className="mt-2.5 text-[1.75rem] leading-tight font-semibold tracking-[-0.025em] text-balance">
         {title}
       </h1>
       {description ? (

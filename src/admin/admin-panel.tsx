@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export const adminPanelClass =
-  "overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border";
+  "overflow-hidden rounded-xl border border-border bg-surface";
 
 export function AdminPanelHeader({
   Icon,
@@ -19,7 +19,7 @@ export function AdminPanelHeader({
   return (
     <div className="flex items-start gap-3 border-b border-border/70 bg-surface-sunken/60 px-5 py-4">
       {Icon && (
-        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/14 text-foreground/70">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
           <Icon className="size-4.5" />
         </span>
       )}

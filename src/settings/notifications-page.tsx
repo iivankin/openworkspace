@@ -137,7 +137,7 @@ export function NotificationsSettings() {
       />
       <AdminPanelBody className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-primary/14 text-foreground/70">
+          <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
             <Smartphone className="size-5" />
           </span>
           <div className="min-w-0 flex-1">

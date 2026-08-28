@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Plus, Save, Trash2, UsersRound } from "lucide-react";
+import { ChevronRight, LoaderCircle, Plus, Save, Trash2, UsersRound } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { api, responseJson } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import {
   adminPanelClass,
   AdminPanelBody,
@@ -21,16 +20,19 @@ export function GroupsManager({
   groups,
   users,
   loading = false,
+  selectedId,
+  onSelect,
 }: {
   groups: AdminGroup[];
   users: AdminUser[];
   loading?: boolean;
+  selectedId?: string;
+  onSelect: (id?: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
   const selected = selectedId === "new"
     ? undefined
-    : groups.find((group) => group.id === selectedId) ?? groups[0];
+    : groups.find((group) => group.id === selectedId);
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["admin-state"] });
@@ -46,70 +48,69 @@ export function GroupsManager({
     );
   }
 
-  return (
-    <div className="grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]">
-      <aside>
-        <div className="mb-3 flex items-center justify-between px-1">
-          <div>
-            <p className="text-sm font-semibold">Identity groups</p>
-            <p className="text-xs text-muted-foreground">{groups.length} groups</p>
-          </div>
-          <Button
-            size="icon-sm"
-            aria-label="Create group"
-            onClick={() => setSelectedId("new")}
-          >
-            <Plus />
+  if (!selectedId) {
+    return (
+      <div className="max-w-3xl space-y-3">
+        <div className="flex items-center justify-between gap-4 px-1">
+          <p className="text-xs text-muted-foreground">{groups.length} groups</p>
+          <Button size="sm" onClick={() => onSelect("new")}>
+            <Plus /> Add group
           </Button>
         </div>
-        <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
-          {groups.map((group) => {
-            const active = group.id === selected?.id;
-            return (
-              <button
-                key={group.id}
-                type="button"
-                aria-current={active}
-                className={cn(
-                  "relative flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors",
-                  "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:transition-opacity",
-                  active ? "bg-accent/60 before:opacity-100" : "before:opacity-0 hover:bg-accent/40",
-                )}
-                onClick={() => setSelectedId(group.id)}
-              >
-                <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
-                  <UsersRound className="size-4" />
+        <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
+          {groups.map((group) => (
+            <button
+              key={group.id}
+              type="button"
+              className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-accent/45"
+              onClick={() => onSelect(group.id)}
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
+                <UsersRound className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold">{group.name}</span>
+                <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                  {group.slug}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[0.8125rem] font-semibold">{group.name}</span>
-                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                    {group.slug}
-                  </span>
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {group.memberIds.length}
-                </span>
-              </button>
-            );
-          })}
-          {groups.length === 0 && (
-            <p className="py-10 text-center text-xs text-muted-foreground">
+              </span>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {group.memberIds.length}
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          ))}
+          {groups.length === 0 ? (
+            <p className="py-12 text-center text-sm text-muted-foreground">
               No identity groups
             </p>
-          )}
+          ) : null}
         </div>
-      </aside>
+      </div>
+    );
+  }
+
+  if (selectedId !== "new" && !selected) {
+    return (
+      <div className={`${adminPanelClass} max-w-3xl px-6 py-12 text-center`}>
+        <p className="text-sm text-muted-foreground">Identity group not found.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl">
       <GroupEditor
         key={selected?.id ?? "new"}
         group={selected}
         users={users}
         onSaved={async (id) => {
           await refresh();
-          setSelectedId(id);
+          onSelect(id);
         }}
         onDeleted={async () => {
           await refresh();
-          setSelectedId("new");
+          onSelect();
         }}
       />
     </div>
@@ -185,7 +186,7 @@ function GroupEditor({
         <p className="font-mono text-[11px] tracking-[0.06em] text-muted-foreground">
           {group ? group.id : "New group"}
         </p>
-        <h2 className="mt-1.5 font-display text-xl font-semibold">
+        <h2 className="mt-1.5 text-lg font-semibold tracking-[-0.02em]">
           {group?.name ?? "Create identity group"}
         </h2>
       </div>

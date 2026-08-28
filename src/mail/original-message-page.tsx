@@ -171,7 +171,7 @@ export function OriginalMessagePage() {
 
   return (
     <main className="min-h-dvh bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b bg-background/95 backdrop-blur">
+      <header className="sticky top-0 z-10 border-b border-border bg-surface">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <div className="min-w-0">
             <h1 className="font-heading text-2xl font-semibold tracking-tight sm:text-3xl">

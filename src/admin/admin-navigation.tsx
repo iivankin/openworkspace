@@ -3,11 +3,9 @@ import {
   ArrowLeft,
   Globe2,
   KeyRound,
-  MailPlus,
   Menu,
   Settings2,
   type LucideIcon,
-  UserPlus,
   Users,
   UsersRound,
   Webhook,
@@ -32,9 +30,7 @@ export type AdminSection =
   | "domains"
   | "sso-applications"
   | "groups"
-  | "webhooks"
-  | "invite"
-  | "new-mailbox";
+  | "webhooks";
 
 const adminSections: Array<{
   id: AdminSection;
@@ -45,11 +41,9 @@ const adminSections: Array<{
   { id: "people", label: "People", Icon: Users },
   { id: "mailboxes", label: "Mailboxes", Icon: Settings2 },
   { id: "domains", label: "Domains", Icon: Globe2 },
+  { id: "webhooks", label: "Webhooks", Icon: Webhook },
   { id: "sso-applications", label: "SSO applications", Icon: KeyRound, separatorBefore: true },
   { id: "groups", label: "Identity groups", Icon: UsersRound },
-  { id: "webhooks", label: "Webhooks", Icon: Webhook },
-  { id: "invite", label: "Invite person", Icon: UserPlus, separatorBefore: true },
-  { id: "new-mailbox", label: "New mailbox", Icon: MailPlus },
 ];
 
 export function AdminNavigation({
@@ -78,7 +72,7 @@ export function AdminNavigation({
                 if (id === value) onChange(id);
                 onNavigate?.();
               }}
-              className="h-9 justify-start gap-2.5 rounded-lg px-3 text-[0.8125rem] after:hidden group-data-[variant=line]/tabs-list:hover:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:font-semibold data-active:[&_svg]:text-primary"
+              className="h-9 justify-start gap-2.5 rounded-md px-3 text-[0.8125rem] after:hidden group-data-[variant=line]/tabs-list:hover:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:bg-sidebar-accent group-data-[variant=line]/tabs-list:data-active:font-semibold data-active:[&_svg]:text-primary"
             >
               <Icon /> {label}
             </TabsTrigger>
@@ -113,7 +107,7 @@ export function MobileAdminMenu({
         showCloseButton
       >
         <SheetHeader className="shrink-0 border-b border-border/70 pr-12">
-          <SheetTitle className="font-display font-semibold">OpenWorkspace</SheetTitle>
+          <SheetTitle className="font-semibold tracking-[-0.01em]">OpenWorkspace</SheetTitle>
           <SheetDescription>Administration</SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">

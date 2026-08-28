@@ -186,7 +186,7 @@ export function ConversationReply({
   return (
     <div className="sticky bottom-16 z-20 -mx-3 bg-gradient-to-t from-background via-background to-transparent px-3 pt-10 pb-4 sm:-mx-6 sm:px-6 sm:pb-6 lg:bottom-0">
       <form
-        className="mx-auto max-w-2xl animate-rise overflow-hidden rounded-2xl bg-surface shadow-xl ring-1 ring-border"
+        className="mx-auto max-w-2xl animate-rise overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
         aria-busy={busy}
         onDragOver={(event) => {
           if (!event.dataTransfer.types.includes("Files")) return;

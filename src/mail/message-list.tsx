@@ -47,10 +47,10 @@ function EmptyState({
   return (
     <div className="grid min-h-80 place-items-center px-8 py-16 text-center">
       <div className="animate-fade-in">
-        <span className="mx-auto grid size-14 place-items-center rounded-2xl bg-surface-sunken text-muted-foreground ring-1 ring-border">
+        <span className="mx-auto grid size-12 place-items-center rounded-lg bg-surface-sunken text-muted-foreground ring-1 ring-border">
           <Icon className="size-6" strokeWidth={1.75} />
         </span>
-        <p className="mt-5 font-display text-lg font-semibold">{title}</p>
+        <p className="mt-4 text-base font-semibold tracking-[-0.01em]">{title}</p>
         {description ? (
           <p className="mx-auto mt-1.5 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
         ) : null}
@@ -93,10 +93,10 @@ export function MessageList({
 }) {
   if (loading) {
     return (
-      <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface ring-1 ring-border">
+      <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
         {Array.from({ length: 6 }, (_, index) => (
           <div key={index} className="flex items-center gap-4 px-4 py-4">
-            <Skeleton className="size-10 shrink-0 rounded-full" />
+            <Skeleton className="size-10 shrink-0 rounded-lg" />
             <Skeleton className="h-3.5 w-40 shrink-0" />
             <Skeleton className="h-3.5 min-w-0 flex-1" />
             <Skeleton className="h-3 w-12 shrink-0" />
@@ -107,7 +107,7 @@ export function MessageList({
   }
   if (error) {
     return (
-      <div className="rounded-2xl bg-surface ring-1 ring-border">
+      <div className="rounded-xl border border-border bg-surface">
         <EmptyState
           Icon={CircleAlert}
           title="Could not load conversations"
@@ -122,7 +122,7 @@ export function MessageList({
   }
   if (!messages.length) {
     return (
-      <div className="rounded-2xl bg-surface ring-1 ring-border">
+      <div className="rounded-xl border border-border bg-surface">
         <EmptyState
           Icon={search ? SearchX : MailOpen}
           title={search
@@ -143,7 +143,7 @@ export function MessageList({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+    <div className="overflow-hidden rounded-xl border border-border bg-surface">
       <div className="divide-y divide-border/60">
         {messages.map((message) => {
           const sender = message.conversationLabel;
@@ -156,7 +156,7 @@ export function MessageList({
                 "transition-colors duration-150 ease-out hover:bg-accent/55",
                 "before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-r-full before:bg-primary before:opacity-0 before:transition-opacity hover:before:opacity-100 focus-visible:before:opacity-100",
                 "sm:gap-4 sm:px-5",
-                message.isUnread && "bg-primary/4",
+                message.isUnread && "bg-primary/6",
                 selected && "bg-primary/9 before:opacity-100",
               )}
             >
@@ -184,7 +184,7 @@ export function MessageList({
                 ) : (
                   <Avatar className={cn(
                     "size-10",
-                    message.isUnread && "ring-2 ring-primary/25",
+                    message.isUnread && "ring-1 ring-primary/35",
                   )}>
                     <AvatarFallback className="text-xs">
                       {sender.slice(0, 2).toUpperCase()}
@@ -197,7 +197,7 @@ export function MessageList({
                 <span className="flex min-w-0 items-center gap-2 lg:w-56 lg:shrink-0">
                   {message.isUnread ? (
                     <span
-                      className="size-2 shrink-0 rounded-full bg-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_14%,transparent)]"
+                      className="size-2 shrink-0 rounded-full bg-primary"
                       aria-label={`${message.unreadCount} unread messages`}
                     />
                   ) : null}

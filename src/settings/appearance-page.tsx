@@ -49,7 +49,7 @@ export function AppearanceSettings() {
                 aria-pressed={active}
                 onClick={() => setTheme(value)}
                 className={cn(
-                  "flex flex-col items-start gap-3 rounded-2xl border px-4 py-4 text-left transition-colors",
+                  "flex flex-col items-start gap-3 rounded-lg border px-4 py-4 text-left transition-colors",
                   active
                     ? "border-primary/40 bg-primary/12 text-foreground"
                     : "border-border/70 bg-surface-sunken text-muted-foreground hover:text-foreground",

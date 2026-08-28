@@ -174,6 +174,12 @@ test("admin can edit an existing user and create recovery", async ({ page }, tes
   await page.getByRole("menuitem", { name: "Administration" }).click();
   await expect(page).toHaveURL(/\/admin/u);
   await expect(page.locator("aside")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Invite person" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Invite person" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Mailboxes" }).click();
+  await expect(page.getByRole("button", { name: "New mailbox" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "New mailbox" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "People" }).click();
   await page.getByRole("button", { name: "Manage Ilya Morozov" }).click();
   await page.getByRole("button", { name: "Back to list" }).click();
   await page.getByRole("button", { name: "Manage Maya Chen" }).click();
@@ -226,20 +232,27 @@ test("direct admin links select loaded SSO and group records", async ({ page }, 
         }),
       }),
     ]);
+    const client = await clientResponse.json() as { clientId: string };
+    const group = await groupResponse.json() as { groupId: string };
     return {
       clientStatus: clientResponse.status,
       groupStatus: groupResponse.status,
+      clientId: client.clientId,
+      groupId: group.groupId,
     };
   });
-  expect(created).toEqual({ clientStatus: 201, groupStatus: 201 });
+  expect(created.clientStatus).toBe(201);
+  expect(created.groupStatus).toBe(201);
 
-  await page.goto("/admin?view=sso-applications");
+  await page.goto(`/admin?view=sso-applications&id=${created.clientId}`);
   await expect(
     page.getByRole("heading", { name: "Direct-link application" }),
   ).toBeVisible();
-  await page.goto("/admin?view=groups");
+  await expect(page.getByRole("button", { name: "Back to list" })).toBeVisible();
+  await page.goto(`/admin?view=groups&id=${created.groupId}`);
   await expect(page.getByRole("heading", { name: "Direct-link group" }))
     .toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to list" })).toBeVisible();
 });
 
 test("desktop mail uses navbar navigation and a corner composer", async ({ page }, testInfo) => {

@@ -46,7 +46,7 @@ export function FolderTabBar({
   return (
     <>
       <FolderTabs
-        className="hidden h-12 shrink-0 border-b border-border/70 bg-surface/60 px-5 backdrop-blur-xl lg:block"
+        className="hidden h-10 shrink-0 border-b border-border bg-surface px-5 lg:block"
         folder={folder}
         folders={items}
         mailboxId={mailboxId}
@@ -55,7 +55,7 @@ export function FolderTabBar({
       <FolderTabs
         className={hideMobile
           ? "hidden"
-          : "fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-border/70 bg-surface/90 px-4 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-16px_var(--shadow-color)] backdrop-blur-xl lg:hidden"}
+          : "fixed inset-x-0 bottom-0 z-30 h-[calc(3.5rem+env(safe-area-inset-bottom))] border-t border-border bg-surface px-4 pb-[env(safe-area-inset-bottom)] lg:hidden"}
         folder={folder}
         folders={items}
         mailboxId={mailboxId}

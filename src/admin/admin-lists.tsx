@@ -50,7 +50,7 @@ export function PeopleList({
     );
   }
   return (
-    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+    <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
       {users.map((user) => (
         <div
           key={user.id}
@@ -115,7 +115,7 @@ export function MailboxList({
   }
   return (
     <>
-      <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface shadow-xs ring-1 ring-border">
+      <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
         {mailboxes.map((mailbox) => {
           const canMakePrimary = mailbox.kind === "personal" && !mailbox.isPrimary;
           const canDelete = mailbox.kind === "shared" || canMakePrimary;
@@ -124,7 +124,7 @@ export function MailboxList({
               key={mailbox.id}
               className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3.5 transition-colors hover:bg-accent/45 sm:gap-4"
             >
-              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/12 text-foreground/70">
+              <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary/12 text-primary">
                 <MailPlus className="size-4.5" />
               </span>
               <div className="min-w-0">
@@ -230,11 +230,11 @@ function AdminEmptyState({
   description: string;
 }) {
   return (
-    <div className="rounded-2xl bg-surface px-6 py-16 text-center shadow-xs ring-1 ring-border">
-      <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/12 text-foreground/60">
+    <div className="rounded-xl border border-border bg-surface px-6 py-16 text-center">
+      <span className="mx-auto grid size-12 place-items-center rounded-lg bg-primary/12 text-primary">
         <Icon className="size-5" />
       </span>
-      <p className="mt-4 font-display text-lg font-semibold">{title}</p>
+      <p className="mt-4 text-base font-semibold tracking-[-0.01em]">{title}</p>
       <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground text-pretty">
         {description}
       </p>
@@ -244,7 +244,7 @@ function AdminEmptyState({
 
 function ListSkeleton() {
   return (
-    <div className="divide-y divide-border/60 overflow-hidden rounded-2xl bg-surface ring-1 ring-border">
+    <div className="divide-y divide-border/70 overflow-hidden rounded-xl border border-border bg-surface">
       {Array.from({ length: 4 }, (_, index) => (
         <div key={index} className="flex items-center gap-4 px-4 py-4">
           <Skeleton className="size-10 shrink-0 rounded-full" />

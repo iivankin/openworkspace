@@ -111,7 +111,7 @@ export function ConversationSelectionToolbar({
 
   return (
     <>
-      <div className="fixed inset-x-0 bottom-0 z-40 flex h-[calc(3.75rem+env(safe-area-inset-bottom))] items-center gap-1 border-t border-border/70 bg-surface/95 px-3 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_28px_-18px_var(--shadow-color)] backdrop-blur-xl lg:static lg:h-10 lg:w-auto lg:rounded-xl lg:border lg:bg-surface-sunken/70 lg:px-1.5 lg:pb-0 lg:shadow-none">
+      <div className="fixed inset-x-0 bottom-0 z-40 flex h-[calc(3.75rem+env(safe-area-inset-bottom))] items-center gap-1 border-t border-border bg-surface px-3 pb-[env(safe-area-inset-bottom)] lg:static lg:h-10 lg:w-auto lg:rounded-lg lg:border lg:bg-surface-sunken/70 lg:px-1.5 lg:pb-0">
         <label className="mr-auto flex min-w-0 items-center gap-2 pr-2 lg:mr-1">
           <Checkbox
             checked={allLoadedSelected}

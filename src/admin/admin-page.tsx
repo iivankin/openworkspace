@@ -4,6 +4,8 @@ import {
   Check,
   Copy,
   Inbox,
+  MailPlus,
+  UserPlus,
 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -90,7 +92,43 @@ export function AdminPage() {
   const sharedMailboxes = state.data?.mailboxes.filter((mailbox) => mailbox.kind === "shared") ?? [];
   const selectedUser = state.data?.users.find((user) => user.id === selectedId);
   const selectedMailbox = sharedMailboxes.find((mailbox) => mailbox.id === selectedId);
-  const activeSection: AdminSection = view === "user" ? "people" : view === "mailbox" ? "mailboxes" : view;
+  const activeSection: AdminSection = view === "user" || view === "invite"
+    ? "people"
+    : view === "mailbox" || view === "new-mailbox"
+      ? "mailboxes"
+      : view;
+  const resourceDetail = selectedId && (
+    view === "sso-applications"
+    || view === "groups"
+    || view === "webhooks"
+  );
+  const backView: AdminView | undefined = view === "user"
+    ? "people"
+    : view === "invite"
+      ? "people"
+    : view === "mailbox"
+      ? "mailboxes"
+      : view === "new-mailbox"
+        ? "mailboxes"
+      : resourceDetail
+        ? view
+        : undefined;
+  const pageCopy = resourceDetail
+    ? view === "sso-applications"
+      ? {
+          title: selectedId === "new" ? "New SSO application" : "SSO application",
+          description: "Client settings, access, and released claims.",
+        }
+      : view === "groups"
+        ? {
+            title: selectedId === "new" ? "New identity group" : "Identity group",
+            description: "Group details and membership.",
+          }
+        : {
+            title: selectedId === "new" ? "New webhook" : "Webhook endpoint",
+            description: "Endpoint settings and subscribed events.",
+          }
+    : viewCopy[view];
 
   const invite = useMutation({
     mutationFn: async (input: InvitationInput) =>
@@ -175,13 +213,13 @@ export function AdminPage() {
 
   return (
     <main className="flex h-dvh min-h-0 bg-background">
-      <aside className="hidden w-68 shrink-0 flex-col border-r border-border/70 bg-sidebar md:flex">
-        <div className="flex h-18 shrink-0 items-center gap-2.5 border-b border-border/70 px-5">
-          <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground shadow-sm ring-1 ring-primary/25">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-sidebar-border px-4">
+          <span className="grid size-8 place-items-center rounded-md bg-primary text-primary-foreground">
             <Inbox className="size-4.5" strokeWidth={2.25} />
           </span>
           <div>
-            <p className="font-display text-[0.9375rem] leading-tight font-semibold">OpenWorkspace</p>
+            <p className="text-[0.875rem] leading-tight font-semibold tracking-[-0.01em]">OpenWorkspace</p>
             <p className="text-[11px] leading-tight text-muted-foreground">Administration</p>
           </div>
         </div>
@@ -194,18 +232,18 @@ export function AdminPage() {
       </aside>
 
       <section className="paper-grain flex min-w-0 flex-1 flex-col">
-        <header className="flex h-18 shrink-0 items-center gap-3 border-b border-border/70 bg-surface/70 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface px-4 sm:px-6 lg:px-8">
           <MobileAdminMenu
             value={activeSection}
             onChange={(value) => go(value)}
             onBack={() => navigate("/")}
           />
           <div className="min-w-0">
-            <h1 className="truncate font-display text-xl font-semibold">{viewCopy[view].title}</h1>
-            <p className="hidden truncate text-xs text-muted-foreground sm:block">{viewCopy[view].description}</p>
+            <h1 className="truncate text-lg font-semibold tracking-[-0.02em]">{pageCopy.title}</h1>
+            <p className="hidden truncate text-xs text-muted-foreground sm:block">{pageCopy.description}</p>
           </div>
-          {(view === "user" || view === "mailbox") && (
-            <Button className="ml-auto" variant="outline" size="sm" onClick={() => go(view === "user" ? "people" : "mailboxes")}>
+          {backView && (
+            <Button className="ml-auto" variant="outline" size="sm" onClick={() => go(backView)}>
               <ArrowLeft /> Back to list
             </Button>
           )}
@@ -215,7 +253,7 @@ export function AdminPage() {
           <div className="mx-auto w-full max-w-5xl p-4 sm:p-6 lg:p-8">
             {state.isError ? (
               <div className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
-                <p className="font-display text-lg font-semibold">
+                <p className="text-base font-semibold tracking-[-0.01em]">
                   Administration unavailable
                 </p>
                 <Button
@@ -230,11 +268,18 @@ export function AdminPage() {
             ) : (
               <>
                 {view === "people" && (
-                  <PeopleList
-                    users={state.data?.users}
-                    loading={state.isLoading}
-                    onManage={(id) => go("user", id)}
-                  />
+                  <div className="max-w-3xl space-y-3">
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={() => go("invite")}>
+                        <UserPlus /> Invite person
+                      </Button>
+                    </div>
+                    <PeopleList
+                      users={state.data?.users}
+                      loading={state.isLoading}
+                      onManage={(id) => go("user", id)}
+                    />
+                  </div>
                 )}
             {view === "mailboxes" && (
               <div className="max-w-3xl space-y-6">
@@ -242,14 +287,21 @@ export function AdminPage() {
                   enabled={state.data?.aiProcessingEnabled ?? false}
                   loading={state.isLoading}
                 />
-                <MailboxList
-                  mailboxes={state.data?.mailboxes}
-                  loading={state.isLoading}
-                  onManage={(id) => go("mailbox", id)}
-                  onMakePrimary={(id) => setPrimaryMailbox.mutate(id)}
-                  onDelete={(id) => deleteMailbox.mutate(id)}
-                  pending={setPrimaryMailbox.isPending || deleteMailbox.isPending}
-                />
+                <div className="space-y-3">
+                  <div className="flex justify-end">
+                    <Button size="sm" onClick={() => go("new-mailbox")}>
+                      <MailPlus /> New mailbox
+                    </Button>
+                  </div>
+                  <MailboxList
+                    mailboxes={state.data?.mailboxes}
+                    loading={state.isLoading}
+                    onManage={(id) => go("mailbox", id)}
+                    onMakePrimary={(id) => setPrimaryMailbox.mutate(id)}
+                    onDelete={(id) => deleteMailbox.mutate(id)}
+                    pending={setPrimaryMailbox.isPending || deleteMailbox.isPending}
+                  />
+                </div>
               </div>
             )}
             {view === "domains" && (
@@ -266,6 +318,8 @@ export function AdminPage() {
                 users={state.data?.users ?? []}
                 groups={state.data?.groups ?? []}
                 loading={state.isLoading}
+                selectedId={selectedId}
+                onSelect={(id) => go("sso-applications", id)}
               />
             )}
             {view === "groups" && (
@@ -273,9 +327,16 @@ export function AdminPage() {
                 groups={state.data?.groups ?? []}
                 users={state.data?.users ?? []}
                 loading={state.isLoading}
+                selectedId={selectedId}
+                onSelect={(id) => go("groups", id)}
               />
             )}
-            {view === "webhooks" && <WebhooksManager />}
+            {view === "webhooks" && (
+              <WebhooksManager
+                selectedId={selectedId}
+                onSelect={(id) => go("webhooks", id)}
+              />
+            )}
             {view === "invite" && (
               <div className="max-w-3xl">
                 {state.data?.domains.length ? (
@@ -356,8 +417,8 @@ function MissingAdminRecord({
   onBack: () => void;
 }) {
   return (
-    <div className="rounded-2xl bg-surface py-16 text-center ring-1 ring-border">
-      <p className="font-display text-lg font-semibold">{label} not found</p>
+    <div className="rounded-xl border border-border bg-surface py-16 text-center">
+      <p className="text-base font-semibold">{label} not found</p>
       <p className="mt-1.5 text-sm text-muted-foreground">
         It may have been removed or the link is stale.
       </p>
@@ -370,7 +431,7 @@ function MissingAdminRecord({
 
 function AccessLink({ kind, url, copied, onCopied }: { kind: AccessLinkKind; url: string; copied: boolean; onCopied: () => void }) {
   return (
-    <div className="mt-6 rounded-2xl bg-primary/8 p-4 ring-1 ring-primary/25">
+    <div className="mt-6 rounded-lg border border-primary/25 bg-primary/8 p-4">
       <p className="mb-2.5 text-[11px] font-semibold tracking-widest text-muted-foreground uppercase">
         One-time link — share it over a trusted channel
       </p>
