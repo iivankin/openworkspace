@@ -35,11 +35,18 @@ const settingsSections: Array<{
   path: string;
 }> = [
   {
-    id: "mcp",
-    label: "MCP",
-    description: "Connect AI clients with a personal account token.",
-    Icon: KeyRound,
-    path: "/settings/mcp",
+    id: "profile",
+    label: "Profile",
+    description: "Your photo and account details.",
+    Icon: UserRound,
+    path: "/settings/profile",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Light, dark, or match the system.",
+    Icon: Palette,
+    path: "/settings/appearance",
   },
   {
     id: "notifications",
@@ -56,18 +63,11 @@ const settingsSections: Array<{
     path: "/settings/sessions",
   },
   {
-    id: "profile",
-    label: "Profile",
-    description: "Your photo and account details.",
-    Icon: UserRound,
-    path: "/settings/profile",
-  },
-  {
-    id: "appearance",
-    label: "Appearance",
-    description: "Light, dark, or match the system.",
-    Icon: Palette,
-    path: "/settings/appearance",
+    id: "mcp",
+    label: "MCP",
+    description: "Connect AI clients with a personal account token.",
+    Icon: KeyRound,
+    path: "/settings/mcp",
   },
 ];
 

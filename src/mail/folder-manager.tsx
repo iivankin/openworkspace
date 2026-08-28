@@ -304,7 +304,6 @@ export function FolderManager({
                 )}
               </div>
 
-              <DialogFooter showCloseButton />
             </TabsContent>
 
             <TabsContent value="ai" keepMounted className="space-y-4 pt-2">
