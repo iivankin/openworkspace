@@ -12,6 +12,7 @@ import {
   domains,
   mailboxes,
   passkeyCredentials,
+  pushSubscriptions,
   sessions,
   users,
 } from "../db/schema";
@@ -26,6 +27,7 @@ import {
   finishRegistration,
 } from "./webauthn";
 import { provisionBootstrapAccount } from "./personal-account";
+import { AuthRequestError, authConflict } from "./errors";
 
 export async function hasUsers(db: Database) {
   const [user] = await db
@@ -40,7 +42,7 @@ export async function beginBootstrap(
   request: Request,
   input: { name: string; email: string },
 ) {
-  if (await hasUsers(db)) throw new Error("Account is already set up");
+  if (await hasUsers(db)) throw authConflict("Account is already set up");
   const userId = createId("usr");
   // userId lives in payload only — the users row is created on verify, so the
   // auth_challenges.user_id FK must stay null during bootstrap.
@@ -75,7 +77,7 @@ export async function finishBootstrap(
     typeof payload.name !== "string" ||
     typeof payload.email !== "string"
   ) {
-    throw new Error("Bootstrap challenge is invalid");
+    throw new AuthRequestError("Bootstrap challenge is invalid");
   }
   const credential = await finishRegistration(challenge, response);
   const mailboxId = createId("mbx");
@@ -105,7 +107,9 @@ export async function beginLogin(
   request: Request,
   oidcRequestId?: string,
 ) {
-  if (!(await hasUsers(db))) throw new Error("Set up the first account first");
+  if (!(await hasUsers(db))) {
+    throw new AuthRequestError("Set up the first account first");
+  }
   return beginAuthentication(
     db,
     request,
@@ -162,14 +166,20 @@ async function findAccessLink(
       ),
     )
     .limit(1);
-  if (!link) throw new Error(`${kind === "invitation" ? "Invitation" : "Recovery link"} is invalid or has expired`);
+  if (!link) {
+    throw new AuthRequestError(
+      `${kind === "invitation" ? "Invitation" : "Recovery link"} is invalid or has expired`,
+    );
+  }
   if (kind === "invitation" && link.status !== "invited") {
-    throw new Error("Invitation has already been completed");
+    throw new AuthRequestError("Invitation has already been completed");
   }
   if (kind === "recovery" && link.status !== "active") {
-    throw new Error("Only an active account can be recovered");
+    throw new AuthRequestError("Only an active account can be recovered");
   }
-  if (!link.email) throw new Error("Account has no personal mailbox");
+  if (!link.email) {
+    throw new AuthRequestError("Account has no personal mailbox");
+  }
   return { ...link, email: link.email };
 }
 
@@ -210,7 +220,7 @@ export async function finishAccessLinkRegistration(
 ) {
   const challenge = await consumeChallenge(db, challengeId, kind);
   if (!challenge.userId || !challenge.accessLinkId) {
-    throw new Error("Access-link challenge is invalid");
+    throw new AuthRequestError("Access-link challenge is invalid");
   }
   const credential = await finishRegistration(challenge, response);
   const now = new Date();
@@ -228,7 +238,9 @@ export async function finishAccessLinkRegistration(
     )
     .limit(1);
   if (!activeLink) {
-    throw new Error(`${kind === "invitation" ? "Invitation" : "Recovery link"} is invalid or has expired`);
+    throw new AuthRequestError(
+      `${kind === "invitation" ? "Invitation" : "Recovery link"} is invalid or has expired`,
+    );
   }
   const claim = db.insert(accessLinkClaims).values({
       accessLinkId: challenge.accessLinkId,
@@ -254,6 +266,9 @@ export async function finishAccessLinkRegistration(
         .delete(passkeyCredentials)
         .where(eq(passkeyCredentials.userId, challenge.userId)),
       db.delete(sessions).where(eq(sessions.userId, challenge.userId)),
+      db
+        .delete(pushSubscriptions)
+        .where(eq(pushSubscriptions.userId, challenge.userId)),
       db
         .delete(accountApiTokens)
         .where(eq(accountApiTokens.userId, challenge.userId)),

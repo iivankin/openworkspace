@@ -24,12 +24,20 @@ export function OidcLogoutScreen() {
   );
 
   const confirm = useMutation({
-    mutationFn: async () =>
-      responseJson(
+    mutationFn: async () => {
+      const { pushSubscriptionEndpointForLogout } = await import(
+        "@/pwa/push-subscription"
+      );
+      const pushEndpoint = await pushSubscriptionEndpointForLogout();
+      return responseJson(
         await api.api.oidc.logout.$post({
-          json: payload,
+          json: {
+            ...payload,
+            push_endpoint: pushEndpoint ?? undefined,
+          },
         }),
-      ),
+      );
+    },
     onSuccess: ({ redirectTo }) => window.location.assign(redirectTo),
     onError: (error) => toast.error(error.message),
   });

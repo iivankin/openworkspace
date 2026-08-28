@@ -57,6 +57,13 @@
       "when": 1787684959291,
       "tag": "0007_silent_nextwave",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1787898389207,
+      "tag": "0008_account_sessions_push",
+      "breakpoints": true
     }
   ]
 }

@@ -75,7 +75,7 @@ export function AccessLinkScreen({ kind }: { kind: AccessLinkKind }) {
           </p>
           {kind === "recovery" && (
             <p className="mt-4 text-xs leading-5 text-muted-foreground">
-              Registering a new passkey removes existing passkeys and signs out other sessions.
+              Registering a new passkey removes existing passkeys and sessions.
             </p>
           )}
           <Button

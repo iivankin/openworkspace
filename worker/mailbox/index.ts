@@ -302,7 +302,7 @@ export class MailboxDO extends DurableObject<Env> {
     await this.state.storage.deleteAll();
   }
 
-  async shouldSuppressPush(messageId: string, userId: string, sessionId: string) {
+  async shouldSuppressPush(messageId: string, userId: string) {
     const messageState = this.db
       .select({
         messageId: emails.id,
@@ -320,11 +320,11 @@ export class MailboxDO extends DurableObject<Env> {
       .get();
     if (!messageState || messageState.readByUserId) return true;
     const visibleAfter = Date.now() - PRESENCE_TTL_MS;
-    return (await this.authorizedSockets({ sessionId, visibleAfter })).length > 0;
+    return (await this.authorizedSockets({ userId, visibleAfter })).length > 0;
   }
 
   private async authorizedSockets(filter?: {
-    sessionId: string;
+    userId: string;
     visibleAfter: number;
   }) {
     const sockets = this.state.getWebSockets().flatMap((socket) => {
@@ -333,7 +333,7 @@ export class MailboxDO extends DurableObject<Env> {
         if (
           filter
           && (
-            attachment.sessionId !== filter.sessionId
+            attachment.userId !== filter.userId
             || attachment.visibility !== "visible"
             || attachment.presenceUpdatedAt < filter.visibleAfter
           )

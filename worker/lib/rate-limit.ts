@@ -1,4 +1,5 @@
 import { hashToken } from "./crypto";
+import { cloudflareClientIp } from "./request";
 
 export async function checkRateLimit(
   db: D1Database,
@@ -48,7 +49,7 @@ export async function checkRateLimit(
 
 export function requestIdentifier(request: Request) {
   return (
-    request.headers.get("cf-connecting-ip") ??
+    cloudflareClientIp(request) ??
     request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() ??
     "unknown"
   );

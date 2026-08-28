@@ -8,7 +8,7 @@ import {
   urlBase64ToUint8Array,
 } from "@mmmike/web-push/vapid";
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { MailboxPushJob } from "../../shared/mail";
@@ -20,7 +20,6 @@ import {
   mailboxNotificationPreferences,
   mailboxes,
   pushSubscriptions,
-  sessions,
   users,
 } from "../db/schema";
 import { mailboxAddressSql, mailboxKindOrderSql } from "../db/mailboxes";
@@ -56,7 +55,7 @@ const pushSubscriptionSchema = z.object({
   }),
 });
 
-const deleteSubscriptionSchema = z.object({
+const subscriptionEndpointSchema = z.object({
   endpoint: z.string().url().max(4_096),
 });
 
@@ -244,67 +243,44 @@ export const pushNotificationRoutes = new Hono<AppEnv>()
       return c.json({ ok: true as const });
     },
   )
-  .post(
-    "/subscriptions/status",
-    zValidator("json", deleteSubscriptionSchema),
-    async (c) => {
-      const [registration] = await createDb(c.env.DB)
-        .select({ id: pushSubscriptions.id })
-        .from(pushSubscriptions)
-        .where(and(
-          eq(pushSubscriptions.sessionId, c.get("sessionId")),
-          eq(pushSubscriptions.endpoint, c.req.valid("json").endpoint),
-        ))
-        .limit(1);
-      return c.json({ ok: true as const, registered: Boolean(registration) });
-    },
-  )
-  .post(
+  .put(
     "/subscriptions",
     zValidator("json", pushSubscriptionSchema),
     async (c) => {
-      if (!(await pushConfiguration(c.env)).configuration) {
-        return apiError(
-          c,
-          503,
-          "UNAVAILABLE",
-          "Push notifications are not configured correctly",
-        );
-      }
       const input = c.req.valid("json");
       const now = new Date();
-      const db = createDb(c.env.DB);
-      await db.batch([
-        // One browser session owns one device registration. Removing both the
-        // previous session endpoint and any previous owner of this endpoint
-        // also cleans up a subscription replaced during VAPID key rotation.
-        db.delete(pushSubscriptions).where(or(
-          eq(pushSubscriptions.sessionId, c.get("sessionId")),
-          eq(pushSubscriptions.endpoint, input.endpoint),
-        )),
-        db.insert(pushSubscriptions).values({
+      await createDb(c.env.DB)
+        .insert(pushSubscriptions)
+        .values({
           id: createId("push"),
-          sessionId: c.get("sessionId"),
+          userId: c.get("user").id,
           endpoint: input.endpoint,
           p256dh: input.keys.p256dh,
           auth: input.keys.auth,
           createdAt: now,
           updatedAt: now,
-        }),
-      ]);
-      return c.json({ ok: true as const }, 201);
+        })
+        .onConflictDoUpdate({
+          target: pushSubscriptions.endpoint,
+          set: {
+            userId: c.get("user").id,
+            p256dh: input.keys.p256dh,
+            auth: input.keys.auth,
+            updatedAt: now,
+          },
+        });
+      return c.json({ ok: true as const });
     },
   )
   .delete(
     "/subscriptions",
-    zValidator("json", deleteSubscriptionSchema),
+    zValidator("json", subscriptionEndpointSchema),
     async (c) => {
-      const input = c.req.valid("json");
       await createDb(c.env.DB)
         .delete(pushSubscriptions)
         .where(and(
-          eq(pushSubscriptions.sessionId, c.get("sessionId")),
-          eq(pushSubscriptions.endpoint, input.endpoint),
+          eq(pushSubscriptions.userId, c.get("user").id),
+          eq(pushSubscriptions.endpoint, c.req.valid("json").endpoint),
         ));
       return c.json({ ok: true as const });
     },
@@ -319,24 +295,22 @@ async function subscriptionsForMailbox(
     id: pushSubscriptions.id,
   })
     .from(pushSubscriptions)
-    .innerJoin(sessions, eq(pushSubscriptions.sessionId, sessions.id))
-    .innerJoin(users, eq(sessions.userId, users.id))
+    .innerJoin(users, eq(pushSubscriptions.userId, users.id))
     .innerJoin(
       mailboxMembers,
       and(
-        eq(mailboxMembers.userId, sessions.userId),
+        eq(mailboxMembers.userId, pushSubscriptions.userId),
         eq(mailboxMembers.mailboxId, mailboxId),
       ),
     )
     .leftJoin(
       mailboxNotificationPreferences,
       and(
-        eq(mailboxNotificationPreferences.userId, sessions.userId),
+        eq(mailboxNotificationPreferences.userId, pushSubscriptions.userId),
         eq(mailboxNotificationPreferences.mailboxId, mailboxId),
       ),
     )
     .where(and(
-      gt(sessions.expiresAt, new Date()),
       eq(users.status, "active"),
       or(
         isNull(mailboxNotificationPreferences.enabled),
@@ -383,31 +357,28 @@ async function targetSubscription(
 ) {
   return createDb(env.DB).select({
     id: pushSubscriptions.id,
-    sessionId: pushSubscriptions.sessionId,
-    userId: sessions.userId,
+    userId: pushSubscriptions.userId,
     endpoint: pushSubscriptions.endpoint,
     p256dh: pushSubscriptions.p256dh,
     auth: pushSubscriptions.auth,
   })
     .from(pushSubscriptions)
-    .innerJoin(sessions, eq(pushSubscriptions.sessionId, sessions.id))
-    .innerJoin(users, eq(sessions.userId, users.id))
+    .innerJoin(users, eq(pushSubscriptions.userId, users.id))
     .innerJoin(
       mailboxMembers,
       and(
-        eq(mailboxMembers.userId, sessions.userId),
+        eq(mailboxMembers.userId, pushSubscriptions.userId),
         eq(mailboxMembers.mailboxId, job.mailboxId),
       ),
     )
     .leftJoin(
       mailboxNotificationPreferences,
       and(
-        eq(mailboxNotificationPreferences.userId, sessions.userId),
+        eq(mailboxNotificationPreferences.userId, pushSubscriptions.userId),
         eq(mailboxNotificationPreferences.mailboxId, job.mailboxId),
       ),
     )
     .where(and(
-      gt(sessions.expiresAt, new Date()),
       eq(users.status, "active"),
       or(
         isNull(mailboxNotificationPreferences.enabled),
@@ -443,7 +414,6 @@ async function deliverPushJob(
   const suppressed = await mailboxStub(env, job.mailboxId).shouldSuppressPush(
     job.messageId,
     subscription.userId,
-    subscription.sessionId,
   );
   if (suppressed) return;
 
@@ -470,9 +440,6 @@ async function deliverPushJob(
   } catch (error) {
     const delaySeconds = retryDelaySeconds(error);
     if (delaySeconds === null) {
-      if (!(error instanceof WebPushError)) {
-        await removeSubscription(env, subscription.id);
-      }
       console.error(
         "Push notification delivery was rejected",
         pushFailureDetails(error),

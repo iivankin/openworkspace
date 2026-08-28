@@ -641,7 +641,6 @@ describe("mailbox conversation index", () => {
     expect(await mailbox.shouldSuppressPush(
       "msg_bulk_first",
       "usr_bulk_one",
-      "ses_bulk_one",
     )).toBe(true);
 
     await runDurableObjectAlarm(mailbox);

@@ -611,7 +611,12 @@ export const oidcRoutes = new Hono<AppEnv>()
       state: c.req.query("state") ?? undefined,
     };
 
-    const resolved = await resolveLogoutRequest(c.env, db, session, query);
+    const resolved = await resolveLogoutRequest(
+      c.env,
+      db,
+      session?.user.id ?? null,
+      query,
+    );
     if (resolved.kind === "error") return errorJson(c, resolved.error);
     if (resolved.kind === "confirm") {
       const confirm = new URL("/oidc/logout", oidcIssuer(c.env));
@@ -626,7 +631,12 @@ export const oidcRoutes = new Hono<AppEnv>()
       return c.redirect(confirm.toString());
     }
 
-    if (resolved.destroySession) await destroySession(db, c);
+    if (resolved.destroySession && session) {
+      await destroySession(db, c, {
+        sessionId: session.id,
+        userId: session.user.id,
+      });
+    }
     return c.redirect(resolved.redirectTo);
   });
 
@@ -641,17 +651,15 @@ export const oidcLogoutRoutes = new Hono<AppEnv>()
         id_token_hint: z.string().optional(),
         post_logout_redirect_uri: z.string().optional(),
         state: z.string().optional(),
+        push_endpoint: z.url().max(4_096).optional(),
       }),
     ),
     async (c) => {
       try {
         const body = c.req.valid("json");
         const db = createDb(c.env.DB);
-        const session = await readSessionFromContext(c);
-        if (!session) {
-          throw new OidcError("login_required", "Authentication required", 401);
-        }
-        const resolved = await resolveLogoutRequest(c.env, db, session, {
+        const userId = c.get("user").id;
+        const resolved = await resolveLogoutRequest(c.env, db, userId, {
           clientId: body.client_id,
           idTokenHint: body.id_token_hint,
           postLogoutRedirectUri: body.post_logout_redirect_uri,
@@ -665,7 +673,11 @@ export const oidcLogoutRoutes = new Hono<AppEnv>()
             500,
           );
         }
-        await destroySession(db, c);
+        await destroySession(db, c, {
+          sessionId: c.get("sessionId"),
+          userId,
+          pushEndpoint: body.push_endpoint,
+        });
         return c.json({
           ok: true as const,
           redirectTo: resolved.redirectTo,
@@ -686,7 +698,7 @@ export const oidcLogoutRoutes = new Hono<AppEnv>()
 async function resolveLogoutRequest(
   env: AppEnv["Bindings"],
   db: Database,
-  session: Awaited<ReturnType<typeof readSessionFromContext>>,
+  userId: string | null,
   query: {
     clientId?: string;
     idTokenHint?: string;
@@ -700,7 +712,6 @@ async function resolveLogoutRequest(
   | { kind: "error"; error: OidcError }
 > {
   let clientId = query.clientId;
-  let sessionBoundHint = false;
 
   if (query.idTokenHint) {
     let hint: Awaited<ReturnType<typeof claimsFromIdTokenHint>> | undefined;
@@ -719,7 +730,7 @@ async function resolveLogoutRequest(
           ),
         };
       }
-      if (session && session.user.id !== hint.subject) {
+      if (userId && userId !== hint.subject) {
         return {
           kind: "error",
           error: new OidcError(
@@ -729,7 +740,6 @@ async function resolveLogoutRequest(
         };
       }
       clientId = hint.clientId;
-      sessionBoundHint = Boolean(session && session.user.id === hint.subject);
     }
   }
 
@@ -748,10 +758,10 @@ async function resolveLogoutRequest(
     }
   }
 
-  if (!session) {
+  if (!userId) {
     return { kind: "complete", redirectTo, destroySession: false };
   }
-  if (options.confirmed || sessionBoundHint) {
+  if (options.confirmed) {
     return { kind: "complete", redirectTo, destroySession: true };
   }
   return { kind: "confirm" };

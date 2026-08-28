@@ -3,12 +3,15 @@ import {
   Bell,
   Inbox,
   KeyRound,
+  LoaderCircle,
   Menu,
   Palette,
+  ShieldCheck,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import { NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router";
+import { Suspense, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -21,13 +24,8 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
-import { AppearanceSettings } from "./appearance-page";
-import { ProfileSettings } from "./profile-page";
-import { NotificationsSettings } from "./notifications-page";
-import { McpSettings } from "./mcp-page";
 
-type SettingsSection = "profile" | "appearance" | "notifications" | "mcp";
+type SettingsSection = "profile" | "appearance" | "notifications" | "sessions" | "mcp";
 
 const settingsSections: Array<{
   id: SettingsSection;
@@ -51,6 +49,13 @@ const settingsSections: Array<{
     path: "/settings/notifications",
   },
   {
+    id: "sessions",
+    label: "Sessions",
+    description: "Active sign-ins and locations.",
+    Icon: ShieldCheck,
+    path: "/settings/sessions",
+  },
+  {
     id: "profile",
     label: "Profile",
     description: "Your photo and account details.",
@@ -69,6 +74,7 @@ const settingsSections: Array<{
 function sectionFromPath(pathname: string): SettingsSection {
   if (pathname.startsWith("/settings/mcp")) return "mcp";
   if (pathname.startsWith("/settings/notifications")) return "notifications";
+  if (pathname.startsWith("/settings/sessions")) return "sessions";
   if (pathname.startsWith("/settings/appearance")) return "appearance";
   return "profile";
 }
@@ -179,30 +185,18 @@ export function SettingsShell() {
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto w-full max-w-3xl p-4 sm:p-6 lg:p-8">
-            <Outlet />
+            <Suspense
+              fallback={(
+                <div className="grid min-h-48 place-items-center">
+                  <LoaderCircle className="animate-spin text-muted-foreground" />
+                </div>
+              )}
+            >
+              <Outlet />
+            </Suspense>
           </div>
         </ScrollArea>
       </section>
     </main>
   );
-}
-
-export function SettingsIndexRedirect() {
-  return <Navigate to="/settings/profile" replace />;
-}
-
-export function SettingsAppearancePage() {
-  return <AppearanceSettings />;
-}
-
-export function SettingsProfilePage() {
-  return <ProfileSettings />;
-}
-
-export function SettingsNotificationsPage() {
-  return <NotificationsSettings />;
-}
-
-export function SettingsMcpPage() {
-  return <McpSettings />;
 }

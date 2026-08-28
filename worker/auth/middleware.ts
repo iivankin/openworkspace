@@ -1,26 +1,32 @@
 import { createMiddleware } from "hono/factory";
+import type { Context } from "hono";
 import type { AppEnv } from "../env";
 import { apiError } from "../lib/http";
 import { authenticateAccountApiToken, bearerToken } from "./api-tokens";
 import { readSessionFromContext } from "./session";
 
-export const requireSessionAuth = createMiddleware<AppEnv>(async (c, next) => {
-  const session = await readSessionFromContext(c);
-  if (!session) return apiError(c, 401, "UNAUTHORIZED", "Sign in is required");
+type AccountSession = NonNullable<
+  Awaited<ReturnType<typeof readSessionFromContext>>
+>;
+
+function setSessionContext(c: Context<AppEnv>, session: AccountSession) {
   c.set("user", session.user);
   c.set("authKind", "session");
   c.set("sessionId", session.id);
   c.set("sessionTokenHash", session.tokenHash);
+}
+
+export const requireSessionAuth = createMiddleware<AppEnv>(async (c, next) => {
+  const session = await readSessionFromContext(c);
+  if (!session) return apiError(c, 401, "UNAUTHORIZED", "Sign in is required");
+  setSessionContext(c, session);
   await next();
 });
 
 export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
   const session = await readSessionFromContext(c);
   if (session) {
-    c.set("user", session.user);
-    c.set("authKind", "session");
-    c.set("sessionId", session.id);
-    c.set("sessionTokenHash", session.tokenHash);
+    setSessionContext(c, session);
     await next();
     return;
   }

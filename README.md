@@ -65,7 +65,7 @@ For every domain used by a mailbox, configure Cloudflare manually:
 
    Show original will display Cloudflare's SPF, DKIM, DMARC, and spam results for incoming messages. Analytics can only be fetched during Cloudflare's 31-day retention window; fetched results are retained with the message.
 10. **AI mail processing** — Optional. An admin enables Workers AI globally under **Administration → Mailboxes**. Mailbox members then configure folders, the shared confidence threshold, and classification rules from the folder-management button beside that mailbox's folders. Incoming mail is checked for spam and assigned to one existing custom folder before realtime updates and push delivery. After two failed inference attempts, mail falls back to Inbox. Workers AI usage is billed to the Cloudflare account, including calls made from local development.
-11. **Push notifications** — Generate one persistent VAPID key pair with `bun run push:keygen`. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a contact such as `mailto:admin@example.com` in `VAPID_SUBJECT` with `wrangler secret put`. Users can then enable the current device and choose mailboxes under **Settings → Notifications**. Device registrations belong to the current login session, so signing out or recovering an account disables them until the user explicitly enables that device again.
+11. **Push notifications** — Generate one persistent VAPID key pair with `bun run push:keygen`. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a contact such as `mailto:admin@example.com` in `VAPID_SUBJECT` with `wrangler secret put`. Users can then enable the current browser and choose mailboxes under **Settings → Notifications**. Each browser endpoint belongs directly to the current account and is rebound idempotently when the app starts. Natural session expiry and remote session revocation do not affect push; explicit logout detaches the current endpoint, while disabling notifications unsubscribes it from the browser.
 
 Unknown catch-all recipients are rejected permanently. Only addresses you create in the app accept mail.
 
@@ -134,7 +134,7 @@ Outbound mail is logged locally instead of sent. To test push locally, add a key
 
 - **Empty install** — first visitor sets a name and personal email, registers a passkey, and becomes admin.
 - **Invite users** — admin creates a person with a personal mailbox and shares the one-time invitation link. They register a passkey to join.
-- **Recover access** — admin issues a one-hour recovery link; redeeming it replaces all passkeys and ends existing sessions.
+- **Recover access** — admin issues a one-hour recovery link; redeeming it replaces all passkeys and removes existing sessions and push registrations.
 - **Settings** — each person manages their avatar, appearance, current-device push subscription, and per-mailbox notification preferences.
 - **Mailboxes** — an admin can create multiple personal addresses for a user or shared addresses with read-only or read-and-send members. Each user has one primary personal mailbox for identity and recovery.
 - **PWA notifications** — desktop and Android browsers can subscribe from Settings. On iPhone and iPad, first add OpenWorkspace to the Home Screen, then enable notifications from the installed app.

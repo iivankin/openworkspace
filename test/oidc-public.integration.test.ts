@@ -32,7 +32,7 @@ describe("public OIDC clients", () => {
         }),
       }),
     );
-    const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0]!;
+    const cookie = responseCookie(bootstrap, "op_session")!;
     await json(bootstrap);
     const state = await json<{ users: Array<{ id: string }> }>(
       await exports.default.fetch(
@@ -282,7 +282,9 @@ describe("public OIDC clients", () => {
     ).toMatchObject({ transaction: { clientName: "Browser app" } });
 
     const originalSession = await env.DB.prepare(
-      "SELECT id, token_hash, created_at FROM sessions WHERE user_id = ? LIMIT 1",
+      `SELECT session.id, session.token_hash, session.created_at
+       FROM sessions session
+       WHERE session.user_id = ? LIMIT 1`,
     ).bind(state.users[0]!.id).first<{
       id: string;
       token_hash: string;
@@ -291,11 +293,11 @@ describe("public OIDC clients", () => {
     expect(originalSession).toBeTruthy();
     const pushSubscriptionId = `push_${crypto.randomUUID()}`;
     await env.DB.prepare(`
-      INSERT INTO push_subscriptions (id, session_id, endpoint, p256dh, auth)
+      INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth)
       VALUES (?, ?, ?, ?, ?)
     `).bind(
       pushSubscriptionId,
-      originalSession!.id,
+      state.users[0]!.id,
       `https://push.example.test/${crypto.randomUUID()}`,
       "test-p256dh",
       "test-auth",
@@ -322,32 +324,33 @@ describe("public OIDC clients", () => {
     expect(reauthenticatedSession).toBeTruthy();
     expect(reauthenticatedSession).not.toBe(cookie);
     const refreshedSession = await env.DB.prepare(
-      "SELECT id, token_hash, created_at FROM sessions WHERE user_id = ? LIMIT 1",
+      `SELECT session.id, session.token_hash, session.created_at
+       FROM sessions session
+       WHERE session.user_id = ?
+       ORDER BY session.created_at DESC LIMIT 1`,
     ).bind(state.users[0]!.id).first<{
       id: string;
       token_hash: string;
       created_at: number;
     }>();
-    expect(refreshedSession).toMatchObject({
-      id: originalSession!.id,
-    });
+    expect(refreshedSession!.id).not.toBe(originalSession!.id);
     expect(refreshedSession!.token_hash).not.toBe(originalSession!.token_hash);
-    expect(refreshedSession!.created_at).toBeGreaterThan(
+    expect(refreshedSession!.created_at).toBeGreaterThanOrEqual(
       originalSession!.created_at,
     );
     const retainedPush = await env.DB.prepare(
-      "SELECT session_id FROM push_subscriptions WHERE id = ?",
-    ).bind(pushSubscriptionId).first<{ session_id: string }>();
-    expect(retainedPush?.session_id).toBe(originalSession!.id);
+      "SELECT user_id FROM push_subscriptions WHERE id = ?",
+    ).bind(pushSubscriptionId).first<{ user_id: string }>();
+    expect(retainedPush?.user_id).toBe(state.users[0]!.id);
+    const staleSessionState = await exports.default.fetch(
+      new Request(`${issuer}/api/auth/state`, {
+        headers: { cookie },
+      }),
+    );
     expect(
-      await json<{ authenticated: boolean }>(
-        await exports.default.fetch(
-          new Request(`${issuer}/api/auth/state`, {
-            headers: { cookie },
-          }),
-        ),
-      ),
+      await json<{ authenticated: boolean }>(staleSessionState.clone()),
     ).toMatchObject({ authenticated: false });
+    expect(staleSessionState.headers.get("set-cookie")).toBeNull();
     expect(
       await json<{ authenticated: boolean }>(
         await exports.default.fetch(
@@ -357,6 +360,43 @@ describe("public OIDC clients", () => {
         ),
       ),
     ).toMatchObject({ authenticated: true });
+
+    const newSessionVerifier = oidcClient.randomPKCECodeVerifier();
+    const newSessionUrl = oidcClient.buildAuthorizationUrl(relyingParty, {
+      redirect_uri: "https://spa.example.test/callback",
+      scope: "openid profile",
+      code_challenge:
+        await oidcClient.calculatePKCECodeChallenge(newSessionVerifier),
+      code_challenge_method: "S256",
+    });
+    const newSessionAuthorization = await exports.default.fetch(
+      new Request(newSessionUrl, { redirect: "manual" }),
+    );
+    const newSessionLoginLocation = newSessionAuthorization.headers.get("location")!;
+    expect(newSessionLoginLocation).toMatch(/^\/oidc\/login\/req_/u);
+    const newSessionRequestId = newSessionLoginLocation.split("/").at(-1)!;
+    const newSessionTransactionCookie = responseCookie(
+      newSessionAuthorization,
+      `op_oidc_${newSessionRequestId}`,
+    );
+    const newSessionLogin = await json<{ redirectTo: string }>(
+      await exports.default.fetch(
+        new Request(`${issuer}/api/auth/mock/login`, {
+          method: "POST",
+          headers: {
+            cookie: newSessionTransactionCookie!,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            userId: state.users[0]!.id,
+            oidcRequestId: newSessionRequestId,
+          }),
+        }),
+      ),
+    );
+    expect(newSessionLogin.redirectTo).toBe(
+      `/oauth/authorize/resume/${newSessionRequestId}`,
+    );
 
     const resumed = await exports.default.fetch(
       new Request(`${issuer}${continuation.redirectTo}`, {

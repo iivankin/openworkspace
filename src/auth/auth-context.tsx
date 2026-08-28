@@ -1,12 +1,24 @@
 import type { AccessLinkKind } from "../../shared/auth";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, type ReactNode } from "react";
+import {
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   api,
+  AUTH_UNAUTHORIZED_EVENT,
   responseJson,
   type SuccessfulResponse,
 } from "@/lib/api";
-import { unsubscribeCurrentPushSubscription } from "@/pwa/push-subscription";
 
 type AuthState = Omit<
   SuccessfulResponse<Awaited<ReturnType<typeof api.api.auth.state.$get>>>,
@@ -26,16 +38,93 @@ type AuthContextValue = AuthState & {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const PUSH_SYNC_RETRY_DELAYS_MS = [0, 1_000, 5_000] as const;
+
+function clearAccountQueries(queryClient: QueryClient) {
+  queryClient.removeQueries({
+    predicate: (query) => query.queryKey[0] !== "auth-state",
+  });
+}
+
+async function syncAccountPushSubscription(isActive: () => boolean) {
+  let lastError: unknown;
+  for (const delayMs of PUSH_SYNC_RETRY_DELAYS_MS) {
+    if (delayMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    if (!isActive()) return;
+    try {
+      const { syncCurrentPushSubscription } = await import(
+        "@/pwa/push-subscription"
+      );
+      await syncCurrentPushSubscription();
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (isActive()) {
+    console.error("Could not sync browser push subscription", lastError);
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
+  const [queryAccountId, setQueryAccountId] = useState<
+    string | null | undefined
+  >(undefined);
   const state = useQuery({
     queryKey: ["auth-state"],
-    queryFn: async () => {
-      const body = await responseJson(await api.api.auth.state.$get());
-      return body;
-    },
+    queryFn: async () => responseJson(await api.api.auth.state.$get()),
   });
+  const resolvedAccountId = state.isSuccess
+    ? state.data.authenticated
+      ? state.data.user?.id ?? null
+      : null
+    : undefined;
+  const accountChanging = resolvedAccountId !== undefined
+    && queryAccountId !== undefined
+    && resolvedAccountId !== queryAccountId;
+
+  useLayoutEffect(() => {
+    if (
+      resolvedAccountId === undefined
+      || resolvedAccountId === queryAccountId
+    ) {
+      return;
+    }
+    if (queryAccountId !== undefined) clearAccountQueries(queryClient);
+    setQueryAccountId(resolvedAccountId);
+  }, [queryAccountId, queryClient, resolvedAccountId]);
+
+  useEffect(() => {
+    const refreshAuthentication = () => {
+      void queryClient.invalidateQueries({ queryKey: ["auth-state"] });
+    };
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, refreshAuthentication);
+    return () => {
+      window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, refreshAuthentication);
+    };
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (!resolvedAccountId) return;
+    let active = true;
+    let syncing = false;
+    const sync = () => {
+      if (syncing) return;
+      syncing = true;
+      void syncAccountPushSubscription(() => active).finally(() => {
+        syncing = false;
+      });
+    };
+    sync();
+    window.addEventListener("online", sync);
+    return () => {
+      active = false;
+      window.removeEventListener("online", sync);
+    };
+  }, [resolvedAccountId]);
 
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: ["auth-state"] });
@@ -109,23 +198,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await api.api.auth.login.verify.$post({ json: response }),
         );
       }
-      await refresh();
       if (!result.redirectTo) {
         throw new Error("OIDC re-authentication did not return a continuation");
       }
       return result.redirectTo;
     },
-    [refresh],
+    [],
   );
 
   const logout = useCallback(async () => {
-    await responseJson(await api.api.auth.logout.$post());
-    void unsubscribeCurrentPushSubscription().catch((error) => {
-      console.warn("Could not remove the inactive browser push subscription", error);
-    });
-    queryClient.removeQueries({
-      predicate: (query) => query.queryKey[0] !== "auth-state",
-    });
+    const { pushSubscriptionEndpointForLogout } = await import(
+      "@/pwa/push-subscription"
+    );
+    const pushEndpoint = await pushSubscriptionEndpointForLogout();
+    await responseJson(
+      await api.api.auth.logout.$post({
+        json: { pushEndpoint: pushEndpoint ?? undefined },
+      }),
+    );
+    clearAccountQueries(queryClient);
     await refresh();
   }, [queryClient, refresh]);
 
@@ -164,7 +255,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionVersion: state.data?.sessionVersion ?? null,
     user: state.data?.user ?? null,
     mockAuthEnabled: state.data?.mockAuthEnabled ?? false,
-    loading: state.isLoading,
+    loading: state.isLoading || accountChanging,
     bootstrap,
     login,
     reauthenticate,

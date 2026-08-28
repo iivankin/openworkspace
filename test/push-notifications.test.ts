@@ -47,15 +47,28 @@ function envWithQueue(
 }
 
 async function registerPushTarget() {
-  const bootstrap = await exports.default.fetch(
+  let authentication = await exports.default.fetch(
     new Request("http://example.test/api/auth/mock/bootstrap", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "Push Admin", email: "push@example.test" }),
     }),
   );
-  expect(bootstrap.status).toBe(200);
-  const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0];
+  if (authentication.status === 409) {
+    const user = await env.DB.prepare(
+      "SELECT id FROM users WHERE name = 'Push Admin' LIMIT 1",
+    ).first<{ id: string }>();
+    expect(user).toBeTruthy();
+    authentication = await exports.default.fetch(
+      new Request("http://example.test/api/auth/mock/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: user!.id }),
+      }),
+    );
+  }
+  expect(authentication.status).toBe(200);
+  const cookie = authentication.headers.get("set-cookie")?.split(";", 1)[0];
   expect(cookie).toBeTruthy();
   const mailboxResponse = await exports.default.fetch(
     new Request("http://example.test/api/mail/mailboxes", {
@@ -68,7 +81,7 @@ async function registerPushTarget() {
   const endpoint = `https://push.example.test/${crypto.randomUUID()}`;
   const registration = await exports.default.fetch(
     new Request("http://example.test/api/notifications/subscriptions", {
-      method: "POST",
+      method: "PUT",
       headers: { cookie: cookie!, "content-type": "application/json" },
       body: JSON.stringify({
         endpoint,
@@ -79,8 +92,8 @@ async function registerPushTarget() {
       }),
     }),
   );
-  expect(registration.status).toBe(201);
-  return body.mailboxes[0]!.id;
+  expect(registration.status).toBe(200);
+  return { mailboxId: body.mailboxes[0]!.id, endpoint };
 }
 
 describe("push notification jobs", () => {
@@ -102,8 +115,11 @@ describe("push notification jobs", () => {
     expect(queued.retry).not.toHaveBeenCalled();
   });
 
-  it("fans out a dispatcher job into one delivery job per subscription", async () => {
-    const mailboxId = await registerPushTarget();
+  it("fans out to a device after its sign-in session expires", async () => {
+    const { mailboxId } = await registerPushTarget();
+    await env.DB.prepare("UPDATE sessions SET expires_at = ?")
+      .bind(Date.now() - 1)
+      .run();
     const sendBatch = vi.fn(async (
       _messages: MessageSendRequest<MailboxPushJob>[],
     ) => undefined);
@@ -133,6 +149,43 @@ describe("push notification jobs", () => {
         }),
       },
     ]);
+  });
+
+  it("keeps a subscription after a local delivery error", async () => {
+    const { mailboxId, endpoint } = await registerPushTarget();
+    const subscription = await env.DB.prepare(
+      "SELECT id FROM push_subscriptions WHERE endpoint = ?",
+    ).bind(endpoint).first<{ id: string }>();
+    expect(subscription).toBeTruthy();
+    const queued = queueBatch({
+      type: "deliver",
+      mailboxId,
+      conversationId: "conv_push_local_error",
+      messageId: "msg_push_local_error",
+      occurredAt: Date.now(),
+      sender: "Sender",
+      subject: "Local failure",
+      targetSubscriptionId: subscription!.id,
+      mailboxDisplayName: "Mailbox",
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("Local push failure");
+    }));
+
+    try {
+      await consumePushNotifications(queued.batch, envWithQueue(async () => undefined));
+      expect(queued.ack).toHaveBeenCalledOnce();
+      expect(queued.retry).not.toHaveBeenCalled();
+      await expect(
+        env.DB.prepare(
+          "SELECT id FROM push_subscriptions WHERE id = ?",
+        ).bind(subscription!.id).first(),
+      ).resolves.toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+      consoleError.mockRestore();
+    }
   });
 
   it("acknowledges jobs without fanout when the VAPID config is invalid", async () => {

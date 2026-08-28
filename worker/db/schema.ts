@@ -247,19 +247,21 @@ export const sessions = sqliteTable(
   "sessions",
   {
     id: text("id").primaryKey(),
-    tokenHash: text("token_hash").notNull(),
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    userAgent: text("user_agent"),
+    location: text("location"),
+    ipAddress: text("ip_address"),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
-    userAgent: text("user_agent"),
   },
   (table) => [
     uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
-    index("sessions_user_idx").on(table.userId),
+    index("sessions_user_created_idx").on(table.userId, table.createdAt),
     index("sessions_expiry_idx").on(table.expiresAt),
   ],
 );
@@ -346,17 +348,13 @@ export const webhookDeliveries = sqliteTable(
   ],
 );
 
-/**
- * A push channel belongs to the stable browser session, not its rotating
- * bearer token. Removing or expiring that session still stops delivery by FK.
- */
 export const pushSubscriptions = sqliteTable(
   "push_subscriptions",
   {
     id: text("id").primaryKey(),
-    sessionId: text("session_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => sessions.id, { onDelete: "cascade" }),
+      .references(() => users.id, { onDelete: "cascade" }),
     endpoint: text("endpoint").notNull(),
     p256dh: text("p256dh").notNull(),
     auth: text("auth").notNull(),
@@ -364,7 +362,7 @@ export const pushSubscriptions = sqliteTable(
   },
   (table) => [
     uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint),
-    index("push_subscriptions_session_idx").on(table.sessionId),
+    index("push_subscriptions_user_idx").on(table.userId),
   ],
 );
 

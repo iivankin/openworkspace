@@ -29,6 +29,7 @@ import {
   oidcClients,
   oidcGrants,
   oidcRefreshTokens,
+  pushSubscriptions,
   sessions,
   users,
 } from "../db/schema";
@@ -73,6 +74,7 @@ import {
   hasKnownGroupIds,
   hasKnownUserIds,
 } from "./records";
+import { userSessionAdminRoutes } from "./session-routes";
 
 async function prepareAccessLink(input: {
   kind: AccessLinkKind;
@@ -244,6 +246,7 @@ export const adminRoutes = new Hono<AppEnv>()
       })),
     });
   })
+  .route("/", userSessionAdminRoutes)
   .route("/", domainAdminRoutes)
   .put(
     "/ai",
@@ -436,6 +439,9 @@ export const adminRoutes = new Hono<AppEnv>()
         const revocations = [
           db.delete(accountApiTokens).where(eq(accountApiTokens.userId, userId)),
           db.delete(sessions).where(eq(sessions.userId, userId)),
+          db
+            .delete(pushSubscriptions)
+            .where(eq(pushSubscriptions.userId, userId)),
           db.delete(authChallenges).where(eq(authChallenges.userId, userId)),
           db
             .delete(accessLinks)

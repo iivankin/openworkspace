@@ -32,7 +32,10 @@ beforeAll(async () => {
   ).bind(body.mailboxes[0]!.id).first<{ user_id: string }>();
   expect(membership).toBeTruthy();
   const storedSession = await env.DB.prepare(
-    "SELECT id FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+    `SELECT session.id
+     FROM sessions session
+     WHERE session.user_id = ?
+     ORDER BY session.created_at DESC LIMIT 1`,
   ).bind(membership!.user_id).first<{ id: string }>();
   expect(storedSession).toBeTruthy();
   session = {
@@ -77,16 +80,14 @@ describe("mailbox realtime", () => {
       stub.shouldSuppressPush(
         "msg_realtime_read",
         session.userId,
-        session.sessionId,
       ),
     ).resolves.toBe(true);
     await expect(
       stub.shouldSuppressPush(
         "msg_realtime_read",
         session.userId,
-        "ses_other_device",
       ),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
     const nextEvent = new Promise<string>((resolve) => {
       socket.addEventListener("message", (message) => {
         resolve(String(message.data));
@@ -114,7 +115,6 @@ describe("mailbox realtime", () => {
       stub.shouldSuppressPush(
         "msg_realtime_read",
         session.userId,
-        "ses_other_device",
       ),
     ).resolves.toBe(true);
   });
@@ -216,11 +216,11 @@ describe("mailbox realtime", () => {
 });
 
 describe("notification preferences", () => {
-  it("binds a push registration to the current session", async () => {
+  it("binds a push registration to the current account", async () => {
     const endpoint = `https://push.example.test/${crypto.randomUUID()}`;
     const create = await exports.default.fetch(
       new Request("http://example.test/api/notifications/subscriptions", {
-        method: "POST",
+        method: "PUT",
         headers: { cookie: session.cookie, "content-type": "application/json" },
         body: JSON.stringify({
           endpoint,
@@ -231,15 +231,12 @@ describe("notification preferences", () => {
         }),
       }),
     );
-    expect(create.status).toBe(201);
-    const status = await exports.default.fetch(
-      new Request("http://example.test/api/notifications/subscriptions/status", {
-        method: "POST",
-        headers: { cookie: session.cookie, "content-type": "application/json" },
-        body: JSON.stringify({ endpoint }),
-      }),
-    );
-    await expect(status.json()).resolves.toMatchObject({ registered: true });
+    expect(create.status).toBe(200);
+    await expect(
+      env.DB.prepare(
+        "SELECT user_id AS userId FROM push_subscriptions WHERE endpoint = ?",
+      ).bind(endpoint).first<{ userId: string }>(),
+    ).resolves.toMatchObject({ userId: session.userId });
 
     const remove = await exports.default.fetch(
       new Request("http://example.test/api/notifications/subscriptions", {
@@ -249,12 +246,17 @@ describe("notification preferences", () => {
       }),
     );
     expect(remove.status).toBe(200);
+    await expect(
+      env.DB.prepare(
+        "SELECT id FROM push_subscriptions WHERE endpoint = ?",
+      ).bind(endpoint).first(),
+    ).resolves.toBeNull();
   });
 
   it("rejects malformed browser push keys", async () => {
     const create = await exports.default.fetch(
       new Request("http://example.test/api/notifications/subscriptions", {
-        method: "POST",
+        method: "PUT",
         headers: { cookie: session.cookie, "content-type": "application/json" },
         body: JSON.stringify({
           endpoint: `https://push.example.test/${crypto.randomUUID()}`,
@@ -265,28 +267,28 @@ describe("notification preferences", () => {
     expect(create.status).toBe(400);
   });
 
-  it("removes expired sessions and their push registrations on login", async () => {
+  it("keeps account push when an unrelated session expires", async () => {
     const expiredTokenHash = `expired_${crypto.randomUUID()}`;
     const expiredSessionId = `ses_${crypto.randomUUID()}`;
     const pushSubscriptionId = `push_${crypto.randomUUID()}`;
     const endpoint = `https://push.example.test/${crypto.randomUUID()}`;
     const now = Date.now();
     await env.DB.prepare(`
-      INSERT INTO sessions (id, token_hash, user_id, expires_at, created_at)
+      INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at)
       VALUES (?, ?, ?, ?, ?)
     `).bind(
       expiredSessionId,
-      expiredTokenHash,
       session.userId,
+      expiredTokenHash,
       now - 1,
       now - 60_000,
     ).run();
     await env.DB.prepare(`
-      INSERT INTO push_subscriptions (id, session_id, endpoint, p256dh, auth)
+      INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth)
       VALUES (?, ?, ?, ?, ?)
     `).bind(
       pushSubscriptionId,
-      expiredSessionId,
+      session.userId,
       endpoint,
       env.VAPID_PUBLIC_KEY,
       "AAAAAAAAAAAAAAAAAAAAAA",
@@ -304,12 +306,12 @@ describe("notification preferences", () => {
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM sessions WHERE token_hash = ?",
       ).bind(expiredTokenHash).first<{ count: number }>(),
-    ).toMatchObject({ count: 0 });
+    ).toMatchObject({ count: 1 });
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM push_subscriptions WHERE id = ?",
       ).bind(pushSubscriptionId).first<{ count: number }>(),
-    ).toMatchObject({ count: 0 });
+    ).toMatchObject({ count: 1 });
   });
 
   it("defaults each accessible mailbox to enabled and stores a personal override", async () => {

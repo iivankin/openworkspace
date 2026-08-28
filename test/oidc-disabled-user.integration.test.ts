@@ -92,16 +92,18 @@ describe("OIDC user lifecycle", () => {
       socket.addEventListener("close", (event) => resolve(event.code), { once: true });
     });
     const userSession = await env.DB.prepare(
-      "SELECT id FROM sessions WHERE user_id = ? LIMIT 1",
+      `SELECT session.id
+       FROM sessions session
+       WHERE session.user_id = ? LIMIT 1`,
     ).bind(userId).first<{ id: string }>();
     expect(userSession).toBeTruthy();
     const pushSubscriptionId = `push_${crypto.randomUUID()}`;
     await env.DB.prepare(`
-      INSERT INTO push_subscriptions (id, session_id, endpoint, p256dh, auth)
+      INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth)
       VALUES (?, ?, ?, ?, ?)
     `).bind(
       pushSubscriptionId,
-      userSession!.id,
+      userId,
       `https://push.example.test/${crypto.randomUUID()}`,
       "test-p256dh",
       "test-auth",

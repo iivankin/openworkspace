@@ -18,6 +18,7 @@ import { base64UrlToBytes, bytesToBase64Url } from "../lib/crypto";
 import { createId } from "../lib/ids";
 import { getRelyingParty } from "../lib/http";
 import { CHALLENGE_COOKIE, CHALLENGE_TTL_MS } from "./constants";
+import { AuthRequestError } from "./errors";
 
 type ChallengeKind =
   | "bootstrap"
@@ -102,7 +103,7 @@ export async function consumeChallenge(
   challengeId: string | undefined,
   kind: ChallengeKind,
 ) {
-  if (!challengeId) throw new Error("Passkey ceremony has expired");
+  if (!challengeId) throw new AuthRequestError("Passkey ceremony has expired");
   const [challenge] = await db
     .delete(authChallenges)
     .where(
@@ -117,7 +118,7 @@ export async function consumeChallenge(
     // An expired or wrong-kind cookie cannot be reused and does not need to
     // remain in D1 after the failed ceremony.
     await db.delete(authChallenges).where(eq(authChallenges.id, challengeId));
-    throw new Error("Passkey ceremony has expired");
+    throw new AuthRequestError("Passkey ceremony has expired");
   }
   return challenge;
 }
@@ -176,15 +177,22 @@ export async function finishRegistration(
   challenge: typeof authChallenges.$inferSelect,
   response: RegistrationResponseJSON,
 ) {
-  const verification = await verifyRegistrationResponse({
-    response,
-    expectedChallenge: challenge.challenge,
-    expectedOrigin: challenge.origin,
-    expectedRPID: challenge.rpId,
-    requireUserVerification: true,
-    supportedAlgorithmIDs: [-7, -257],
-  });
-  if (!verification.verified) throw new Error("Passkey could not be verified");
+  let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+  try {
+    verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: challenge.origin,
+      expectedRPID: challenge.rpId,
+      requireUserVerification: true,
+      supportedAlgorithmIDs: [-7, -257],
+    });
+  } catch (error) {
+    throw new AuthRequestError("Passkey could not be verified", { cause: error });
+  }
+  if (!verification.verified) {
+    throw new AuthRequestError("Passkey could not be verified");
+  }
 
   const { credential } = verification.registrationInfo;
   return {
@@ -239,25 +247,35 @@ export async function finishAuthentication(
     )
     .limit(1);
   if (!stored) {
-    throw new Error("This passkey is unavailable or the account is disabled");
+    throw new AuthRequestError(
+      "This passkey is unavailable or the account is disabled",
+    );
   }
 
-  const verification = await verifyAuthenticationResponse({
-    response,
-    expectedChallenge: challenge.challenge,
-    expectedOrigin: challenge.origin,
-    expectedRPID: challenge.rpId,
-    requireUserVerification: true,
-    credential: {
-      id: stored.credentialId,
-      publicKey: new Uint8Array(base64UrlToBytes(stored.publicKey)),
-      counter: stored.counter,
-      transports: stored.transports as
-        | AuthenticatorTransportFuture[]
-        | undefined,
-    },
-  });
-  if (!verification.verified) throw new Error("Passkey could not be verified");
+  const credential = {
+    id: stored.credentialId,
+    publicKey: new Uint8Array(base64UrlToBytes(stored.publicKey)),
+    counter: stored.counter,
+    transports: stored.transports as
+      | AuthenticatorTransportFuture[]
+      | undefined,
+  };
+  let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+  try {
+    verification = await verifyAuthenticationResponse({
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: challenge.origin,
+      expectedRPID: challenge.rpId,
+      requireUserVerification: true,
+      credential,
+    });
+  } catch (error) {
+    throw new AuthRequestError("Passkey could not be verified", { cause: error });
+  }
+  if (!verification.verified) {
+    throw new AuthRequestError("Passkey could not be verified");
+  }
 
   await db
     .update(passkeyCredentials)

@@ -2,6 +2,7 @@ import { hc } from "hono/client";
 import type { AppType } from "@worker/index";
 
 export const api = hc<AppType>(window.location.origin);
+export const AUTH_UNAUTHORIZED_EVENT = "openworkspace:auth-unauthorized";
 
 type ResponseLike = {
   ok: boolean;
@@ -29,6 +30,9 @@ export async function responseJson<R extends ResponseLike>(
 ): Promise<SuccessfulResponse<R>> {
   const body = await response.json();
   if (!response.ok) {
+    if (response.status === 401) {
+      window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
+    }
     const failure = body as { error?: { message?: string } };
     throw new ApiError(
       failure.error?.message ?? `Request failed (${response.status})`,

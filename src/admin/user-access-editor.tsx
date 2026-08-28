@@ -66,7 +66,7 @@ export function UserAccessEditor({
             <span>
               <span className="block text-[0.8125rem] font-semibold">Account access</span>
               <span className="block text-xs text-muted-foreground">
-                Disabling ends sessions and revokes every OIDC token.
+                Disabling removes sessions, push subscriptions, and OIDC tokens.
               </span>
             </span>
             <Switch checked={active} onCheckedChange={setActive} />

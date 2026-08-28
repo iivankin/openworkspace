@@ -9,10 +9,12 @@ import {
 } from "@/admin/admin-panel";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { useAuth } from "@/auth/auth-context";
 import { api, responseJson } from "@/lib/api";
 import {
   currentPushRegistrationStatus,
   disableCurrentPushSubscription,
+  enableCurrentPushSubscription,
 } from "@/pwa/push-subscription";
 
 type DeviceStatus =
@@ -44,6 +46,7 @@ function deviceStatusCopy(
 
 export function NotificationsSettings() {
   const client = useQueryClient();
+  const userId = useAuth().user?.id;
   const config = useQuery({
     queryKey: ["push-config"],
     queryFn: async () => responseJson(await api.api.notifications.config.$get()),
@@ -54,27 +57,20 @@ export function NotificationsSettings() {
     queryFn: async () => responseJson(await api.api.notifications.preferences.$get()),
   });
   const publicKey = config.data?.publicKey ?? null;
-  const deviceStatusKey = ["push-device-status", publicKey] as const;
+  const deviceStatusKey = ["push-device-status", userId, publicKey] as const;
   const device = useQuery({
     queryKey: deviceStatusKey,
-    enabled: Boolean(config.data?.enabled && publicKey),
+    enabled: Boolean(config.data?.enabled && publicKey && userId),
     queryFn: () => currentPushRegistrationStatus(publicKey!),
   });
 
   const enable = useMutation({
     mutationFn: async () => {
       if (!publicKey) throw new Error("Web Push is not configured");
-      const { serializeSubscription, subscribe } = await import("@mmmike/web-push/client");
-      const result = await subscribe(publicKey);
-      if (result.status === "unsupported") throw new Error("Push is not supported on this device");
-      if (result.status === "denied") throw new Error("Notification permission was denied");
-      await responseJson(
-        await api.api.notifications.subscriptions.$post({
-          json: serializeSubscription(result.subscription),
-        }),
-      );
+      if (!userId) throw new Error("Sign in is required");
+      await enableCurrentPushSubscription(publicKey);
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       client.setQueryData(deviceStatusKey, "enabled" satisfies DeviceStatus);
       toast.success("Notifications enabled on this device");
     },
@@ -86,7 +82,7 @@ export function NotificationsSettings() {
 
   const disable = useMutation({
     mutationFn: disableCurrentPushSubscription,
-    onSuccess: (removal) => {
+    onSuccess: async (removal) => {
       client.setQueryData(deviceStatusKey, "prompt" satisfies DeviceStatus);
       if (!removal.browserUnsubscribed) {
         toast.warning("Notifications are disabled; this browser kept an unused subscription.");

@@ -1,5 +1,6 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
+import { z } from "zod";
 import type { AccessLinkKind } from "../../shared/auth";
 import { createDb } from "../db/client";
 import type { AppEnv } from "../env";
@@ -23,10 +24,9 @@ import {
   hasUsers,
 } from "./service";
 import {
-  createSession,
   destroySession,
+  establishSession,
   readSessionFromContext,
-  reauthenticateSession,
 } from "./session";
 import {
   clearChallengeCookie,
@@ -34,26 +34,27 @@ import {
   setChallengeCookie,
 } from "./webauthn";
 import {
-  authenticateLoginTransaction,
   browserLoginTransaction,
-  clearLoginTransactionCookie,
 } from "../oidc/transaction";
 import { deleteAvatar, uploadAvatar } from "./avatar";
 import { accountApiTokenRoutes } from "./api-token-routes";
+import { accountSessionRoutes } from "./session-routes";
 import {
   deferWebhookTask,
   queueUserWebhookEvent,
 } from "../webhooks/service";
+import { AuthRequestError } from "./errors";
+import { OidcError } from "../oidc/errors";
+import { completeOidcLogin } from "./oidc-login";
 
 function authFailure(c: Parameters<typeof apiError>[0], error: unknown) {
-  const message = error instanceof Error ? error.message : "Passkey request failed";
-  const conflict = message.includes("already set up");
-  return apiError(
-    c,
-    conflict ? 409 : 400,
-    conflict ? "CONFLICT" : "WEBAUTHN_FAILED",
-    message,
-  );
+  if (error instanceof AuthRequestError) {
+    return apiError(c, error.status, error.code, error.message);
+  }
+  if (error instanceof OidcError && error.status < 500) {
+    return apiError(c, 400, "WEBAUTHN_FAILED", error.message);
+  }
+  throw error;
 }
 
 async function rateLimitAuth(c: Context<AppEnv>) {
@@ -78,7 +79,6 @@ async function rateLimitAuth(c: Context<AppEnv>) {
 }
 
 function accessLinkRoutes(kind: AccessLinkKind) {
-  const label = kind === "invitation" ? "Invitation" : "Recovery link";
   return new Hono<AppEnv>()
     .get("/:token", async (c) => {
       try {
@@ -92,12 +92,8 @@ function accessLinkRoutes(kind: AccessLinkKind) {
           accessLink,
         });
       } catch (error) {
-        return apiError(
-          c,
-          404,
-          "NOT_FOUND",
-          error instanceof Error ? error.message : `${label} not found`,
-        );
+        if (!(error instanceof AuthRequestError)) throw error;
+        return apiError(c, 404, "NOT_FOUND", error.message);
       }
     })
     .post("/:token/options", async (c) => {
@@ -127,7 +123,7 @@ function accessLinkRoutes(kind: AccessLinkKind) {
             kind,
           );
           clearChallengeCookie(c);
-          await createSession(db, c, userId);
+          await establishSession(db, c, userId);
           if (kind === "invitation") {
             deferWebhookTask(
               (task) => c.executionCtx.waitUntil(task),
@@ -188,7 +184,7 @@ export const authRoutes = new Hono<AppEnv>()
           c.req.valid("json"),
         );
         clearChallengeCookie(c);
-        await createSession(db, c, userId);
+        await establishSession(db, c, userId);
         return c.json({ ok: true as const });
       } catch (error) {
         return authFailure(c, error);
@@ -226,17 +222,22 @@ export const authRoutes = new Hono<AppEnv>()
         );
         clearChallengeCookie(c);
         if (result.oidcRequestId) {
-          const transaction = await authenticateLoginTransaction(
+          const oidcLogin = await completeOidcLogin(
             db,
-            result.oidcRequestId,
+            c,
             result.userId,
+            result.oidcRequestId,
           );
-          await reauthenticateSession(db, c, result.userId);
-          clearLoginTransactionCookie(c, result.oidcRequestId);
-          return c.json({ ok: true as const, ...transaction });
+          return c.json({
+            ok: true as const,
+            ...oidcLogin,
+          });
         }
-        await createSession(db, c, result.userId);
-        return c.json({ ok: true as const, redirectTo: null });
+        await establishSession(db, c, result.userId);
+        return c.json({
+          ok: true as const,
+          redirectTo: null,
+        });
       } catch (error) {
         return authFailure(c, error);
       }
@@ -244,10 +245,22 @@ export const authRoutes = new Hono<AppEnv>()
   )
   .route("/invitation", accessLinkRoutes("invitation"))
   .route("/recovery", accessLinkRoutes("recovery"))
+  .route("/sessions", accountSessionRoutes)
   .route("/api-tokens", accountApiTokenRoutes)
   .post("/avatar", requireSessionAuth, (c) => uploadAvatar(c))
   .delete("/avatar", requireSessionAuth, (c) => deleteAvatar(c))
-  .post("/logout", requireSessionAuth, async (c) => {
-    await destroySession(createDb(c.env.DB), c);
-    return c.json({ ok: true as const });
-  });
+  .post(
+    "/logout",
+    requireSessionAuth,
+    zValidator("json", z.object({
+      pushEndpoint: z.url().max(4_096).optional(),
+    })),
+    async (c) => {
+      await destroySession(createDb(c.env.DB), c, {
+        sessionId: c.get("sessionId"),
+        userId: c.get("user").id,
+        pushEndpoint: c.req.valid("json").pushEndpoint,
+      });
+      return c.json({ ok: true as const });
+    },
+  );

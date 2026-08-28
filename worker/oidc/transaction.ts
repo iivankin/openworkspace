@@ -1,12 +1,14 @@
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, exists, gt } from "drizzle-orm";
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Database } from "../db/client";
 import {
   oidcAuthorizationRequests,
   oidcClients,
+  sessions,
 } from "../db/schema";
 import type { AppEnv } from "../env";
+import type { SessionAtomicActionFactory } from "../auth/session";
 import { hashToken, randomToken } from "../lib/crypto";
 import { createId } from "../lib/ids";
 import { AUTHORIZATION_REQUEST_TTL_MS } from "./constants";
@@ -134,35 +136,56 @@ export async function browserLoginTransaction(
   return transaction;
 }
 
-export async function authenticateLoginTransaction(
+export function prepareLoginTransactionCommit(
   db: Database,
   requestId: string,
   userId: string,
-) {
-  const now = new Date();
-  const [transaction] = await db
-    .update(oidcAuthorizationRequests)
-    .set({
-      userId,
-      authTime: now,
-      status: "authenticated",
-      browserSecretHash: null,
-    })
-    .where(
-      and(
-        eq(oidcAuthorizationRequests.id, requestId),
-        eq(oidcAuthorizationRequests.status, "awaiting_login"),
-        gt(oidcAuthorizationRequests.expiresAt, now),
-      ),
-    )
-    .returning({ id: oidcAuthorizationRequests.id });
-  if (!transaction) {
-    throw new OidcError(
-      "invalid_request",
-      "OIDC login transaction is invalid or expired",
+): SessionAtomicActionFactory {
+  return ({ authenticatedAt, sessionId, sessionTokenHash }) => {
+    const now = new Date();
+    const pendingTransaction = exists(
+      db
+        .select({ id: oidcAuthorizationRequests.id })
+        .from(oidcAuthorizationRequests)
+        .where(and(
+          eq(oidcAuthorizationRequests.id, requestId),
+          eq(oidcAuthorizationRequests.status, "awaiting_login"),
+          gt(oidcAuthorizationRequests.expiresAt, now),
+        )),
     );
-  }
-  return {
-    redirectTo: `/oauth/authorize/resume/${encodeURIComponent(requestId)}`,
+    const committedSession = exists(
+      db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(and(
+          eq(sessions.id, sessionId),
+          eq(sessions.tokenHash, sessionTokenHash),
+        )),
+    );
+    return {
+      precondition: pendingTransaction,
+      commit: db
+        .update(oidcAuthorizationRequests)
+        .set({
+          userId,
+          authTime: authenticatedAt,
+          status: "authenticated",
+          browserSecretHash: null,
+        })
+        .where(and(
+          eq(oidcAuthorizationRequests.id, requestId),
+          eq(oidcAuthorizationRequests.status, "awaiting_login"),
+          gt(oidcAuthorizationRequests.expiresAt, now),
+          committedSession,
+        ))
+        .returning({ id: oidcAuthorizationRequests.id }),
+      assertCommitted(result: unknown) {
+        if (Array.isArray(result) && result.length > 0) return;
+        throw new OidcError(
+          "invalid_request",
+          "OIDC login transaction is invalid or expired",
+        );
+      },
+    };
   };
 }
