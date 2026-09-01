@@ -8,12 +8,18 @@ export type SessionUser = Pick<
 
 export type AuthBindings = {
   ALLOW_MOCK_AUTH?: string;
+  IDENTITY_PROVIDER_ORIGIN?: string;
 };
 
 export type OidcBindings = {
-  OIDC_ISSUER?: string;
   OIDC_SIGNING_PRIVATE_JWK?: string;
   OIDC_PREVIOUS_PUBLIC_JWKS?: string;
+};
+
+export type SamlBindings = {
+  SAML_SIGNING_PRIVATE_KEY?: string;
+  SAML_SIGNING_CERTIFICATE?: string;
+  SAML_ADDITIONAL_SIGNING_CERTIFICATES?: string;
 };
 
 export type R2S3Bindings = {
@@ -34,6 +40,7 @@ export type AppEnv = {
     & AuthBindings
     & CloudflareEmailAnalyticsBindings
     & OidcBindings
+    & SamlBindings
     & R2S3Bindings
     & PushBindings;
   Variables: {

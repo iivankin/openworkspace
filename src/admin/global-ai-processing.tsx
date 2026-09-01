@@ -34,20 +34,20 @@ export function GlobalAiProcessing({
       <AdminPanelHeader
         Icon={Sparkles}
         title="AI mail processing"
-        description="One global switch for incoming mail classification"
+        description="OpenAI classification through Cloudflare Workers AI"
       />
       <AdminPanelBody className="flex items-center justify-between gap-6">
         <div>
-          <p className="text-sm font-medium">Enable Workers AI</p>
+          <p className="text-sm font-medium">Enable OpenAI mail classification</p>
           <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
-            Mailbox members configure shared rules and a confidence threshold for each mailbox in Mail. Turning this off preserves those settings.
+            Raw .eml messages are sent to OpenAI. AI Gateway credits are required.
           </p>
         </div>
         {loading ? (
           <Skeleton className="h-6 w-10 shrink-0 rounded-full" />
         ) : (
           <Switch
-            aria-label="Enable AI mail processing globally"
+            aria-label="Enable OpenAI mail classification globally"
             checked={enabled}
             disabled={update.isPending}
             onCheckedChange={(checked) => update.mutate(checked)}

@@ -4,12 +4,16 @@ import {
   oidcClientTypes,
   oidcScopes,
 } from "../../shared/oidc";
-import { emailSchema } from "../auth/schemas";
+import { emailSchema, userNameSchema } from "../auth/schemas";
 import { isValidExternalEmailAddress } from "../../shared/mail";
 import {
   isAllowedOidcRedirectUri,
   normalizeAllowedOidcOrigin,
 } from "../oidc/validation";
+import { samlNameIdFormats } from "../../shared/saml";
+import { isValidXmlCharacters } from "../saml/xml";
+
+const XML_CHARACTERS_ERROR = "Value contains characters that are not allowed in XML";
 
 const mailboxMemberSchema = z.object({
   userId: z.string().min(1),
@@ -56,7 +60,7 @@ export const updateDomainSchema = z.object({
 );
 
 export const createInvitationSchema = z.object({
-  name: z.string().trim().min(2).max(80),
+  name: userNameSchema,
   email: emailSchema,
 });
 
@@ -91,7 +95,7 @@ export const globalAiProcessingSchema = z.object({
 });
 
 export const updateUserSchema = z.object({
-  name: z.string().trim().min(2).max(80).optional(),
+  name: userNameSchema.optional(),
   status: z.enum(["active", "disabled"]).optional(),
   role: z.enum(["admin", "member"]).optional(),
 }).refine(
@@ -143,6 +147,42 @@ const oidcClientSchema = z.object({
 
 export const createOidcClientSchema = oidcClientSchema;
 export const updateOidcClientSchema = oidcClientSchema;
+
+const samlApplicationSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  entityId: z.url().max(2_048)
+    .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR),
+  acsUrl: redirectUriSchema
+    .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR),
+  nameIdFormat: z.enum(samlNameIdFormats),
+  accessPolicy: z.enum(oidcAccessPolicies),
+  emailAttributeName: z.string().trim().min(1).max(256)
+    .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR),
+  nameAttributeName: z.string().trim().min(1).max(256)
+    .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR),
+  groupsAttributeName: z.string().trim().min(1).max(256)
+    .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR)
+    .nullable(),
+  signResponse: z.boolean(),
+  requireSignedAuthnRequests: z.boolean(),
+  spSigningCertificate: z.string().trim().max(32_768).nullable(),
+  allowIdpInitiated: z.boolean(),
+  enabled: z.boolean(),
+  assignedUserIds: uniqueStrings(z.string().min(1), 100),
+  exposedGroupIds: uniqueStrings(z.string().min(1), 100),
+}).refine(
+  (input) => !input.requireSignedAuthnRequests || input.spSigningCertificate,
+  "A service-provider certificate is required for signed AuthnRequest messages",
+).refine(
+  (input) => Boolean(input.groupsAttributeName) || input.exposedGroupIds.length === 0,
+  {
+    message: "A groups attribute is required when exposing groups",
+    path: ["exposedGroupIds"],
+  },
+);
+
+export const createSamlApplicationSchema = samlApplicationSchema;
+export const updateSamlApplicationSchema = samlApplicationSchema;
 
 export const groupInputSchema = z.object({
   name: z.string().trim().min(2).max(80),

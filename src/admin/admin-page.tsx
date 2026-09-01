@@ -43,12 +43,14 @@ import { SsoApplications } from "./sso-applications";
 import { WebhooksManager } from "./webhooks-manager";
 import { DomainsManager } from "./domains-manager";
 import { AdminUserSessions } from "./user-sessions";
+import { SamlApplications } from "./saml-applications";
 
 type AdminView =
   | "people"
   | "mailboxes"
   | "domains"
   | "sso-applications"
+  | "saml-applications"
   | "groups"
   | "webhooks"
   | "invite"
@@ -56,18 +58,57 @@ type AdminView =
   | "user"
   | "mailbox";
 
+type ResourceDetailView = Extract<
+  AdminView,
+  "sso-applications" | "saml-applications" | "groups" | "webhooks"
+>;
+
 const viewCopy: Record<AdminView, { title: string; description: string }> = {
   people: { title: "People", description: "Workspace members and their mailbox access." },
   mailboxes: { title: "Mailboxes", description: "Personal and shared addresses provisioned for this workspace." },
   domains: { title: "Domains", description: "Mail domains and Cloudflare zone IDs." },
-  "sso-applications": { title: "SSO applications", description: "OIDC clients, callbacks, user assignments, and released claims." },
-  groups: { title: "Identity groups", description: "Reusable memberships exposed to approved OIDC applications." },
+  "sso-applications": { title: "OIDC applications", description: "OIDC clients, callbacks, user assignments, and released claims." },
+  "saml-applications": { title: "SAML applications", description: "Service providers, assertions, assignments, and attributes." },
+  groups: { title: "Identity groups", description: "Reusable memberships exposed to approved identity applications." },
   webhooks: { title: "Webhooks", description: "Signed account events delivered to external systems." },
   invite: { title: "Invite person", description: "Create a personal mailbox and a one-time registration link." },
   "new-mailbox": { title: "New mailbox", description: "Personal or shared address." },
   user: { title: "Person", description: "Profile details and passkey recovery." },
   mailbox: { title: "Mailbox access", description: "Display name and member permissions for this shared address." },
 };
+
+const parentViews: Partial<Record<AdminView, AdminView>> = {
+  user: "people",
+  invite: "people",
+  mailbox: "mailboxes",
+  "new-mailbox": "mailboxes",
+};
+
+const resourceDetailCopy: Record<
+  ResourceDetailView,
+  (creating: boolean) => { title: string; description: string }
+> = {
+  "sso-applications": (creating) => ({
+    title: creating ? "New OIDC application" : "OIDC application",
+    description: "Client settings, access, and released claims.",
+  }),
+  "saml-applications": (creating) => ({
+    title: creating ? "New SAML application" : "SAML application",
+    description: "Service provider settings, access, and attributes.",
+  }),
+  groups: (creating) => ({
+    title: creating ? "New identity group" : "Identity group",
+    description: "Group details and membership.",
+  }),
+  webhooks: (creating) => ({
+    title: creating ? "New webhook" : "Webhook endpoint",
+    description: "Endpoint settings and subscribed events.",
+  }),
+};
+
+function isResourceDetailView(view: AdminView): view is ResourceDetailView {
+  return Object.hasOwn(resourceDetailCopy, view);
+}
 
 export function AdminPage() {
   const navigate = useNavigate();
@@ -97,37 +138,10 @@ export function AdminPage() {
     : view === "mailbox" || view === "new-mailbox"
       ? "mailboxes"
       : view;
-  const resourceDetail = selectedId && (
-    view === "sso-applications"
-    || view === "groups"
-    || view === "webhooks"
-  );
-  const backView: AdminView | undefined = view === "user"
-    ? "people"
-    : view === "invite"
-      ? "people"
-    : view === "mailbox"
-      ? "mailboxes"
-      : view === "new-mailbox"
-        ? "mailboxes"
-      : resourceDetail
-        ? view
-        : undefined;
-  const pageCopy = resourceDetail
-    ? view === "sso-applications"
-      ? {
-          title: selectedId === "new" ? "New SSO application" : "SSO application",
-          description: "Client settings, access, and released claims.",
-        }
-      : view === "groups"
-        ? {
-            title: selectedId === "new" ? "New identity group" : "Identity group",
-            description: "Group details and membership.",
-          }
-        : {
-            title: selectedId === "new" ? "New webhook" : "Webhook endpoint",
-            description: "Endpoint settings and subscribed events.",
-          }
+  const resourceDetail = Boolean(selectedId && isResourceDetailView(view));
+  const backView = parentViews[view] ?? (resourceDetail ? view : undefined);
+  const pageCopy = resourceDetail && isResourceDetailView(view)
+    ? resourceDetailCopy[view](selectedId === "new")
     : viewCopy[view];
 
   const invite = useMutation({
@@ -320,6 +334,23 @@ export function AdminPage() {
                 loading={state.isLoading}
                 selectedId={selectedId}
                 onSelect={(id) => go("sso-applications", id)}
+              />
+            )}
+            {view === "saml-applications" && (
+              <SamlApplications
+                applications={state.data?.samlApplications ?? []}
+                provider={state.data?.samlProvider ?? {
+                  configured: false,
+                  entityId: null,
+                  metadataUrl: null,
+                  ssoUrl: null,
+                  configurationError: null,
+                }}
+                users={state.data?.users ?? []}
+                groups={state.data?.groups ?? []}
+                loading={state.isLoading}
+                selectedId={selectedId}
+                onSelect={(id) => go("saml-applications", id)}
               />
             )}
             {view === "groups" && (

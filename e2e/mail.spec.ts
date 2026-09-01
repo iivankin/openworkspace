@@ -1,5 +1,13 @@
 import { expect, test } from "playwright/test";
 
+test("serves direct SAML login links through the SPA", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Direct route is covered once");
+  const response = await page.goto("/saml/login/missing-request");
+  expect(response?.status()).toBe(200);
+  await expect(page.getByRole("heading", { name: "Request unavailable" }))
+    .toBeVisible();
+});
+
 test("opens the seeded inbox and reads a message", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Open seeded local demo" }).click();

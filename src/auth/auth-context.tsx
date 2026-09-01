@@ -25,11 +25,18 @@ type AuthState = Omit<
   "ok"
 >;
 
+type ReauthenticationRequest =
+  | { kind: "oidc"; requestId: string }
+  | { kind: "saml"; requestId: string };
+
 type AuthContextValue = AuthState & {
   loading: boolean;
   bootstrap: (input: { name: string; email: string }, mock?: boolean) => Promise<void>;
   login: (mock?: boolean) => Promise<void>;
-  reauthenticate: (oidcRequestId: string, mock?: boolean) => Promise<string>;
+  reauthenticate: (
+    request: ReauthenticationRequest,
+    mock?: boolean,
+  ) => Promise<string>;
   logout: () => Promise<void>;
   completeAccessLink: (
     kind: AccessLinkKind,
@@ -143,7 +150,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { startRegistration } = await import("@simplewebauthn/browser");
         const response = await startRegistration({ optionsJSON: options.options });
         await responseJson(
-          await api.api.auth.bootstrap.verify.$post({ json: response }),
+          await api.api.auth.bootstrap.verify.$post({
+            json: { challengeId: options.challengeId, response },
+          }),
         );
       }
       await refresh();
@@ -166,7 +175,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { startAuthentication } = await import("@simplewebauthn/browser");
         const response = await startAuthentication({ optionsJSON: options.options });
         await responseJson(
-          await api.api.auth.login.verify.$post({ json: response }),
+          await api.api.auth.login.verify.$post({
+            json: { challengeId: options.challengeId, response },
+          }),
         );
       }
       await refresh();
@@ -175,31 +186,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const reauthenticate = useCallback(
-    async (oidcRequestId: string, mock = false) => {
+    async (request: ReauthenticationRequest, mock = false) => {
       let result: { redirectTo: string | null };
       if (mock) {
         result = await responseJson(
           await api.api.auth.mock.login.$post({
-            json: {
-              userId: "usr_demo_admin",
-              oidcRequestId,
-            },
+            json: request.kind === "oidc"
+              ? { userId: "usr_demo_admin", oidcRequestId: request.requestId }
+              : { userId: "usr_demo_admin", samlRequestId: request.requestId },
           }),
         );
       } else {
         const options = await responseJson(
           await api.api.auth.login.options.$post({
-            query: { oidcRequestId },
+            query: request.kind === "oidc"
+              ? { oidcRequestId: request.requestId }
+              : { samlRequestId: request.requestId },
           }),
         );
         const { startAuthentication } = await import("@simplewebauthn/browser");
         const response = await startAuthentication({ optionsJSON: options.options });
         result = await responseJson(
-          await api.api.auth.login.verify.$post({ json: response }),
+          await api.api.auth.login.verify.$post({
+            json: { challengeId: options.challengeId, response },
+          }),
         );
       }
       if (!result.redirectTo) {
-        throw new Error("OIDC re-authentication did not return a continuation");
+        throw new Error(`${request.kind.toUpperCase()} re-authentication did not return a continuation`);
       }
       return result.redirectTo;
     },
@@ -237,11 +251,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         kind === "invitation"
           ? await api.api.auth.invitation[":token"].verify.$post({
               param: { token },
-              json: response,
+              json: { challengeId: options.challengeId, response },
             })
           : await api.api.auth.recovery[":token"].verify.$post({
               param: { token },
-              json: response,
+              json: { challengeId: options.challengeId, response },
             }),
       );
       await refresh();

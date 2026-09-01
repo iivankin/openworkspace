@@ -8,10 +8,10 @@ import { apiError } from "../lib/http";
 import { checkRateLimit, requestIdentifier } from "../lib/rate-limit";
 import { requireSessionAuth } from "./middleware";
 import {
-  authenticationResponseSchema,
+  authenticationVerificationSchema,
   bootstrapInputSchema,
   loginOptionsSchema,
-  registrationResponseSchema,
+  registrationVerificationSchema,
 } from "./schemas";
 import {
   beginAccessLinkRegistration,
@@ -29,11 +29,6 @@ import {
   readSessionFromContext,
 } from "./session";
 import {
-  clearChallengeCookie,
-  getChallengeId,
-  setChallengeCookie,
-} from "./webauthn";
-import {
   browserLoginTransaction,
 } from "../oidc/transaction";
 import { deleteAvatar, uploadAvatar } from "./avatar";
@@ -46,12 +41,18 @@ import {
 import { AuthRequestError } from "./errors";
 import { OidcError } from "../oidc/errors";
 import { completeOidcLogin } from "./oidc-login";
+import { completeSamlLogin } from "./saml-login";
+import { SamlError } from "../saml/errors";
+import { browserSamlTransaction } from "../saml/transaction";
 
 function authFailure(c: Parameters<typeof apiError>[0], error: unknown) {
   if (error instanceof AuthRequestError) {
     return apiError(c, error.status, error.code, error.message);
   }
   if (error instanceof OidcError && error.status < 500) {
+    return apiError(c, 400, "WEBAUTHN_FAILED", error.message);
+  }
+  if (error instanceof SamlError && error.status < 500) {
     return apiError(c, 400, "WEBAUTHN_FAILED", error.message);
   }
   throw error;
@@ -104,25 +105,28 @@ function accessLinkRoutes(kind: AccessLinkKind) {
           c.req.param("token"),
           kind,
         );
-        setChallengeCookie(c, result.challenge.id, result.challenge.expiresAt);
-        return c.json({ ok: true as const, options: result.options });
+        return c.json({
+          ok: true as const,
+          options: result.options,
+          challengeId: result.challenge.id,
+        });
       } catch (error) {
         return authFailure(c, error);
       }
     })
     .post(
       "/:token/verify",
-      zValidator("json", registrationResponseSchema),
+      zValidator("json", registrationVerificationSchema),
       async (c) => {
         try {
           const db = createDb(c.env.DB);
+          const input = c.req.valid("json");
           const userId = await finishAccessLinkRegistration(
             db,
-            getChallengeId(c),
-            c.req.valid("json"),
+            input.challengeId,
+            input.response,
             kind,
           );
-          clearChallengeCookie(c);
           await establishSession(db, c, userId);
           if (kind === "invitation") {
             deferWebhookTask(
@@ -166,24 +170,27 @@ export const authRoutes = new Hono<AppEnv>()
         c.req.raw,
         c.req.valid("json"),
       );
-      setChallengeCookie(c, result.challenge.id, result.challenge.expiresAt);
-      return c.json({ ok: true as const, options: result.options });
+      return c.json({
+        ok: true as const,
+        options: result.options,
+        challengeId: result.challenge.id,
+      });
     } catch (error) {
       return authFailure(c, error);
     }
   })
   .post(
     "/bootstrap/verify",
-    zValidator("json", registrationResponseSchema),
+    zValidator("json", registrationVerificationSchema),
     async (c) => {
       try {
         const db = createDb(c.env.DB);
+        const input = c.req.valid("json");
         const userId = await finishBootstrap(
           db,
-          getChallengeId(c),
-          c.req.valid("json"),
+          input.challengeId,
+          input.response,
         );
-        clearChallengeCookie(c);
         await establishSession(db, c, userId);
         return c.json({ ok: true as const });
       } catch (error) {
@@ -196,31 +203,40 @@ export const authRoutes = new Hono<AppEnv>()
     if (limited) return limited;
     try {
       const db = createDb(c.env.DB);
-      const { oidcRequestId } = c.req.valid("query");
+      const { oidcRequestId, samlRequestId } = c.req.valid("query");
       if (oidcRequestId) {
         await browserLoginTransaction(db, c, oidcRequestId);
       }
-      const result = await beginLogin(db, c.req.raw, oidcRequestId);
-      setChallengeCookie(c, result.challenge.id, result.challenge.expiresAt);
-      return c.json({ ok: true as const, options: result.options });
+      if (samlRequestId) {
+        await browserSamlTransaction(db, c, samlRequestId);
+      }
+      const result = await beginLogin(db, c.req.raw, {
+        oidcRequestId,
+        samlRequestId,
+      });
+      return c.json({
+        ok: true as const,
+        options: result.options,
+        challengeId: result.challenge.id,
+      });
     } catch (error) {
       return authFailure(c, error);
     }
   })
   .post(
     "/login/verify",
-    zValidator("json", authenticationResponseSchema),
+    zValidator("json", authenticationVerificationSchema),
     async (c) => {
       const limited = await rateLimitAuth(c);
       if (limited) return limited;
       try {
         const db = createDb(c.env.DB);
+        const input = c.req.valid("json");
         const result = await finishLogin(
           db,
-          getChallengeId(c),
-          c.req.valid("json"),
+          input.challengeId,
+          input.response,
         );
-        clearChallengeCookie(c);
         if (result.oidcRequestId) {
           const oidcLogin = await completeOidcLogin(
             db,
@@ -231,6 +247,18 @@ export const authRoutes = new Hono<AppEnv>()
           return c.json({
             ok: true as const,
             ...oidcLogin,
+          });
+        }
+        if (result.samlRequestId) {
+          const samlLogin = await completeSamlLogin(
+            db,
+            c,
+            result.userId,
+            result.samlRequestId,
+          );
+          return c.json({
+            ok: true as const,
+            ...samlLogin,
           });
         }
         await establishSession(db, c, result.userId);

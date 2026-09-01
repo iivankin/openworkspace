@@ -21,6 +21,17 @@ export type UpdateUserInput = Pick<AdminUser, "name"> & {
 
 export type AdminGroup = AdminStateResponse["groups"][number];
 export type AdminOidcClient = AdminStateResponse["oidcClients"][number];
+export type AdminSamlApplication = AdminStateResponse["samlApplications"][number];
+export type AdminSamlProvider = AdminStateResponse["samlProvider"];
+
+type AdminSamlApplicationDetailsResponse = SuccessfulResponse<
+  Awaited<
+    ReturnType<typeof api.api.admin["saml-applications"][":id"]["$get"]>
+  >
+>;
+
+export type AdminSamlApplicationDetails = AdminSamlApplication
+  & Pick<AdminSamlApplicationDetailsResponse, "spSigningCertificate">;
 
 type AdminWebhooksResponse = SuccessfulResponse<
   Awaited<ReturnType<typeof api.api.admin.webhooks.$get>>

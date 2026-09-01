@@ -64,7 +64,7 @@ For every domain used by a mailbox, configure Cloudflare manually:
    4. For each domain, copy **Zone ID** from its Cloudflare **Overview → API** section and enter it under **Administration → Domains**.
 
    Show original will display Cloudflare's SPF, DKIM, DMARC, and spam results for incoming messages. Analytics can only be fetched during Cloudflare's 31-day retention window; fetched results are retained with the message.
-10. **AI mail processing** — Optional. An admin enables Workers AI globally under **Administration → Mailboxes**. Mailbox members then configure folders, the shared confidence threshold, and classification rules from the folder-management button beside that mailbox's folders. Incoming mail is checked for spam and assigned to one existing custom folder before realtime updates and push delivery. After two failed inference attempts, mail falls back to Inbox. Workers AI usage is billed to the Cloudflare account, including calls made from local development.
+10. **AI mail processing** — Optional. Before enabling it, open **AI → AI Gateway → Credits Available → Manage** in the Cloudflare dashboard and top up the account's AI Gateway credits. An admin then enables OpenAI classification globally under **Administration → Mailboxes**. Mailbox members configure folders, the shared confidence threshold, and classification rules from the folder-management button beside that mailbox's folders. The original raw message is sent to the third-party `openai/gpt-5.6-luna` model as an `.eml` file without separately extracting images. Large messages use an estimate of three raw bytes per token and are truncated at 540 KB by omitting the end of the `.eml`; the 180,000-token target leaves a 20,000-token margin below the requested limit. The model checks for spam and selects one existing custom folder before realtime updates and push delivery. After two failed inference attempts, mail falls back to Inbox. Calls use Cloudflare Unified Billing, including local development, and fail when no AI Gateway credits are available; review the applicable Cloudflare and OpenAI data-retention terms before enabling it.
 11. **Push notifications** — Generate one persistent VAPID key pair with `bun run push:keygen`. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and a contact such as `mailto:admin@example.com` in `VAPID_SUBJECT` with `wrangler secret put`. Users can then enable the current browser and choose mailboxes under **Settings → Notifications**. Each browser endpoint belongs directly to the current account and is rebound idempotently when the app starts. Natural session expiry and remote session revocation do not affect push; explicit logout detaches the current endpoint, while disabling notifications unsubscribes it from the browser.
 
 Unknown catch-all recipients are rejected permanently. Only addresses you create in the app accept mail.
@@ -76,13 +76,15 @@ Configure the canonical public origin and an RSA signing key:
 
 ```bash
 bun run oidc:keygen
-wrangler secret put OIDC_ISSUER
+wrangler secret put IDENTITY_PROVIDER_ORIGIN
 wrangler secret put OIDC_SIGNING_PRIVATE_JWK
 ```
 
 Use the exact HTTPS origin (for example `https://mail.example.com`) as
-`OIDC_ISSUER`, and paste the generated JSON as `OIDC_SIGNING_PRIVATE_JWK`.
-Then open **Administration → SSO applications** to register each relying
+`IDENTITY_PROVIDER_ORIGIN`, and paste the generated JSON as
+`OIDC_SIGNING_PRIVATE_JWK`. The same origin is used by SAML when both identity
+providers are enabled.
+Then open **Administration → OIDC applications** to register each relying
 party's exact redirect URI, scopes, client type, and assigned users. A
 confidential client secret is displayed once.
 
@@ -102,6 +104,38 @@ For signing-key rotation, retain the previous public JWK in a
 `{"keys":[...]}` value under `OIDC_PREVIOUS_PUBLIC_JWKS`, deploy the new private
 key, and keep the previous public key published until old ID tokens and JWKS
 caches have expired.
+
+### Enable the SAML identity provider
+
+The same deployment can issue SAML 2.0 assertions for configured service
+providers. Generate a dedicated RSA key and X.509 certificate, then configure
+the canonical public origin:
+
+```bash
+bun run saml:keygen
+wrangler secret put IDENTITY_PROVIDER_ORIGIN
+wrangler secret put SAML_SIGNING_PRIVATE_KEY < .saml/private-key.pem
+wrangler secret put SAML_SIGNING_CERTIFICATE < .saml/certificate.pem
+```
+
+Open **Administration → SAML applications** to register each service
+provider's Entity ID, exact ACS URL, NameID format, released attributes, user
+assignments, and optional AuthnRequest signing certificate. The IdP metadata is
+published at:
+
+```text
+https://mail.example.com/saml/metadata
+```
+
+The provider accepts SP-initiated AuthnRequest messages over HTTP-Redirect and
+returns signed responses and assertions over HTTP-POST. Per-application launch
+URLs provide IdP-initiated sign-in. Assertion encryption and Single Logout are
+not enabled.
+
+For signing-key rotation, first publish the next certificate in the
+`SAML_ADDITIONAL_SIGNING_CERTIFICATES` PEM bundle. After service providers have
+refreshed metadata, switch the private key and primary certificate, keep the old
+certificate in that bundle, and remove it after metadata caches have expired.
 
 Docs: [Deploy buttons](https://developers.cloudflare.com/workers/platform/deploy-buttons/) · [Catch-all](https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/#catch-all-rule) · [Email Sending](https://developers.cloudflare.com/email-service/get-started/send-emails/) · [Event subscriptions](https://developers.cloudflare.com/email-service/platform/event-subscriptions/)
 

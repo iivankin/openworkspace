@@ -8,6 +8,10 @@ import {
   type JWTPayload,
 } from "jose";
 import type { AppEnv } from "../env";
+import {
+  identityProviderOrigin,
+  IdentityProviderOriginError,
+} from "../lib/identity-provider-origin";
 import { createId } from "../lib/ids";
 import { ID_TOKEN_TTL_SECONDS } from "./constants";
 import { OidcError } from "./errors";
@@ -22,36 +26,39 @@ let cached:
   | {
       source: string;
       previous: string | undefined;
-      issuer: string | undefined;
+      origin: string | undefined;
       config: OidcConfig;
       key: CryptoKey;
       verifyKeys: Map<string, CryptoKey>;
     }
   | undefined;
 
-export function oidcIssuer(env: AppEnv["Bindings"]) {
-  const configured = env.OIDC_ISSUER?.trim();
-  if (!configured) {
+export function oidcIssuer(
+  env: Pick<
+    AppEnv["Bindings"],
+    "IDENTITY_PROVIDER_ORIGIN" | "ALLOW_MOCK_AUTH"
+  >,
+) {
+  try {
+    return identityProviderOrigin(env);
+  } catch (error) {
+    if (!(error instanceof IdentityProviderOriginError)) throw error;
     throw new OidcError(
-      "temporarily_unavailable",
-      "OIDC issuer is not configured",
-      503,
+      error.reason === "missing" ? "temporarily_unavailable" : "server_error",
+      error.message,
+      error.reason === "missing" ? 503 : 500,
     );
   }
-  const url = new URL(configured);
-  if (
-    url.search ||
-    url.hash ||
-    url.pathname !== "/" ||
-    (url.protocol !== "https:" && env.ALLOW_MOCK_AUTH !== "true")
-  ) {
-    throw new OidcError(
-      "server_error",
-      "OIDC issuer must be an HTTPS origin without a path",
-      500,
-    );
-  }
-  return url.origin;
+}
+
+function isStrongRsaCryptoKey(value: unknown): value is CryptoKey {
+  if (!(value instanceof CryptoKey)) return false;
+  const algorithm = value.algorithm as KeyAlgorithm & {
+    modulusLength?: unknown;
+  };
+  return algorithm.name === "RSASSA-PKCS1-v1_5"
+    && typeof algorithm.modulusLength === "number"
+    && algorithm.modulusLength >= 2_048;
 }
 
 async function loadConfig(env: AppEnv["Bindings"]) {
@@ -66,7 +73,7 @@ async function loadConfig(env: AppEnv["Bindings"]) {
   if (
     cached?.source === source &&
     cached.previous === env.OIDC_PREVIOUS_PUBLIC_JWKS &&
-    cached.issuer === env.OIDC_ISSUER
+    cached.origin === env.IDENTITY_PROVIDER_ORIGIN
   ) {
     return cached;
   }
@@ -87,8 +94,12 @@ async function loadConfig(env: AppEnv["Bindings"]) {
   const kid = parsed.kid ?? await calculateJwkThumbprint(parsed);
   const privateJwk = { ...parsed, alg: "RS256", use: "sig", kid };
   const key = await importJWK(privateJwk, "RS256");
-  if (!(key instanceof CryptoKey)) {
-    throw new OidcError("server_error", "OIDC signing key is invalid", 500);
+  if (!isStrongRsaCryptoKey(key)) {
+    throw new OidcError(
+      "server_error",
+      "OIDC signing key must use RSA with at least 2048 bits",
+      500,
+    );
   }
 
   const publicJwk = publicOnly(privateJwk);
@@ -129,15 +140,19 @@ async function loadConfig(env: AppEnv["Bindings"]) {
       );
     }
     const imported = await importJWK(previousKey, "RS256");
-    if (!(imported instanceof CryptoKey)) {
-      throw new OidcError("server_error", "Previous OIDC JWKS is invalid", 500);
+    if (!isStrongRsaCryptoKey(imported)) {
+      throw new OidcError(
+        "server_error",
+        "Previous OIDC keys must use RSA with at least 2048 bits",
+        500,
+      );
     }
     verifyKeys.set(previousKey.kid, imported);
   }
   cached = {
     source,
     previous: env.OIDC_PREVIOUS_PUBLIC_JWKS,
-    issuer: env.OIDC_ISSUER,
+    origin: env.IDENTITY_PROVIDER_ORIGIN,
     config,
     key,
     verifyKeys,

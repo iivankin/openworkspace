@@ -427,6 +427,92 @@ export const oidcClientAssignments = sqliteTable(
   ],
 );
 
+export const samlApplications = sqliteTable(
+  "saml_applications",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    entityId: text("entity_id").notNull(),
+    acsUrl: text("acs_url").notNull(),
+    nameIdFormat: text("name_id_format", {
+      enum: ["email", "persistent"],
+    })
+      .notNull()
+      .default("email"),
+    accessPolicy: text("access_policy", {
+      enum: ["all_active_users", "selected_users"],
+    })
+      .notNull()
+      .default("selected_users"),
+    emailAttributeName: text("email_attribute_name").notNull(),
+    nameAttributeName: text("name_attribute_name").notNull(),
+    groupsAttributeName: text("groups_attribute_name"),
+    signResponse: integer("sign_response", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    requireSignedAuthnRequests: integer("require_signed_authn_requests", {
+      mode: "boolean",
+    })
+      .notNull()
+      .default(false),
+    spSigningCertificate: text("sp_signing_certificate"),
+    allowIdpInitiated: integer("allow_idp_initiated", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("saml_applications_entity_id_unique").on(table.entityId),
+    index("saml_applications_enabled_idx").on(table.enabled),
+    index("saml_applications_created_by_idx").on(table.createdByUserId),
+  ],
+);
+
+export const samlApplicationAssignments = sqliteTable(
+  "saml_application_assignments",
+  {
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => samlApplications.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.applicationId, table.userId] }),
+    index("saml_application_assignments_user_idx").on(table.userId),
+  ],
+);
+
+export const samlPairwiseSubjects = sqliteTable(
+  "saml_pairwise_subjects",
+  {
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => samlApplications.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    nameId: text("name_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    primaryKey({ columns: [table.applicationId, table.userId] }),
+    uniqueIndex("saml_pairwise_subjects_name_id_unique").on(table.nameId),
+    index("saml_pairwise_subjects_user_idx").on(table.userId),
+  ],
+);
+
 export const identityGroups = sqliteTable(
   "identity_groups",
   {
@@ -477,6 +563,62 @@ export const oidcClientGroupClaims = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.clientId, table.groupId] }),
     index("oidc_client_group_claims_group_idx").on(table.groupId),
+  ],
+);
+
+export const samlApplicationGroupClaims = sqliteTable(
+  "saml_application_group_claims",
+  {
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => samlApplications.id, { onDelete: "cascade" }),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => identityGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.applicationId, table.groupId] }),
+    index("saml_application_group_claims_group_idx").on(table.groupId),
+  ],
+);
+
+export const samlAuthnRequests = sqliteTable(
+  "saml_authn_requests",
+  {
+    id: text("id").primaryKey(),
+    applicationId: text("application_id")
+      .notNull()
+      .references(() => samlApplications.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
+    spRequestId: text("sp_request_id"),
+    acsUrl: text("acs_url").notNull(),
+    relayState: text("relay_state"),
+    requestedSpNameQualifier: text("requested_sp_name_qualifier"),
+    allowNameIdCreation: integer("allow_name_id_creation", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    status: text("status", {
+      enum: ["awaiting_login", "authenticated", "responded"],
+    })
+      .notNull()
+      .default("awaiting_login"),
+    browserSecretHash: text("browser_secret_hash"),
+    authTime: integer("auth_time", { mode: "timestamp_ms" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    uniqueIndex("saml_authn_requests_sp_request_unique").on(
+      table.applicationId,
+      table.spRequestId,
+    ),
+    index("saml_authn_requests_expiry_idx").on(table.expiresAt),
+    index("saml_authn_requests_user_idx").on(table.userId),
+    index("saml_authn_requests_status_idx").on(table.status),
   ],
 );
 

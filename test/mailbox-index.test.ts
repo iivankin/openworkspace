@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
@@ -117,17 +118,36 @@ describe("mailbox conversation index", () => {
     const sendPush = vi.fn(async () => {});
     const runAi = vi.fn(async (
       _model: string,
-      request: { messages?: Array<{ content?: string }> },
+      request: {
+        input?: Array<{
+          content?: Array<{ type?: string; file_data?: string }>;
+        }>;
+      },
     ) => {
-      const isSpam = request.messages?.at(-1)?.content?.includes("Spam offer") ?? false;
+      const fileData = request.input?.[0]?.content?.find(
+        (content) => content.type === "input_file",
+      )?.file_data;
+      const rawEmail = fileData
+        ? Buffer.from(fileData.split(",", 2)[1]!, "base64").toString()
+        : "";
+      const isSpam = rawEmail.includes("Spam offer");
       return {
-        response: {
-          spam: isSpam,
-          spamConfidence: isSpam ? 0.99 : 0.01,
-          folderId: isSpam ? null : folder.folder.id,
-          folderConfidence: isSpam ? 0 : 0.96,
-          reason: isSpam ? "Unsolicited promotion" : "Product discussion",
-        },
+        status: "completed",
+        error: null,
+        incomplete_details: null,
+        output: [{
+          type: "message",
+          content: [{
+            type: "output_text",
+            text: JSON.stringify({
+              spam: isSpam,
+              spamConfidence: isSpam ? 0.99 : 0.01,
+              folderId: isSpam ? null : folder.folder.id,
+              folderConfidence: isSpam ? 0 : 0.96,
+              reason: isSpam ? "Unsolicited promotion" : "Product discussion",
+            }),
+          }],
+        }],
       };
     });
 
@@ -172,7 +192,78 @@ describe("mailbox conversation index", () => {
     expect(await mailbox.getConversationSnapshot(spamMessage!.conversationId))
       .toMatchObject({ mailboxState: "spam", folderId: null });
     expect(runAi).toHaveBeenCalledTimes(2);
+    expect(runAi).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({
+        extraHeaders: { "cf-aig-collect-log": "false" },
+      }),
+    );
     expect(sendPush).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not classify inbound mail until MIME objects are stored", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mailboxId = `mbx_ai_storage_failure_${crypto.randomUUID()}`;
+    const mailbox = mailboxStub(env, mailboxId);
+    const deliveryId = `delivery_ai_storage_failure_${crypto.randomUUID()}`;
+    const rawObjectKey = `test/${deliveryId}.eml`;
+    await env.DB.prepare(`
+      insert or replace into settings (key, value)
+      values ('ai_processing_enabled', 'true')
+    `).run();
+    await env.MAIL_STORAGE.put(rawObjectKey, [
+      "From: Sender <sender@example.net>",
+      "To: me@example.test",
+      "Subject: Storage failure",
+      `Message-ID: <${deliveryId}@example.net>`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      "<p>This body must be stored before classification.</p>",
+    ].join("\r\n"));
+    await mailbox.enqueueInbound({
+      id: deliveryId,
+      mailboxId,
+      rawObjectKey,
+      envelopeFrom: "sender@example.net",
+      envelopeTo: "me@example.test",
+      receivedAt: Date.now(),
+    });
+
+    const runAi = vi.fn(async () => {
+      throw new Error("AI must not run before MIME storage completes");
+    });
+    await runInDurableObject(mailbox, async (instance) => {
+      type TestMailboxInstance = {
+        alarm(): Promise<void>;
+        bindings: Env;
+      };
+      const target = instance as unknown as TestMailboxInstance;
+      const originalBindings = target.bindings;
+      target.bindings = {
+        ...originalBindings,
+        MAIL_STORAGE: {
+          get: originalBindings.MAIL_STORAGE.get.bind(
+            originalBindings.MAIL_STORAGE,
+          ),
+          put: vi.fn(async () => {
+            throw new Error("R2 write failed");
+          }),
+        },
+        AI: { run: runAi },
+      } as unknown as Env;
+      try {
+        await target.alarm();
+      } finally {
+        target.bindings = originalBindings;
+      }
+    });
+
+    expect(runAi).not.toHaveBeenCalled();
+    expect(await mailbox.getEmail(inboundMessageId(deliveryId))).toBeNull();
+    expect(errorLog).toHaveBeenCalledOnce();
+    errorLog.mockRestore();
   });
 
   it("keeps AI mail pending for one retry, then falls back to Inbox", async () => {
@@ -200,8 +291,10 @@ describe("mailbox conversation index", () => {
       "To: me@example.test",
       "Subject: AI fallback",
       `Message-ID: <${deliveryId}@example.net>`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
       "",
-      "The model is deliberately unavailable in the local test runtime.",
+      "<p>The model is deliberately unavailable in the local test runtime.</p>",
     ].join("\r\n"));
     await mailbox.enqueueInbound({
       id: deliveryId,
@@ -214,6 +307,8 @@ describe("mailbox conversation index", () => {
 
     await runDurableObjectAlarm(mailbox);
     expect(await mailbox.getEmail(inboundMessageId(deliveryId))).toBeNull();
+    const bodyHtmlR2Key = `mailboxes/${mailboxId}/messages/${inboundMessageId(deliveryId)}/body.html`;
+    expect(await env.MAIL_STORAGE.get(bodyHtmlR2Key)).not.toBeNull();
     await runInDurableObject(mailbox, (_instance, state) => {
       state.storage.sql.exec(
         "update pending_inbound set next_attempt_at = 0 where id = ?",

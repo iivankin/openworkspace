@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import {
   ArrowLeft,
+  FileKey2,
   Globe2,
   KeyRound,
   Menu,
@@ -29,6 +30,7 @@ export type AdminSection =
   | "mailboxes"
   | "domains"
   | "sso-applications"
+  | "saml-applications"
   | "groups"
   | "webhooks";
 
@@ -42,7 +44,8 @@ const adminSections: Array<{
   { id: "mailboxes", label: "Mailboxes", Icon: Settings2 },
   { id: "domains", label: "Domains", Icon: Globe2 },
   { id: "webhooks", label: "Webhooks", Icon: Webhook },
-  { id: "sso-applications", label: "SSO applications", Icon: KeyRound, separatorBefore: true },
+  { id: "sso-applications", label: "OIDC applications", Icon: KeyRound, separatorBefore: true },
+  { id: "saml-applications", label: "SAML applications", Icon: FileKey2 },
   { id: "groups", label: "Identity groups", Icon: UsersRound },
 ];
 

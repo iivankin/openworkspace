@@ -22,6 +22,9 @@ import { OidcError } from "../oidc/errors";
 import { AuthRequestError } from "./errors";
 import { hasUsers } from "./service";
 import { completeOidcLogin } from "./oidc-login";
+import { completeSamlLogin } from "./saml-login";
+import { SamlError } from "../saml/errors";
+import { browserSamlTransaction } from "../saml/transaction";
 
 function assertMockEnabled(c: { env: AppEnv["Bindings"] }) {
   return c.env.ALLOW_MOCK_AUTH === "true";
@@ -32,6 +35,9 @@ function mockAuthFailure(c: Context<AppEnv>, error: unknown) {
     return apiError(c, error.status, error.code, error.message);
   }
   if (error instanceof OidcError && error.status < 500) {
+    return apiError(c, 400, "WEBAUTHN_FAILED", error.message);
+  }
+  if (error instanceof SamlError && error.status < 500) {
     return apiError(c, 400, "WEBAUTHN_FAILED", error.message);
   }
   throw error;
@@ -73,21 +79,24 @@ export const mockAuthRoutes = new Hono<AppEnv>()
     }
     const db = createDb(c.env.DB);
     const input = c.req.valid("json");
-    if (input.oidcRequestId) {
-      await browserLoginTransaction(db, c, input.oidcRequestId);
-    }
-    const [user] = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(
-        and(
-          eq(users.id, c.req.valid("json").userId),
-          eq(users.status, "active"),
-        ),
-      )
-      .limit(1);
-    if (!user) return apiError(c, 404, "NOT_FOUND", "User not found");
     try {
+      if (input.oidcRequestId) {
+        await browserLoginTransaction(db, c, input.oidcRequestId);
+      }
+      if (input.samlRequestId) {
+        await browserSamlTransaction(db, c, input.samlRequestId);
+      }
+      const [user] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(
+            eq(users.id, input.userId),
+            eq(users.status, "active"),
+          ),
+        )
+        .limit(1);
+      if (!user) return apiError(c, 404, "NOT_FOUND", "User not found");
       if (user.id === "usr_demo_admin") {
         await Promise.all(
           ["mbx_demo_personal", "mbx_demo_support"].map((mailboxId) =>
@@ -109,6 +118,18 @@ export const mockAuthRoutes = new Hono<AppEnv>()
         return c.json({
           ok: true as const,
           ...oidcLogin,
+        });
+      }
+      if (input.samlRequestId) {
+        const samlLogin = await completeSamlLogin(
+          db,
+          c,
+          user.id,
+          input.samlRequestId,
+        );
+        return c.json({
+          ok: true as const,
+          ...samlLogin,
         });
       }
       await establishSession(db, c, user.id);

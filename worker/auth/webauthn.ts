@@ -8,16 +8,13 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import type { AccessLinkKind } from "../../shared/auth";
-import { and, eq, gt, lte } from "drizzle-orm";
-import type { Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { and, eq, gt, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client";
 import { authChallenges, passkeyCredentials, users } from "../db/schema";
-import type { AppEnv } from "../env";
 import { base64UrlToBytes, bytesToBase64Url } from "../lib/crypto";
 import { createId } from "../lib/ids";
 import { getRelyingParty } from "../lib/http";
-import { CHALLENGE_COOKIE, CHALLENGE_TTL_MS } from "./constants";
+import { CHALLENGE_TTL_MS } from "./constants";
 import { AuthRequestError } from "./errors";
 
 type ChallengeKind =
@@ -26,41 +23,6 @@ type ChallengeKind =
   | "authentication";
 
 type ChallengePayload = Record<string, unknown>;
-
-function challengeCookieOptions(request: Request, expires?: Date) {
-  return {
-    httpOnly: true,
-    sameSite: "Strict" as const,
-    secure: new URL(request.url).protocol === "https:",
-    path: "/api/auth",
-    expires,
-  };
-}
-
-export function setChallengeCookie(
-  c: Context<AppEnv>,
-  challengeId: string,
-  expiresAt: Date,
-) {
-  setCookie(
-    c,
-    CHALLENGE_COOKIE,
-    challengeId,
-    challengeCookieOptions(c.req.raw, expiresAt),
-  );
-}
-
-export function clearChallengeCookie(c: Context<AppEnv>) {
-  deleteCookie(
-    c,
-    CHALLENGE_COOKIE,
-    challengeCookieOptions(c.req.raw),
-  );
-}
-
-export function getChallengeId(c: Context<AppEnv>) {
-  return getCookie(c, CHALLENGE_COOKIE);
-}
 
 export function deleteExpiredChallenges(db: Database, now = new Date()) {
   return db.delete(authChallenges).where(lte(authChallenges.expiresAt, now));
@@ -115,7 +77,7 @@ export async function consumeChallenge(
     )
     .returning();
   if (!challenge) {
-    // An expired or wrong-kind cookie cannot be reused and does not need to
+    // An expired or wrong-kind challenge cannot be reused and does not need to
     // remain in D1 after the failed ceremony.
     await db.delete(authChallenges).where(eq(authChallenges.id, challengeId));
     throw new AuthRequestError("Passkey ceremony has expired");
@@ -277,12 +239,25 @@ export async function finishAuthentication(
     throw new AuthRequestError("Passkey could not be verified");
   }
 
-  await db
+  await recordPasskeyUse(
+    db,
+    stored.credentialId,
+    verification.authenticationInfo.newCounter,
+  );
+  return stored.userId;
+}
+
+export function recordPasskeyUse(
+  db: Database,
+  credentialId: string,
+  newCounter: number,
+  now = new Date(),
+) {
+  return db
     .update(passkeyCredentials)
     .set({
-      counter: verification.authenticationInfo.newCounter,
-      lastUsedAt: new Date(),
+      counter: sql<number>`max(${passkeyCredentials.counter}, ${newCounter})`,
+      lastUsedAt: now,
     })
-    .where(eq(passkeyCredentials.credentialId, stored.credentialId));
-  return stored.userId;
+    .where(eq(passkeyCredentials.credentialId, credentialId));
 }

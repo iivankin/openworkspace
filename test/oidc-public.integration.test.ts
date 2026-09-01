@@ -20,6 +20,10 @@ function responseCookie(response: Response, name: string) {
     .find((value) => value.startsWith(`${name}=`));
 }
 
+function oidcTransactionCookieName(requestId: string) {
+  return `op_oidc_${requestId}`;
+}
+
 describe("public OIDC clients", () => {
   it("exchanges a PKCE code without a client secret and allows registered CORS", async () => {
     const bootstrap = await exports.default.fetch(
@@ -259,9 +263,25 @@ describe("public OIDC clients", () => {
     const reauthRequestId = loginLocation.split("/").at(-1)!;
     const transactionCookie = responseCookie(
       reauthentication,
-      `op_oidc_${reauthRequestId}`,
+      oidcTransactionCookieName(reauthRequestId),
     );
     expect(transactionCookie).toBeTruthy();
+    const parallelReauthentication = await exports.default.fetch(
+      new Request(reauthenticationUrl, {
+        headers: { cookie },
+        redirect: "manual",
+      }),
+    );
+    const parallelLoginLocation = parallelReauthentication.headers.get("location")!;
+    const parallelRequestId = parallelLoginLocation.split("/").at(-1)!;
+    const parallelTransactionCookie = responseCookie(
+      parallelReauthentication,
+      oidcTransactionCookieName(parallelRequestId),
+    );
+    expect(parallelTransactionCookie).toBeTruthy();
+    expect(parallelTransactionCookie).not.toBe(transactionCookie);
+    const transactionCookies =
+      `${cookie}; ${transactionCookie}; ${parallelTransactionCookie}`;
 
     const unbound = await exports.default.fetch(
       new Request(`${issuer}/api/oidc/login/${reauthRequestId}`, {
@@ -270,11 +290,19 @@ describe("public OIDC clients", () => {
     );
     expect(unbound.status).toBe(400);
     await unbound.json();
-    const transactionCookies = `${cookie}; ${transactionCookie}`;
     expect(
       await json<{ transaction: { clientName: string } }>(
         await exports.default.fetch(
           new Request(`${issuer}/api/oidc/login/${reauthRequestId}`, {
+            headers: { cookie: transactionCookies },
+          }),
+        ),
+      ),
+    ).toMatchObject({ transaction: { clientName: "Browser app" } });
+    expect(
+      await json<{ transaction: { clientName: string } }>(
+        await exports.default.fetch(
+          new Request(`${issuer}/api/oidc/login/${parallelRequestId}`, {
             headers: { cookie: transactionCookies },
           }),
         ),
@@ -377,7 +405,7 @@ describe("public OIDC clients", () => {
     const newSessionRequestId = newSessionLoginLocation.split("/").at(-1)!;
     const newSessionTransactionCookie = responseCookie(
       newSessionAuthorization,
-      `op_oidc_${newSessionRequestId}`,
+      oidcTransactionCookieName(newSessionRequestId),
     );
     const newSessionLogin = await json<{ redirectTo: string }>(
       await exports.default.fetch(

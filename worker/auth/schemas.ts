@@ -5,6 +5,15 @@ import type {
 import { z } from "zod";
 import { isValidExternalEmailAddress } from "../../shared/mail";
 import { normalizeEmail } from "../lib/ids";
+import { isValidXmlCharacters } from "../saml/xml";
+
+const XML_CHARACTERS_ERROR = "Value contains characters that are not allowed in XML";
+
+export const userNameSchema = z.string()
+  .trim()
+  .min(2)
+  .max(80)
+  .refine(isValidXmlCharacters, XML_CHARACTERS_ERROR);
 
 export const emailSchema = z
   .string()
@@ -13,7 +22,7 @@ export const emailSchema = z
   .transform(normalizeEmail);
 
 export const bootstrapInputSchema = z.object({
-  name: z.string().trim().min(2).max(80),
+  name: userNameSchema,
   email: emailSchema,
 });
 
@@ -37,14 +46,31 @@ export const authenticationResponseSchema =
     "Invalid passkey authentication response",
   );
 
-export const mockBootstrapSchema = bootstrapInputSchema;
-export const loginOptionsSchema = z.object({
-  oidcRequestId: z.string().min(1).optional(),
+const challengeIdSchema = z.string().trim().min(1).max(128);
+
+export const registrationVerificationSchema = z.object({
+  challengeId: challengeIdSchema,
+  response: registrationResponseSchema,
 });
+
+export const authenticationVerificationSchema = z.object({
+  challengeId: challengeIdSchema,
+  response: authenticationResponseSchema,
+});
+
+export const mockBootstrapSchema = bootstrapInputSchema;
+const identityRequestSchema = z.object({
+  oidcRequestId: z.string().min(1).optional(),
+  samlRequestId: z.string().min(1).optional(),
+}).refine(
+  (input) => !(input.oidcRequestId && input.samlRequestId),
+  "Only one identity request may be resumed",
+);
+
+export const loginOptionsSchema = identityRequestSchema;
 export const mockLoginSchema = z.object({
   userId: z.string().min(1),
-  oidcRequestId: z.string().min(1).optional(),
-});
+}).and(identityRequestSchema);
 
 export const createAccountApiTokenSchema = z.object({
   name: z.string().trim().min(1).max(80),

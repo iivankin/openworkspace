@@ -4,12 +4,22 @@
 # Local only — never set in production. Uncomment for `bun run dev`:
 # ALLOW_MOCK_AUTH=true
 
-# Optional OIDC IdP. Set after deploy (see README), not via Deploy button defaults:
-# OIDC_ISSUER=https://mail.example.com
-# Generate with `bun run oidc:keygen`, then:
-#   wrangler secret put OIDC_ISSUER
+# Optional identity providers. OIDC and SAML always use the same public origin:
+# IDENTITY_PROVIDER_ORIGIN=https://mail.example.com
+# Set it once after deploy:
+#   wrangler secret put IDENTITY_PROVIDER_ORIGIN
+
+# Optional OIDC IdP. Generate with `bun run oidc:keygen`, then:
 #   wrangler secret put OIDC_SIGNING_PRIVATE_JWK
 # OIDC_SIGNING_PRIVATE_JWK=
+
+# Optional SAML IdP. Generate a PEM key and certificate with:
+#   bun run saml:keygen
+#   wrangler secret put SAML_SIGNING_PRIVATE_KEY < .saml/private-key.pem
+#   wrangler secret put SAML_SIGNING_CERTIFICATE < .saml/certificate.pem
+# SAML_SIGNING_PRIVATE_KEY=
+# SAML_SIGNING_CERTIFICATE=
+# SAML_ADDITIONAL_SIGNING_CERTIFICATES=
 
 # Optional R2 S3 API tokens for direct attachment transfers (presigned GET/PUT).
 # Without these, uploads fall back to the Worker. Create an R2 API token with

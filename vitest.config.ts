@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { generateVapidKeys } from "@mmmike/web-push/vapid";
 import { exportJWK, generateKeyPair } from "jose";
 import {
@@ -22,9 +23,17 @@ export default defineConfig({
           bindings: {
             TEST_MIGRATIONS: await readD1Migrations(path.resolve("drizzle")),
             ALLOW_MOCK_AUTH: "true",
-            OIDC_ISSUER: "http://example.test",
+            IDENTITY_PROVIDER_ORIGIN: "http://example.test",
             OIDC_SIGNING_PRIVATE_JWK: JSON.stringify(
               await exportJWK(privateKey),
+            ),
+            SAML_SIGNING_PRIVATE_KEY: readFileSync(
+              new URL("./test/fixtures/saml-private-key.pem", import.meta.url),
+              "utf8",
+            ),
+            SAML_SIGNING_CERTIFICATE: readFileSync(
+              new URL("./test/fixtures/saml-certificate.pem", import.meta.url),
+              "utf8",
             ),
             VAPID_PUBLIC_KEY: vapid.publicKey,
             VAPID_PRIVATE_KEY: vapid.privateKey,

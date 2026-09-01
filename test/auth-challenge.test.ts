@@ -4,9 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   consumeChallenge,
   deleteExpiredChallenges,
+  recordPasskeyUse,
 } from "../worker/auth/webauthn";
 import { createDb } from "../worker/db/client";
-import { authChallenges } from "../worker/db/schema";
+import {
+  authChallenges,
+  passkeyCredentials,
+  users,
+} from "../worker/db/schema";
 
 function challenge(id: string, expiresAt: Date) {
   return {
@@ -20,31 +25,41 @@ function challenge(id: string, expiresAt: Date) {
 }
 
 describe("WebAuthn challenges", () => {
-  it("stores bootstrap challenges without a users FK row", async () => {
-    const response = await exports.default.fetch(
-      new Request("http://example.test/api/auth/bootstrap/options", {
+  it("returns independent bootstrap challenges without a shared cookie", async () => {
+    const request = () => new Request(
+      "http://example.test/api/auth/bootstrap/options",
+      {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: "Bootstrap Admin",
           email: "bootstrap@example.test",
         }),
-      }),
+      },
     );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { ok: true };
-    expect(body.ok).toBe(true);
+    const responses = await Promise.all([
+      exports.default.fetch(request()),
+      exports.default.fetch(request()),
+    ]);
+    const bodies = await Promise.all(responses.map(async (response) => {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      return response.json<{ ok: true; challengeId: string }>();
+    }));
+    expect(bodies[0].challengeId).not.toBe(bodies[1].challengeId);
 
     const db = createDb(env.DB);
     const rows = await db.select().from(authChallenges);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.kind).toBe("bootstrap");
-    expect(rows[0]?.userId).toBeNull();
-    expect(rows[0]?.payload).toMatchObject({
-      name: "Bootstrap Admin",
-      email: "bootstrap@example.test",
-      userId: expect.stringMatching(/^usr_/),
-    });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.kind).toBe("bootstrap");
+      expect(row.userId).toBeNull();
+      expect(row.payload).toMatchObject({
+        name: "Bootstrap Admin",
+        email: "bootstrap@example.test",
+        userId: expect.stringMatching(/^usr_/),
+      });
+    }
   });
 
   it("atomically consumes and deletes a valid challenge", async () => {
@@ -80,5 +95,35 @@ describe("WebAuthn challenges", () => {
     await deleteExpiredChallenges(db);
 
     expect(await db.select().from(authChallenges).where(eq(authChallenges.id, id))).toEqual([]);
+  });
+
+  it("never decreases a passkey counter when updates complete out of order", async () => {
+    const db = createDb(env.DB);
+    const userId = "usr_counter_race";
+    const credentialId = "credential_counter_race";
+    await db.insert(users).values({
+      id: userId,
+      name: "Counter Race",
+      role: "member",
+      status: "active",
+    });
+    await db.insert(passkeyCredentials).values({
+      credentialId,
+      userId,
+      publicKey: "unused",
+      counter: 1,
+      deviceType: "singleDevice",
+      backedUp: false,
+    });
+
+    await Promise.all([
+      recordPasskeyUse(db, credentialId, 10),
+      recordPasskeyUse(db, credentialId, 5),
+    ]);
+
+    const [credential] = await db.select({ counter: passkeyCredentials.counter })
+      .from(passkeyCredentials)
+      .where(eq(passkeyCredentials.credentialId, credentialId));
+    expect(credential?.counter).toBe(10);
   });
 });

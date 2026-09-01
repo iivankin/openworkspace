@@ -105,7 +105,7 @@ export async function finishBootstrap(
 export async function beginLogin(
   db: Database,
   request: Request,
-  oidcRequestId?: string,
+  identityRequest?: { oidcRequestId?: string; samlRequestId?: string },
 ) {
   if (!(await hasUsers(db))) {
     throw new AuthRequestError("Set up the first account first");
@@ -113,7 +113,9 @@ export async function beginLogin(
   return beginAuthentication(
     db,
     request,
-    oidcRequestId ? { oidcRequestId } : undefined,
+    identityRequest?.oidcRequestId || identityRequest?.samlRequestId
+      ? identityRequest
+      : undefined,
   );
 }
 
@@ -129,6 +131,10 @@ export async function finishLogin(
     oidcRequestId:
       typeof challenge.payload?.oidcRequestId === "string"
         ? challenge.payload.oidcRequestId
+        : undefined,
+    samlRequestId:
+      typeof challenge.payload?.samlRequestId === "string"
+        ? challenge.payload.samlRequestId
         : undefined,
   };
 }

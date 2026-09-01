@@ -21,6 +21,7 @@ import {
   MissingRawMimeError,
   prepareInboundEmail,
   prepareUnprocessableInboundEmail,
+  readInboundRawMime,
   UnprocessableInboundEmailError,
 } from "../mail/inbound";
 import { prepareOutboundDelivery } from "../mail/outbound-delivery";
@@ -1150,7 +1151,7 @@ export class MailboxDO extends DurableObject<Env> {
     return this.getEmail(email.id);
   }
 
-  private async classifyInbound(email: NewEmail) {
+  private async classifyInbound(rawMime: ArrayBuffer) {
     let enabled: boolean;
     try {
       // D1 owns the account-wide switch. Reading it per delivery avoids a
@@ -1170,7 +1171,7 @@ export class MailboxDO extends DurableObject<Env> {
       .orderBy(asc(folders.sortOrder), asc(folders.name))
       .all();
     return classifyInboundEmail({
-      email,
+      rawMime,
       folders: customFolders,
       configuration,
       run: (request, signal) => this.bindings.AI.run(
@@ -1179,6 +1180,7 @@ export class MailboxDO extends DurableObject<Env> {
         {
           signal,
           tags: ["openworkspace:mail-classification"],
+          extraHeaders: { "cf-aig-collect-log": "false" },
         },
       ),
     });
@@ -1617,16 +1619,18 @@ export class MailboxDO extends DurableObject<Env> {
       }
 
       try {
+        const rawMime = await readInboundRawMime(this.bindings, job);
         const email = await prepareInboundEmail({
           env: this.bindings,
           mailboxId: this.state.id.name ?? "unknown-mailbox",
           job,
+          rawMime,
           resolveParent: (inReplyTo, references) =>
             this.resolveParent(inReplyTo, references),
         });
         let classification: EmailAiClassification | null = null;
         try {
-          classification = await this.classifyInbound(email);
+          classification = await this.classifyInbound(rawMime);
         } catch (error) {
           if (!(error instanceof EmailAiClassificationError)) throw error;
           const aiAttempts = job.aiAttempts + 1;

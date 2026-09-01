@@ -30,6 +30,10 @@ import {
   oidcGrants,
   oidcRefreshTokens,
   pushSubscriptions,
+  samlApplicationAssignments,
+  samlApplicationGroupClaims,
+  samlApplications,
+  samlAuthnRequests,
   sessions,
   users,
 } from "../db/schema";
@@ -75,6 +79,48 @@ import {
   hasKnownUserIds,
 } from "./records";
 import { userSessionAdminRoutes } from "./session-routes";
+import { samlApplicationAdminRoutes } from "./saml-routes";
+import { samlConfiguration, samlPublicUrls } from "../saml/configuration";
+import { samlError } from "../saml/errors";
+
+type AdminSamlProvider = {
+  configured: boolean;
+  entityId: string | null;
+  metadataUrl: string | null;
+  ssoUrl: string | null;
+  configurationError: string | null;
+};
+
+function adminSamlProvider(env: AppEnv["Bindings"]): AdminSamlProvider {
+  let urls: ReturnType<typeof samlPublicUrls>;
+  try {
+    urls = samlPublicUrls(env);
+  } catch (error) {
+    return {
+      configured: false,
+      entityId: null,
+      metadataUrl: null,
+      ssoUrl: null,
+      configurationError: samlError(error).message,
+    };
+  }
+  const publicUrls = {
+    entityId: urls.entityId,
+    metadataUrl: urls.metadataUrl,
+    ssoUrl: urls.ssoUrl,
+  };
+
+  try {
+    samlConfiguration(env);
+    return { ...publicUrls, configured: true, configurationError: null };
+  } catch (error) {
+    return {
+      ...publicUrls,
+      configured: false,
+      configurationError: samlError(error).message,
+    };
+  }
+}
 
 async function prepareAccessLink(input: {
   kind: AccessLinkKind;
@@ -125,6 +171,9 @@ export const adminRoutes = new Hono<AppEnv>()
       groupRows,
       groupMemberships,
       clientGroupClaims,
+      samlRows,
+      samlAssignments,
+      samlGroupClaims,
     ] = await Promise.all([
       globalAiProcessingEnabled(c.env.DB),
       db
@@ -203,6 +252,26 @@ export const adminRoutes = new Hono<AppEnv>()
       db.select().from(identityGroups).orderBy(identityGroups.name),
       db.select().from(groupMembers),
       db.select().from(oidcClientGroupClaims),
+      db.select({
+        id: samlApplications.id,
+        name: samlApplications.name,
+        entityId: samlApplications.entityId,
+        acsUrl: samlApplications.acsUrl,
+        nameIdFormat: samlApplications.nameIdFormat,
+        accessPolicy: samlApplications.accessPolicy,
+        emailAttributeName: samlApplications.emailAttributeName,
+        nameAttributeName: samlApplications.nameAttributeName,
+        groupsAttributeName: samlApplications.groupsAttributeName,
+        signResponse: samlApplications.signResponse,
+        requireSignedAuthnRequests: samlApplications.requireSignedAuthnRequests,
+        allowIdpInitiated: samlApplications.allowIdpInitiated,
+        enabled: samlApplications.enabled,
+        lastUsedAt: samlApplications.lastUsedAt,
+        createdAt: samlApplications.createdAt,
+        updatedAt: samlApplications.updatedAt,
+      }).from(samlApplications).orderBy(samlApplications.name),
+      db.select().from(samlApplicationAssignments),
+      db.select().from(samlApplicationGroupClaims),
     ]);
     const mailboxMembersById = groupByKey(
       memberships,
@@ -223,6 +292,17 @@ export const adminRoutes = new Hono<AppEnv>()
       (claim) => claim.clientId,
       (claim) => claim.groupId,
     );
+    const samlAssignmentsById = mapGroupedValues(
+      samlAssignments,
+      (assignment) => assignment.applicationId,
+      (assignment) => assignment.userId,
+    );
+    const samlGroupClaimsById = mapGroupedValues(
+      samlGroupClaims,
+      (claim) => claim.applicationId,
+      (claim) => claim.groupId,
+    );
+    const samlProvider = adminSamlProvider(c.env);
     return c.json({
       ok: true as const,
       aiProcessingEnabled,
@@ -244,10 +324,20 @@ export const adminRoutes = new Hono<AppEnv>()
         assignedUserIds: clientAssignmentsById.get(client.id) ?? [],
         exposedGroupIds: clientGroupClaimsById.get(client.id) ?? [],
       })),
+      samlProvider,
+      samlApplications: samlRows.map((application) => ({
+        ...application,
+        assignedUserIds: samlAssignmentsById.get(application.id) ?? [],
+        exposedGroupIds: samlGroupClaimsById.get(application.id) ?? [],
+        launchUrl: samlProvider.entityId
+          ? new URL(`/saml/launch/${application.id}`, samlProvider.entityId).toString()
+          : null,
+      })),
     });
   })
   .route("/", userSessionAdminRoutes)
   .route("/", domainAdminRoutes)
+  .route("/", samlApplicationAdminRoutes)
   .put(
     "/ai",
     zValidator("json", globalAiProcessingSchema),
@@ -464,6 +554,9 @@ export const adminRoutes = new Hono<AppEnv>()
             .delete(oidcRefreshTokens)
             .where(eq(oidcRefreshTokens.userId, userId)),
           db.delete(oidcGrants).where(eq(oidcGrants.userId, userId)),
+          db
+            .delete(samlAuthnRequests)
+            .where(eq(samlAuthnRequests.userId, userId)),
         ] as const;
         if (personalMailboxUpdate) {
           await db.batch([userUpdate, personalMailboxUpdate, ...revocations]);

@@ -66,6 +66,11 @@ const OidcLogoutScreen = lazy(() =>
     default: module.OidcLogoutScreen,
   })),
 );
+const SamlLoginScreen = lazy(() =>
+  import("@/auth/saml-login-screen").then((module) => ({
+    default: module.SamlLoginScreen,
+  })),
+);
 
 function MailboxRoute() {
   const { mailboxId } = useParams();
@@ -95,6 +100,7 @@ export function App() {
           <Route path="/oidc/login/:requestId" element={<OidcLoginScreen />} />
           <Route path="/oidc/consent/:requestId" element={auth.authenticated ? <OidcConsentScreen /> : <AuthScreen />} />
           <Route path="/oidc/logout" element={auth.authenticated ? <OidcLogoutScreen /> : <Navigate to="/" replace />} />
+          <Route path="/saml/login/:requestId" element={<SamlLoginScreen />} />
           <Route path="/admin" element={auth.authenticated && auth.user?.role === "admin" ? <AdminPage /> : <Navigate to="/" replace />} />
           <Route path="/settings" element={settings}>
             <Route index element={<Navigate to="/settings/profile" replace />} />

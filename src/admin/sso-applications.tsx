@@ -34,6 +34,7 @@ import {
   AdminPanelBody,
   AdminPanelFooter,
 } from "./admin-panel";
+import { SelectionList } from "./selection-list";
 import type {
   AdminGroup,
   AdminOidcClient,
@@ -94,7 +95,10 @@ export function SsoApplications({
   onSelect: (id?: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [secret, setSecret] = useState<string>();
+  const [secret, setSecret] = useState<{
+    clientId: string;
+    value: string;
+  }>();
   const selected = selectedId === "new"
     ? undefined
     : clients.find((client) => client.id === selectedId);
@@ -118,7 +122,13 @@ export function SsoApplications({
       <div className="max-w-3xl space-y-3">
         <div className="flex items-center justify-between gap-4 px-1">
           <p className="text-xs text-muted-foreground">{clients.length} registered</p>
-          <Button size="sm" onClick={() => onSelect("new")}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setSecret(undefined);
+              onSelect("new");
+            }}
+          >
             <Plus /> Add application
           </Button>
         </div>
@@ -171,8 +181,8 @@ export function SsoApplications({
         client={selected}
         users={users}
         groups={groups}
-        secret={secret}
-        onSecret={setSecret}
+        secret={secret?.clientId === selectedId ? secret.value : undefined}
+        onSecret={(clientId, value) => setSecret({ clientId, value })}
         onSaved={async (clientId) => {
           await refresh();
           onSelect(clientId);
@@ -200,7 +210,7 @@ function ClientEditor({
   users: AdminUser[];
   groups: AdminGroup[];
   secret?: string;
-  onSecret: (value: string | undefined) => void;
+  onSecret: (clientId: string, value: string) => void;
   onSaved: (clientId: string) => Promise<void>;
   onDeleted: () => Promise<void>;
 }) {
@@ -243,8 +253,8 @@ function ClientEditor({
       );
     },
     onSuccess: async (result) => {
-      if (result.clientSecret) onSecret(result.clientSecret);
-      toast.success(client ? "SSO application updated" : "SSO application created");
+      if (result.clientSecret) onSecret(result.clientId, result.clientSecret);
+      toast.success(client ? "OIDC application updated" : "OIDC application created");
       await onSaved(result.clientId);
     },
     onError: (error) => toast.error(error.message),
@@ -259,7 +269,7 @@ function ClientEditor({
       );
     },
     onSuccess: async () => {
-      toast.success("SSO application deleted");
+      toast.success("OIDC application deleted");
       await onDeleted();
     },
     onError: (error) => toast.error(error.message),
@@ -267,14 +277,15 @@ function ClientEditor({
   const rotate = useMutation({
     mutationFn: async () => {
       if (!client) throw new Error("Save the application first");
-      return responseJson(
+      const result = await responseJson(
         await api.api.admin["oidc-clients"][":id"]["rotate-secret"].$post({
           param: { id: client.id },
         }),
       );
+      return { ...result, clientId: client.id };
     },
     onSuccess: (result) => {
-      onSecret(result.clientSecret);
+      onSecret(result.clientId, result.clientSecret);
       toast.success("Client secret rotated");
     },
     onError: (error) => toast.error(error.message),
@@ -438,11 +449,15 @@ function ClientEditor({
             <SelectionList
               label="Assigned users"
               items={users
-                .filter((user) => user.status === "active")
+                .filter((user) =>
+                  user.status === "active" || input.assignedUserIds.includes(user.id)
+                )
                 .map((user) => ({
                   id: user.id,
                   label: user.name,
-                  detail: user.personalEmail ?? undefined,
+                  detail: user.status === "disabled"
+                    ? `${user.personalEmail ? `${user.personalEmail} · ` : ""}Disabled`
+                    : user.personalEmail ?? undefined,
                 }))}
               value={input.assignedUserIds}
               onChange={(assignedUserIds) =>
@@ -546,48 +561,6 @@ function UriField({
       />
       <p className="text-[11px] text-muted-foreground">One exact URI per line.</p>
     </div>
-  );
-}
-
-function SelectionList({
-  label,
-  items,
-  value,
-  onChange,
-}: {
-  label: string;
-  items: Array<{ id: string; label: string; detail?: string }>;
-  value: string[];
-  onChange: (value: string[]) => void;
-}) {
-  return (
-    <fieldset className="mt-3 max-h-56 divide-y divide-border/60 overflow-y-auto rounded-xl bg-surface-sunken/50 ring-1 ring-border">
-      <legend className="sr-only">{label}</legend>
-      {items.map((item) => (
-        <label key={item.id} className="flex items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-accent/40">
-          <Checkbox
-            checked={value.includes(item.id)}
-            onCheckedChange={(checked) =>
-              onChange(
-                checked
-                  ? [...value, item.id]
-                  : value.filter((id) => id !== item.id),
-              )}
-          />
-          <span className="min-w-0">
-            <span className="block truncate text-xs font-semibold">{item.label}</span>
-            {item.detail && (
-              <span className="block truncate text-[11px] text-muted-foreground">
-                {item.detail}
-              </span>
-            )}
-          </span>
-        </label>
-      ))}
-      {items.length === 0 && (
-        <p className="py-4 text-center text-xs text-muted-foreground">None available</p>
-      )}
-    </fieldset>
   );
 }
 

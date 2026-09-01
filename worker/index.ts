@@ -28,6 +28,7 @@ export { MailboxDO } from "./mailbox";
 import { normalizeMailboxAddress } from "./lib/ids";
 import { consumeWebhooks } from "./webhooks/delivery";
 import { WEBHOOK_QUEUE } from "./webhooks/service";
+import { samlLoginRoutes, samlRoutes } from "./saml/routes";
 
 const app = new Hono<AppEnv>()
   .use("/api/*", verifySameOrigin)
@@ -37,12 +38,14 @@ const app = new Hono<AppEnv>()
   .route("/api/oidc/consent", oidcConsentRoutes)
   .route("/api/oidc/login", oidcLoginRoutes)
   .route("/api/oidc/logout", oidcLogoutRoutes)
+  .route("/api/saml/login", samlLoginRoutes)
   .route("/api/downloads", mailDownloadRoutes)
   .route("/api", accountApi)
   .route("/api/notifications", pushNotificationRoutes)
   .route("/mcp", mcpRoutes)
   .route("/.well-known", wellKnownRoutes)
   .route("/oauth", oidcRoutes)
+  .route("/saml", samlRoutes)
   .notFound((c) =>
     c.json(
       { ok: false as const, error: { code: "NOT_FOUND", message: "Not found" } },

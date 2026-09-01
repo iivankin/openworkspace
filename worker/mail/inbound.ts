@@ -46,10 +46,7 @@ export function inboundMessageId(deliveryId: string) {
   return `msg_${deliveryId.replaceAll(/[^a-zA-Z0-9_-]/gu, "_")}`;
 }
 
-async function parseMime(raw: R2ObjectBody): Promise<ParsedEmail> {
-  // Reading the R2 body is infrastructure I/O and remains retryable. Only
-  // PostalMime failures are deterministic for the same stored bytes.
-  const bytes = await raw.arrayBuffer();
+async function parseMime(bytes: ArrayBuffer): Promise<ParsedEmail> {
   try {
     return await PostalMime.parse(bytes);
   } catch (error) {
@@ -58,6 +55,16 @@ async function parseMime(raw: R2ObjectBody): Promise<ParsedEmail> {
       { cause: error },
     );
   }
+}
+
+export async function readInboundRawMime(env: Env, job: PendingInbound) {
+  const raw = await env.MAIL_STORAGE.get(job.rawObjectKey);
+  if (!raw) {
+    // The durable queue is committed before the R2 upload, so an alarm can
+    // briefly win that race. Missing storage remains retryable.
+    throw new MissingRawMimeError();
+  }
+  return raw.arrayBuffer();
 }
 
 export function prepareUnprocessableInboundEmail(input: {
@@ -104,17 +111,11 @@ export async function prepareInboundEmail(input: {
   env: Env;
   mailboxId: string;
   job: PendingInbound;
+  rawMime: ArrayBuffer;
   resolveParent: (inReplyTo: string[], references: string[]) => Email | null;
 }): Promise<NewEmail> {
   const { job } = input;
-  const raw = await input.env.MAIL_STORAGE.get(job.rawObjectKey);
-  if (!raw) {
-    // The durable queue is committed before the R2 upload, so an alarm can
-    // briefly win that race. Missing storage remains retryable.
-    throw new MissingRawMimeError();
-  }
-
-  const parsed = await parseMime(raw);
+  const parsed = await parseMime(input.rawMime);
   const inReplyTo = messageIds(parsed.inReplyTo);
   const references = messageIds(parsed.references);
   const parent = input.resolveParent(inReplyTo, references);

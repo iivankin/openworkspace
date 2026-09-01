@@ -130,7 +130,7 @@ function BrandPanel() {
         {[
           ["Passkeys", "No passwords, ever"],
           ["Shared", "Team mailboxes"],
-          ["SSO", "OIDC provider"],
+          ["SSO", "OIDC + SAML"],
         ].map(([term, detail]) => (
           <div key={term}>
             <dt className="text-base font-semibold text-primary">{term}</dt>
