@@ -8,6 +8,10 @@ import {
   MAX_MAIL_RECIPIENTS,
   replyActionModes,
 } from "../../shared/mail";
+import {
+  MAX_TRANSLATION_CHARACTERS,
+  MAX_TRANSLATION_SEGMENTS,
+} from "../../shared/mail-translation";
 import { emailSchema } from "../auth/schemas";
 import { dedupeRecipientFields, recipientCount } from "./recipients";
 
@@ -69,6 +73,8 @@ export const messageReadSchema = z.object({
 
 export const messageTranslationSchema = z.object({
   language: z.string().trim().min(2).max(35).regex(/^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/u),
+  segments: z.array(z.string().trim().min(1).max(MAX_TRANSLATION_CHARACTERS))
+    .min(1).max(MAX_TRANSLATION_SEGMENTS),
 });
 
 export const createUploadSchema = z.object({

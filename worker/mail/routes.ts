@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { convert } from "html-to-text";
 import { zValidator } from "@hono/zod-validator";
 import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -23,7 +22,8 @@ import type { Email } from "../mailbox/schema";
 import { getMailboxAccess } from "./access";
 import { globalAiProcessingEnabled } from "../ai/configuration";
 import { MAILBOX_AI_MODEL } from "./ai-classification";
-import { MAX_TRANSLATION_CHARACTERS, translateEmailText } from "./ai-translation";
+import { MAX_TRANSLATION_CHARACTERS } from "../../shared/mail-translation";
+import { translateEmailSegments } from "./ai-translation";
 import { listMailboxUsersByIds } from "./mailbox-directory";
 import {
   decodeConversationCursor,
@@ -841,25 +841,21 @@ export const mailRoutes = new Hono<AppEnv>()
       }
       const message = await mailboxStub(c.env, mailboxId).getEmail(c.req.param("id"));
       if (!message) return apiError(c, 404, "NOT_FOUND", "Message not found");
-      const storedHtml = message.bodyHtmlR2Key
-        ? await c.env.MAIL_STORAGE.get(message.bodyHtmlR2Key).then((object) => object?.text())
-        : null;
-      const text = message.bodyText?.trim() || (storedHtml ? convert(storedHtml).trim() : "");
-      if (!text) return apiError(c, 422, "BAD_REQUEST", "Message has no text to translate");
-      if (text.length > MAX_TRANSLATION_CHARACTERS) {
+      const { language, segments } = c.req.valid("json");
+      if (segments.join("").length > MAX_TRANSLATION_CHARACTERS) {
         return apiError(c, 422, "BAD_REQUEST", "Message is too long to translate");
       }
       try {
-        const translation = await translateEmailText({
-          text,
-          language: c.req.valid("json").language,
+        const translations = await translateEmailSegments({
+          segments,
+          language,
           run: (request, signal) => c.env.AI.run(MAILBOX_AI_MODEL, request, {
             signal,
             tags: ["openworkspace:mail-translation"],
             extraHeaders: { "cf-aig-collect-log": "false" },
           }),
         });
-        return c.json({ ok: true as const, translation });
+        return c.json({ ok: true as const, translations });
       } catch {
         return apiError(c, 502, "BAD_GATEWAY", "Could not translate this message");
       }

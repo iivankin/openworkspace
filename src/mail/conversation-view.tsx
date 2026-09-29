@@ -43,7 +43,6 @@ import {
 } from "./conversation-reply";
 import { ConversationLoadingSkeleton } from "./conversation-loading-skeleton";
 import { DeliveryIndicator } from "./delivery-indicator";
-import { EmailHtmlBody } from "./email-html-body";
 import { formatBytes } from "./format-bytes";
 import { notifyOutboundResult } from "./outbound-notification";
 import { MessageTranslation } from "./message-translation";
@@ -381,20 +380,11 @@ function MessageBubble({
         />
         <BubbleContent className="w-full min-w-36 px-4 py-3">
           {mailboxId && (message.bodyText || message.bodyHtml) ? (
-            <MessageTranslation message={message} mailboxId={mailboxId}>
-              {message.bodyHtml ? (
-                <EmailHtmlBody
-                  bodyHtml={message.bodyHtml}
-                  mailboxId={mailboxId}
-                  message={message}
-                  onRenderModeChange={setRendersHtml}
-                />
-              ) : (
-                <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
-                  {message.bodyText}
-                </div>
-              )}
-            </MessageTranslation>
+            <MessageTranslation
+              message={message}
+              mailboxId={mailboxId}
+              onRenderModeChange={setRendersHtml}
+            />
           ) : (
             <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
               {message.bodyText || (message.quotedText ? "No new text" : message.preview || "No text body")}

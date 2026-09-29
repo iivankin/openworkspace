@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { sanitizeEmailHtml } from "./sanitize-email-html";
+import { translatedEmailHtml } from "./translation-html";
+import { useSanitizedEmailHtml } from "./use-sanitized-email-html";
 import type { MessageDetail } from "./types";
 
 const MIN_FRAME_HEIGHT = 48;
@@ -13,26 +13,29 @@ export function EmailHtmlBody({
   mailboxId,
   message,
   onRenderModeChange,
+  translations,
 }: {
   bodyHtml: string;
   mailboxId: string;
   message: MessageDetail;
   onRenderModeChange: (renderAsHtml: boolean) => void;
+  translations?: string[];
 }) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const frameObserver = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(MIN_FRAME_HEIGHT);
   const [frameReady, setFrameReady] = useState(false);
-  const html = useQuery({
-    queryKey: ["sanitized-message-html", mailboxId, message.id],
-    queryFn: () => sanitizeEmailHtml({
-      html: bodyHtml,
-      mailboxId,
-      messageId: message.id,
-      attachments: message.attachments,
-    }),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
+  const html = useSanitizedEmailHtml(bodyHtml, mailboxId, message);
+  const composerHtml = useMemo(() =>
+    translations && message.direction === "outgoing" && html.data?.composerHtml
+      ? translatedEmailHtml(html.data.composerHtml, translations, false)
+      : html.data?.composerHtml,
+  [html.data?.composerHtml, message.direction, translations]);
+  const srcDoc = useMemo(() =>
+    translations && message.direction === "incoming" && html.data?.srcDoc
+      ? translatedEmailHtml(html.data.srcDoc, translations, true)
+      : html.data?.srcDoc,
+  [html.data?.srcDoc, message.direction, translations]);
 
   useEffect(() => {
     frameObserver.current?.disconnect();
@@ -44,7 +47,7 @@ export function EmailHtmlBody({
       frameObserver.current?.disconnect();
       frameObserver.current = null;
     };
-  }, [mailboxId, message.id]);
+  }, [mailboxId, message.id, translations]);
 
   useEffect(() => {
     onRenderModeChange(
@@ -85,17 +88,17 @@ export function EmailHtmlBody({
   }
 
   if (message.direction === "outgoing") {
-    return html.data?.composerHtml
+    return composerHtml
       ? (
           <div
             className="composer-message-body text-[0.9375rem] leading-[1.65]"
-            dangerouslySetInnerHTML={{ __html: html.data.composerHtml }}
+            dangerouslySetInnerHTML={{ __html: composerHtml }}
           />
         )
       : fallback;
   }
 
-  if (!html.data?.renderAsHtml) return fallback;
+  if (!html.data?.renderAsHtml || !srcDoc) return fallback;
 
   return (
     <div className="relative">
@@ -112,7 +115,7 @@ export function EmailHtmlBody({
         title={`HTML body of ${message.subject}`}
         sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
         referrerPolicy="no-referrer"
-        srcDoc={html.data.srcDoc}
+        srcDoc={srcDoc}
         onLoad={observeFrameSize}
       />
     </div>
