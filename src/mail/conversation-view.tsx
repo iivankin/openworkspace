@@ -46,6 +46,7 @@ import { DeliveryIndicator } from "./delivery-indicator";
 import { EmailHtmlBody } from "./email-html-body";
 import { formatBytes } from "./format-bytes";
 import { notifyOutboundResult } from "./outbound-notification";
+import { MessageTranslation } from "./message-translation";
 import { ToolbarTooltip } from "./toolbar-tooltip";
 import { useResendMessage, useSetMessageRead } from "./use-mail-data";
 import { useVisibleMessageRead } from "./use-visible-message-read";
@@ -379,13 +380,21 @@ function MessageBubble({
           outgoing={outgoing}
         />
         <BubbleContent className="w-full min-w-36 px-4 py-3">
-          {message.bodyHtml && mailboxId ? (
-            <EmailHtmlBody
-              bodyHtml={message.bodyHtml}
-              mailboxId={mailboxId}
-              message={message}
-              onRenderModeChange={setRendersHtml}
-            />
+          {mailboxId && (message.bodyText || message.bodyHtml) ? (
+            <MessageTranslation message={message} mailboxId={mailboxId}>
+              {message.bodyHtml ? (
+                <EmailHtmlBody
+                  bodyHtml={message.bodyHtml}
+                  mailboxId={mailboxId}
+                  message={message}
+                  onRenderModeChange={setRendersHtml}
+                />
+              ) : (
+                <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
+                  {message.bodyText}
+                </div>
+              )}
+            </MessageTranslation>
           ) : (
             <div className="whitespace-pre-wrap text-[0.9375rem] leading-[1.65]">
               {message.bodyText || (message.quotedText ? "No new text" : message.preview || "No text body")}

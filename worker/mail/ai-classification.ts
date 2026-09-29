@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { z } from "zod";
 import type { EmailAiClassification, MailboxAiConfiguration } from "../mailbox/model";
 
-export const MAILBOX_AI_MODEL = "openai/gpt-5.6-luna";
+export const MAILBOX_AI_MODEL = "openai/gpt-6-luna";
 export const MAILBOX_AI_MAX_ATTEMPTS = 2;
 export const MAILBOX_AI_TARGET_EML_TOKENS = 180_000;
 export const MAILBOX_AI_ESTIMATED_BYTES_PER_TOKEN = 3;
@@ -58,7 +58,7 @@ export type MailboxAiRequest = {
   text: {
     format: {
       type: "json_schema";
-      name: "email_classification";
+      name: string;
       strict: true;
       schema: Record<string, unknown>;
     };
@@ -91,7 +91,7 @@ export function limitRawMimeForAi(rawMime: ArrayBuffer) {
   };
 }
 
-function responseValue(value: unknown) {
+export function responseValue(value: unknown) {
   const response = responseSchema.parse(value);
   const text = response.output_text?.trim()
     || response.output

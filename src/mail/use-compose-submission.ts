@@ -66,6 +66,9 @@ async function prepareComposeSubmission(
   signal: AbortSignal,
 ): Promise<PreparedComposerSubmission> {
   let content = input.editor.current?.content() ?? input.content;
+  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+    throw new Error("Add text to the message before sending");
+  }
   const activeIds = new Set(
     input.editor.current?.assetIds()
       ?? input.activeAssets.map((asset) => asset.id),
@@ -83,6 +86,9 @@ async function prepareComposeSubmission(
     // Freeze exactly the same link-card projection that final preflight chose.
     input.editor.current?.reconcileAssets();
     content = input.editor.current?.content() ?? content;
+  }
+  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+    throw new Error("Add text to the message before sending");
   }
 
   const finalActiveIds = new Set(
@@ -152,7 +158,15 @@ function submissionValidationError(input: ComposeSubmissionInput) {
   }
   if (input.uploadsFailed) return "Retry or remove failed attachments";
   if (!input.mailbox.canSend) return "This mailbox is read-only";
+  const content = input.editor.current?.content() ?? input.content;
+  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+    return "Add text to the message before sending";
+  }
   return null;
+}
+
+function hasAuthoredContent(content: ComposerContent) {
+  return Boolean(content.bodyText.trim() || content.inlineAssetIds.length);
 }
 
 function preflightContext(

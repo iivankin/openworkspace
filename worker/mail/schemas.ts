@@ -67,6 +67,10 @@ export const messageReadSchema = z.object({
   isRead: z.boolean(),
 });
 
+export const messageTranslationSchema = z.object({
+  language: z.string().trim().min(2).max(35).regex(/^[a-zA-Z]{2,8}(?:-[a-zA-Z0-9]{1,8})*$/u),
+});
+
 export const createUploadSchema = z.object({
   filename: z.string().trim().min(1).max(255),
   contentType: z.string().trim().min(1).max(255),
@@ -130,6 +134,14 @@ export const outboundMessageContentFields = {
     ),
 };
 
+const hasMessageBody = (value: { bodyText: string; bodyHtml?: string }) =>
+  Boolean(value.bodyText.trim() || value.bodyHtml?.trim());
+
+const missingMessageBody = {
+  path: ["bodyText"],
+  message: "Add text to the message before sending",
+};
+
 export const outboundContentFields = {
   mailboxId: z.string().min(1),
   ...outboundMessageContentFields,
@@ -157,6 +169,7 @@ export const composeSchema = z
     ...value,
     ...dedupeRecipientFields(value),
   }))
+  .refine(hasMessageBody, missingMessageBody)
   .refine(
     (value) => recipientCount(value) > 0,
     { message: "Add at least one recipient in To, Cc, or Bcc" },
@@ -171,7 +184,7 @@ export const replySchema = z.object({
   mode: z.enum(replyActionModes),
   cc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).optional(),
   bcc: z.array(emailSchema).max(MAX_MAIL_RECIPIENTS).default([]),
-});
+}).refine(hasMessageBody, missingMessageBody);
 
 export const forwardSchema = z
   .object({

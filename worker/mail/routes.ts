@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { convert } from "html-to-text";
 import { zValidator } from "@hono/zod-validator";
 import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -20,6 +21,9 @@ import { createId } from "../lib/ids";
 import { mailboxStub } from "../mailbox";
 import type { Email } from "../mailbox/schema";
 import { getMailboxAccess } from "./access";
+import { globalAiProcessingEnabled } from "../ai/configuration";
+import { MAILBOX_AI_MODEL } from "./ai-classification";
+import { MAX_TRANSLATION_CHARACTERS, translateEmailText } from "./ai-translation";
 import { listMailboxUsersByIds } from "./mailbox-directory";
 import {
   decodeConversationCursor,
@@ -57,6 +61,7 @@ import {
   mailboxAiConfigurationSchema,
   mailboxQuerySchema,
   messageReadSchema,
+  messageTranslationSchema,
   recipientSuggestionQuerySchema,
   renameFolderSchema,
   remoteProxyQuerySchema,
@@ -809,6 +814,55 @@ export const mailRoutes = new Hono<AppEnv>()
       );
       if (!updated) return apiError(c, 404, "NOT_FOUND", "Message not found");
       return c.json({ ok: true as const });
+    },
+  )
+  .post(
+    "/messages/:id/translate",
+    zValidator("query", mailboxQuerySchema),
+    zValidator("json", messageTranslationSchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      const userId = c.get("user").id;
+      if (!await accessibleMailbox(c.env, userId, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      if (!await globalAiProcessingEnabled(c.env.DB)) {
+        return apiError(c, 409, "CONFLICT", "AI mail processing is disabled by an administrator");
+      }
+      const limit = await checkRateLimit(c.env.DB, {
+        action: "mail-translation",
+        identifier: userId,
+        limit: 20,
+        windowMs: 60_000,
+      });
+      if (!limit.allowed) {
+        c.header("retry-after", String(limit.retryAfterSeconds));
+        return apiError(c, 429, "RATE_LIMITED", "Too many translation requests");
+      }
+      const message = await mailboxStub(c.env, mailboxId).getEmail(c.req.param("id"));
+      if (!message) return apiError(c, 404, "NOT_FOUND", "Message not found");
+      const storedHtml = message.bodyHtmlR2Key
+        ? await c.env.MAIL_STORAGE.get(message.bodyHtmlR2Key).then((object) => object?.text())
+        : null;
+      const text = message.bodyText?.trim() || (storedHtml ? convert(storedHtml).trim() : "");
+      if (!text) return apiError(c, 422, "BAD_REQUEST", "Message has no text to translate");
+      if (text.length > MAX_TRANSLATION_CHARACTERS) {
+        return apiError(c, 422, "BAD_REQUEST", "Message is too long to translate");
+      }
+      try {
+        const translation = await translateEmailText({
+          text,
+          language: c.req.valid("json").language,
+          run: (request, signal) => c.env.AI.run(MAILBOX_AI_MODEL, request, {
+            signal,
+            tags: ["openworkspace:mail-translation"],
+            extraHeaders: { "cf-aig-collect-log": "false" },
+          }),
+        });
+        return c.json({ ok: true as const, translation });
+      } catch {
+        return apiError(c, 502, "BAD_GATEWAY", "Could not translate this message");
+      }
     },
   )
   .get(

@@ -55,6 +55,7 @@ function replySubmissionValidationError(input: ReplySubmissionInput) {
     return "Wait for attachments to finish uploading";
   }
   if (input.uploadsFailed) return "Retry or remove failed attachments";
+  if (!input.body.trim()) return "Add text to the reply before sending";
   return null;
 }
 

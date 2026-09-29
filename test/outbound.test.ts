@@ -8,7 +8,7 @@ import {
   composerAttachmentLimitError,
   linkedAttachmentTextToken,
 } from "../shared/mail";
-import { composeSchema } from "../worker/mail/schemas";
+import { composeSchema, replySchema } from "../worker/mail/schemas";
 import { normalizeEmail, normalizeMailboxAddress } from "../worker/lib/ids";
 import { boundedMessageIds, replyThreadHeaders } from "../worker/mail/rfc";
 import { emailDestinations } from "../worker/mail/outbound-delivery";
@@ -83,6 +83,7 @@ describe("outbound email limits", () => {
       requestId: crypto.randomUUID(),
       mailboxId: "mailbox",
       bcc: ["hidden@example.test"],
+      bodyText: "Hello",
     });
 
     expect(result.success).toBe(true);
@@ -100,6 +101,7 @@ describe("outbound email limits", () => {
       to: ["Person@Example.NET", "Person@example.net"],
       cc: ["Person@example.net", "copy@Example.NET"],
       bcc: ["copy@example.net", "hidden@Example.NET"],
+      bodyText: "Hello",
     });
 
     expect(result.success).toBe(true);
@@ -118,6 +120,7 @@ describe("outbound email limits", () => {
       requestId: crypto.randomUUID(),
       mailboxId: "mailbox",
       to: ["recipient@example.test"],
+      bodyText: "See attached file",
       attachments: [{
         uploadId: "upl_0123456789abcdef0123456789abcdef",
       }],
@@ -131,6 +134,7 @@ describe("outbound email limits", () => {
       requestId: crypto.randomUUID(),
       mailboxId: "mailbox",
       to: ["recipient@example.test"],
+      bodyText: "See inline image",
       attachments: [{
         uploadId: "upl_0123456789abcdef0123456789abcdef",
         disposition: "inline",
@@ -157,7 +161,35 @@ describe("outbound email limits", () => {
       requestId: crypto.randomUUID(),
       mailboxId: "mailbox",
       to: ["recipient@example.test"],
+      bodyText: "See attached file",
       attachments: [{ uploadId }, { uploadId }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a message containing only attachments before provider submission", () => {
+    const result = composeSchema.safeParse({
+      requestId: crypto.randomUUID(),
+      mailboxId: "mailbox",
+      to: ["recipient@example.test"],
+      attachments: [{ uploadId: "upl_0123456789abcdef0123456789abcdef" }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        message: "Add text to the message before sending",
+      }));
+    }
+  });
+
+  it("rejects an empty reply with an attachment", () => {
+    const result = replySchema.safeParse({
+      requestId: crypto.randomUUID(),
+      mailboxId: "mailbox",
+      mode: "reply",
+      attachments: [{ uploadId: "upl_0123456789abcdef0123456789abcdef" }],
     });
 
     expect(result.success).toBe(false);

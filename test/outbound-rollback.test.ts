@@ -137,6 +137,7 @@ describe("outbound object rollback", () => {
       requestId: crypto.randomUUID(),
       mailboxId,
       to: ["recipient@example.test"],
+      bodyText: "See attached file",
       attachments: [{
         uploadId,
         disposition: "inline",

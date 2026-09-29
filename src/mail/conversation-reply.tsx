@@ -343,7 +343,6 @@ export function ConversationReply({
                 || Boolean(uploadLimitError)
                 || uploadsPending
                 || uploadsFailed
-                || (!body.trim() && activeAssets.length === 0)
               }
             >
               {busy ? <LoaderCircle className="animate-spin" /> : <Send />}

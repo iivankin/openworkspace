@@ -288,6 +288,29 @@ test("desktop mail uses navbar navigation and a corner composer", async ({ page 
   expect(box!.y + box!.height).toBeGreaterThan(650);
 });
 
+test("empty composer stops before the send request", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Client validation is covered once");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await page.getByRole("button", { name: "Compose" }).click();
+  const composer = page.getByRole("dialog", { name: "New message" });
+  await composer.getByRole("textbox", { name: "To recipients" })
+    .fill("recipient@example.test");
+  await composer.getByRole("textbox", { name: "To recipients" }).press("Enter");
+
+  let sendRequests = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST"
+      && new URL(request.url()).pathname === "/api/mail/messages") {
+      sendRequests += 1;
+    }
+  });
+  await composer.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Add text to the message before sending"))
+    .toBeVisible();
+  expect(sendRequests).toBe(0);
+});
+
 test("shared mailbox reads only visible messages and shows every viewer", async ({ page, browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Desktop visibility behavior");
   await page.goto("/");
