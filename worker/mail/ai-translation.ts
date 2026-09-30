@@ -24,7 +24,7 @@ export async function translateEmailSegments(input: {
       "Return only a JSON object containing the translations array.",
     ].join("\n"),
     input: [{ role: "user", content: [{ type: "input_text", text: JSON.stringify(input.segments) }] }],
-    reasoning: { effort: "medium" },
+    reasoning: { effort: "none" },
     store: false,
     text: {
       format: {

@@ -53,7 +53,7 @@ export type MailboxAiRequest = {
         }
     >;
   }>;
-  reasoning: { effort: "medium" };
+  reasoning: { effort: "medium" | "none" };
   store: false;
   text: {
     format: {

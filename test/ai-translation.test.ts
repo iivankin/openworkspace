@@ -20,6 +20,7 @@ describe("email translation", () => {
     expect(request).toMatchObject({
       input: [{ content: [{ type: "input_text", text: '["Hello, ","your order is ready."]' }] }],
       store: false,
+      reasoning: { effort: "none" },
       text: { format: { name: "email_translation", strict: true } },
     });
     expect(request?.instructions).toContain("ru-RU");
