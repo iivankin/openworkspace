@@ -34,7 +34,7 @@ export function usePdfViewer(url: string) {
     const viewer = new PDFViewer(options);
     viewerRef.current = viewer;
     linkService.setViewer(viewer);
-    // Re-fit when the translation pane opens or the viewport changes. PDFViewer's
+    // Re-fit when the viewport changes. PDFViewer's
     // own observer updates dimensions, but does not recalculate named zoom levels.
     const resize = new ResizeObserver(() => {
       if (!viewer.pdfDocument) return;

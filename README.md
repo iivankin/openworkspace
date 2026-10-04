@@ -35,8 +35,12 @@ Cloudflare provisions D1, R2, and the Images binding from `wrangler.jsonc`. Doma
 PDF attachments open in an on-demand PDF.js viewer with page navigation, zoom,
 text selection, and search. The Translate button uses the existing mail translation
 API for the current page; navigating with translation enabled translates each new
-page on demand. Results are cached in browser memory. On smaller screens the
-translation appears below the document. Image-only scans can be viewed but need
+page on demand. Results are cached in browser memory. Translated text replaces
+the page text in place, preserving the PDF background and table lines. Longer
+translations shrink to fit the original line bounds; browser fonts and black text
+approximate the original typography. Show original restores the
+source page; searching also switches to the original text. Rotated text and special
+text rendering modes retain the original page instead of an inaccurate overlay. Image-only scans can be viewed but need
 OCR before their text can be translated; OCR is not included.
 
 PDF.js workers, fonts, CMaps, and image codecs are served by the app itself.

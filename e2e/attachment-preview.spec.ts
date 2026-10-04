@@ -54,7 +54,7 @@ test("previews, searches and translates PDF pages without downloading", async ({
   await page.route("**/api/mail/messages/*/translate?*", async (route) => {
     const request = route.request().postDataJSON() as { language: string; segments: string[] };
     translations.push(request);
-    await route.fulfill({ json: { ok: true, translations: [`${request.language}: ${request.segments[0]}`] } });
+    await route.fulfill({ json: { ok: true, translations: request.segments.map((segment) => `${request.language}: ${segment}`) } });
   });
   await page.getByRole("button", { name: "Open The craft behind fast software" }).click();
   expect(previewRequests).toBe(0);
@@ -109,7 +109,7 @@ test("previews, searches and translates PDF pages without downloading", async ({
   const pageNumber = dialog.getByRole("textbox", { name: "Page number" });
   await pageNumber.fill("3");
   await pageNumber.press("Enter");
-  await expect(translation).toContainText("No selectable text on this page");
+  await expect(dialog.getByRole("status")).toContainText("No selectable text on this page");
   expect(translations).toHaveLength(3);
   await dialog.getByRole("button", { name: "Show original" }).click();
   await expect(translation).toHaveCount(0);
