@@ -7,6 +7,7 @@ import {
   useParams,
 } from "react-router";
 import { AuthScreen } from "@/auth/auth-screen";
+import { AuthCheckError } from "@/auth/auth-check-error";
 import { useAuth } from "@/auth/auth-context";
 import { MailboxRealtimeConnections } from "@/mail/mailbox-realtime";
 import { UnreadDocumentIndicator } from "@/mail/unread-document-indicator";
@@ -84,6 +85,7 @@ function LoadingScreen() {
 export function App() {
   const auth = useAuth();
   if (auth.loading) return <LoadingScreen />;
+  if (auth.error) return <AuthCheckError onRetry={auth.retry} />;
   const mail = auth.authenticated ? <MailboxRoute /> : <AuthScreen />;
   const originalMessage = auth.authenticated
     ? <OriginalMessagePage />

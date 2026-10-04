@@ -31,6 +31,8 @@ type ReauthenticationRequest =
 
 type AuthContextValue = AuthState & {
   loading: boolean;
+  error: Error | null;
+  retry: () => Promise<void>;
   bootstrap: (input: { name: string; email: string }, mock?: boolean) => Promise<void>;
   login: (mock?: boolean) => Promise<void>;
   reauthenticate: (
@@ -269,7 +271,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionVersion: state.data?.sessionVersion ?? null,
     user: state.data?.user ?? null,
     mockAuthEnabled: state.data?.mockAuthEnabled ?? false,
-    loading: state.isLoading || accountChanging,
+    // A failed initial check is unknown authentication, not a signed-out session.
+    // Keep cached identity on background errors; only a successful response can revoke it.
+    loading: state.isPending || accountChanging,
+    error: state.data ? null : state.error,
+    retry: refresh,
     bootstrap,
     login,
     reauthenticate,
