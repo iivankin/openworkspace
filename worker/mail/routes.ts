@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
+import { attachmentPreview } from "../../shared/attachment-preview";
+import { officePreviewKey } from "../../shared/office-preview";
 import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -195,6 +197,7 @@ function toMessageDetail(
       size: file.size,
       contentId: file.contentId,
       disposition: file.disposition,
+      pdfPreviewStatus: file.pdfPreviewStatus ?? null,
     })),
     replyPlan: buildReplyPlan(ownAddress, email),
     ...readReceipt,
@@ -1084,6 +1087,45 @@ export const mailRoutes = new Hono<AppEnv>()
         totalBytes: file.size,
         rangeRequested: Boolean(requestedRange),
       });
+    },
+  )
+  .get(
+    "/messages/:messageId/attachments/:attachmentId/preview",
+    zValidator("query", mailboxQuerySchema),
+    async (c) => {
+      const { mailboxId } = c.req.valid("query");
+      if (!await accessibleMailbox(c.env, c.get("user").id, mailboxId, "read")) {
+        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+      }
+      const file = await mailboxStub(c.env, mailboxId).getAttachment(
+        c.req.param("messageId"),
+        c.req.param("attachmentId"),
+      );
+      if (!file) return apiError(c, 404, "NOT_FOUND", "Attachment not found");
+      const preview = attachmentPreview(file);
+      if (!preview) {
+        return apiError(c, 422, "BAD_REQUEST", "Preview is not available for this file");
+      }
+      if (file.pdfPreviewStatus === "pending") {
+        return apiError(c, 409, "NOT_READY", "Preview is being generated");
+      }
+      if (file.pdfPreviewStatus === "failed") {
+        return apiError(c, 422, "UNAVAILABLE", "Preview could not be generated");
+      }
+      const requestedRange = c.req.header("range");
+      const previewKey = file.pdfPreviewStatus === "ready" ? officePreviewKey(file.r2Key) : file.r2Key;
+      const object = await getStoredObject(c.env.MAIL_STORAGE, previewKey, requestedRange);
+      if (!object) return apiError(c, 404, "NOT_FOUND", "Attachment data is missing");
+      const response = storedObjectResponse({
+        object,
+        contentType: preview.contentType,
+        contentDisposition: `inline; filename*=UTF-8''${encodeURIComponent(file.pdfPreviewStatus === "ready" ? `${file.filename}.pdf` : file.filename)}`,
+        totalBytes: object.size,
+        rangeRequested: Boolean(requestedRange),
+      });
+      response.headers.set("cross-origin-resource-policy", "same-origin");
+      response.headers.set("content-security-policy", "frame-ancestors 'self'");
+      return response;
     },
   )
   .get(

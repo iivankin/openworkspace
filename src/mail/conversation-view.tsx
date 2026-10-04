@@ -5,7 +5,6 @@ import {
   CircleAlert,
   ChevronDown,
   ChevronUp,
-  Download,
   FileText,
   Forward,
   Inbox,
@@ -43,7 +42,7 @@ import {
 } from "./conversation-reply";
 import { ConversationLoadingSkeleton } from "./conversation-loading-skeleton";
 import { DeliveryIndicator } from "./delivery-indicator";
-import { formatBytes } from "./format-bytes";
+import { MessageAttachments } from "./message-attachments";
 import { notifyOutboundResult } from "./outbound-notification";
 import { MessageTranslation } from "./message-translation";
 import { ToolbarTooltip } from "./toolbar-tooltip";
@@ -403,21 +402,11 @@ function MessageBubble({
             </Collapsible>
           )}
 
-          {message.attachments.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2 border-t border-current/10 pt-3">
-              {message.attachments.map((attachment) => (
-                <a
-                  key={attachment.id}
-                  className="group/file flex max-w-full items-center gap-2 rounded-lg border border-current/12 bg-current/4 px-2.5 py-1.5 text-xs transition-colors hover:border-current/25 hover:bg-current/8"
-                  href={`/api/mail/messages/${message.id}/attachments/${attachment.id}?mailboxId=${encodeURIComponent(mailboxId ?? "")}`}
-                >
-                  <Download className="size-3.5 shrink-0 opacity-70" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{attachment.filename}</span>
-                  <span className="shrink-0 opacity-60 tabular-nums">{formatBytes(attachment.size)}</span>
-                </a>
-              ))}
-            </div>
-          )}
+          <MessageAttachments
+            messageId={message.id}
+            mailboxId={mailboxId}
+            attachments={message.attachments}
+          />
 
           <DeliveryIndicator message={message} />
         </BubbleContent>

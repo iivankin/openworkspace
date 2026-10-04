@@ -1,0 +1,12 @@
+.attachment-pdf-container {
+  overscroll-behavior: contain;
+  color-scheme: light;
+}
+
+.attachment-pdf-container .pdfViewer {
+  padding: 12px 0;
+}
+
+.attachment-pdf-container .textLayer {
+  caret-color: transparent;
+}

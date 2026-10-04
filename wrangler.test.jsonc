@@ -9,11 +9,19 @@
       {
         "name": "MAILBOX",
         "class_name": "MailboxDO"
+      },
+      {
+        "name": "OFFICE_PREVIEW_CONTAINER",
+        "class_name": "OfficePreviewContainer"
       }
     ]
   },
   "exports": {
     "MailboxDO": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "OfficePreviewContainer": {
       "type": "durable-object",
       "storage": "sqlite"
     }
@@ -42,6 +50,10 @@
   ],
   "queues": {
     "producers": [
+      {
+        "binding": "OFFICE_PREVIEWS",
+        "queue": "openworkspace-office-previews"
+      },
       {
         "binding": "PUSH_NOTIFICATIONS",
         "queue": "openworkspace-push-notifications"

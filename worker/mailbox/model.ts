@@ -49,4 +49,5 @@ export type StoredAttachment = {
   delivery: "attached" | "download_link";
   downloadTokenHash: string | null;
   downloadExpiresAt: number | null;
+  pdfPreviewStatus?: import("../../shared/office-preview").PdfPreviewStatus;
 };

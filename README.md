@@ -10,6 +10,7 @@ One Worker, your domains, your data. Invite people with a link, grant mailbox ac
 - **Personal and shared mailboxes** — multiple owned addresses plus read-only or read-and-send access per member
 - **Multiple domains** — accept provisioned addresses across manually configured Cloudflare mail zones
 - **Delivery status** — bounces, deferrals, and complaints surface in the app
+- **Attachment previews** — PDF, images, text, and background PDF conversion for Office documents
 - **Realtime and push** — mailbox-scoped WebSockets plus optional PWA notifications
 - **Signed webhooks** — account-wide email and administration events with retry history
 - **Runs on Cloudflare** — Workers, D1, Durable Objects, R2, Images, Email Service, and Queues
@@ -18,7 +19,7 @@ One Worker, your domains, your data. Invite people with a link, grant mailbox ac
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/iivankin/openworkspace)
 
-Or clone and deploy from your machine (requires [Bun](https://bun.sh) and a Cloudflare account):
+Or clone and deploy from your machine (requires [Bun](https://bun.sh), Docker, and a Cloudflare Workers Paid account):
 
 ```bash
 git clone git@github.com:iivankin/openworkspace.git
@@ -28,6 +29,41 @@ bun run deploy
 ```
 
 Cloudflare provisions D1, R2, and the Images binding from `wrangler.jsonc`. Domain mail setup is manual — complete it once after the first deploy.
+
+### Attachment previews
+
+PDF attachments open in an on-demand PDF.js viewer with page navigation, zoom,
+text selection, and search. The Translate button uses the existing mail translation
+API for the current page; navigating with translation enabled translates each new
+page on demand. Results are cached in browser memory. On smaller screens the
+translation appears below the document. Image-only scans can be viewed but need
+OCR before their text can be translated; OCR is not included.
+
+PDF.js workers, fonts, CMaps, and image codecs are served by the app itself.
+The viewer also displays the PDFs generated from Office attachments below.
+
+New incoming and sent Word (`doc`, `docx`, `docm`), Excel (`xls`, `xlsx`, `xlsm`),
+PowerPoint (`ppt`, `pptx`, `pptm`), OpenDocument, and RTF attachments up to 20 MiB
+are converted to PDF in the background. Existing stored messages are not backfilled.
+Original files remain unchanged and are used for downloads and forwarding.
+
+The `office-preview` Cloudflare Container uses Gotenberg 8.37.0 with LibreOffice.
+Wrangler builds its Docker image on deployment; Docker must also be running for
+local development and the Office browser test. The configured queue runs at most
+two conversions concurrently. A container starts for a conversion and is destroyed
+after its PDF is saved to R2, including on failure; subsequent previews use R2 only.
+Outbound Internet access is disabled for the converter. Conversion failures retry
+up to three attempts, after which the original remains downloadable.
+
+Preview jobs are committed with message metadata before being dispatched to
+`openworkspace-office-previews`. A ready preview is announced through the mailbox's
+existing realtime connection. Permanent message deletion also removes the generated PDF.
+
+Run the real Word/Excel/PowerPoint conversion check with Docker running:
+
+```bash
+bunx playwright test e2e/office-preview.spec.ts --project=desktop
+```
 
 ### Pull updates from upstream
 

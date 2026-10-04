@@ -3,6 +3,14 @@ import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-o
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../../drizzle/mailbox/migrations.js";
+import { officePreviewExtension, officePreviewKey } from "../../shared/office-preview";
+import {
+  dispatchOfficePreviewJobs,
+  hasPendingOfficePreviews,
+  insertOfficePreviewJobs,
+  nextOfficePreviewAttempt,
+  prepareOfficePreviews,
+} from "./office-preview-jobs";
 import {
   MAX_CUSTOM_FOLDER_COUNT,
   MAILBOX_REALTIME_UPDATE,
@@ -892,6 +900,29 @@ export class MailboxDO extends DurableObject<Env> {
     return email?.attachmentsJson.find((file) => file.id === attachmentId) ?? null;
   }
 
+  async completeOfficePreview(emailId: string, attachmentId: string, sourceKey: string, status: "ready" | "failed") {
+    const email = this.getEmail(emailId);
+    const file = email?.attachmentsJson.find((file) => file.id === attachmentId && file.r2Key === sourceKey);
+    if (!email || !file) {
+      // Conversion may finish after permanent deletion already removed its objects.
+      // Persist cleanup before the queue acknowledges, so an R2 outage cannot orphan the PDF.
+      const cleanupAt = new Date();
+      await this.scheduleAlarm(cleanupAt.getTime() + ALARM_WAKE_DELAY_MS);
+      this.db.insert(pendingObjectDeletions).values({
+        objectKey: officePreviewKey(sourceKey), nextAttemptAt: cleanupAt,
+      }).onConflictDoNothing().run();
+      return false;
+    }
+    if (file.pdfPreviewStatus !== "pending") return true;
+    this.db.update(emails).set({
+      attachmentsJson: email.attachmentsJson.map((attachment) =>
+        attachment.id === attachmentId ? { ...attachment, pdfPreviewStatus: status } : attachment
+      ),
+    }).where(eq(emails.id, emailId)).run();
+    this.publishUpdate();
+    return true;
+  }
+
   suggestRecipients(ownAddress: string, query: string, limit: number) {
     this.recentParticipantSources ??= this.db
       .select({
@@ -1145,8 +1176,13 @@ export class MailboxDO extends DurableObject<Env> {
     return { messageId, queued };
   }
 
-  insertEmail(email: NewEmail) {
-    this.db.insert(emails).values(email).onConflictDoNothing().run();
+  async insertEmail(email: NewEmail) {
+    email = prepareOfficePreviews(email);
+    if (hasPendingOfficePreviews(email)) await this.scheduleAlarm(Date.now() + ALARM_WAKE_DELAY_MS);
+    this.db.transaction((tx) => {
+      const inserted = tx.insert(emails).values(email).onConflictDoNothing().returning({ id: emails.id }).all();
+      if (inserted.length) insertOfficePreviewJobs(this.state.storage.sql, email);
+    });
     this.recentParticipantSources = null;
     return this.getEmail(email.id);
   }
@@ -1190,6 +1226,7 @@ export class MailboxDO extends DurableObject<Env> {
     email: NewEmail,
     classification: EmailAiClassification | null,
   ) {
+    email = prepareOfficePreviews(email);
     const stored = this.db.transaction((tx) => {
       const trustedFolder = classification?.folderId
         ? tx
@@ -1211,6 +1248,7 @@ export class MailboxDO extends DurableObject<Env> {
         .returning()
         .all()[0];
       if (!inserted) return null;
+      insertOfficePreviewJobs(this.state.storage.sql, email);
 
       if (normalizedClassification?.spam) {
         tx.update(conversations)
@@ -1260,6 +1298,8 @@ export class MailboxDO extends DurableObject<Env> {
       if (!email.requestFingerprint) {
         throw new Error("An outgoing request fingerprint is required");
       }
+      email = prepareOfficePreviews(email);
+      if (hasPendingOfficePreviews(email)) await this.scheduleAlarm(Date.now() + ALARM_WAKE_DELAY_MS);
       const submission = this.db.transaction((tx): SubmitOutgoingResult => {
         const existing = tx
           .select()
@@ -1276,6 +1316,7 @@ export class MailboxDO extends DurableObject<Env> {
         }
 
         tx.insert(emails).values(email).run();
+        insertOfficePreviewJobs(this.state.storage.sql, email);
         const inserted = tx
           .select()
           .from(emails)
@@ -1453,7 +1494,10 @@ export class MailboxDO extends DurableObject<Env> {
     const objectKeys = [...new Set(storedEmails.flatMap((email) => [
       ...(email.bodyHtmlR2Key ? [email.bodyHtmlR2Key] : []),
       ...(email.rawMimeR2Key ? [email.rawMimeR2Key] : []),
-      ...email.attachmentsJson.map((attachment) => attachment.r2Key),
+      ...email.attachmentsJson.flatMap((attachment) => [
+        attachment.r2Key,
+        ...(officePreviewExtension(attachment.filename) ? [officePreviewKey(attachment.r2Key)] : []),
+      ]),
     ]))];
 
     const referencedObjectKeys = this.referencedObjectKeys(
@@ -1472,6 +1516,13 @@ export class MailboxDO extends DurableObject<Env> {
       await this.scheduleAlarm(cleanupAlarmAt);
     }
     this.db.transaction((tx) => {
+      tx.run(sql`
+        delete from pending_office_previews where email_id in (
+          select id from emails where conversation_id in (
+            select cast(value as text) from json_each(${candidatesJson})
+          )
+        )
+      `);
       for (const objectKey of ownedObjectKeys) {
         tx.insert(pendingObjectDeletions)
           .values({ objectKey, nextAttemptAt: cleanupAt })
@@ -1545,6 +1596,7 @@ export class MailboxDO extends DurableObject<Env> {
               select 1
               from json_each(message.attachments_json) attachment
               where json_extract(attachment.value, '$.r2Key') = candidate.object_key
+                or json_extract(attachment.value, '$.r2Key') || '.preview.pdf' = candidate.object_key
             )
           )
       )
@@ -1596,6 +1648,7 @@ export class MailboxDO extends DurableObject<Env> {
   async alarm() {
     const now = Date.now();
     await this.processInboundJobs(now);
+    await dispatchOfficePreviewJobs(this.state.storage.sql, this.bindings, this.state.id.name ?? "unknown-mailbox");
     await this.processObjectDeletionJobs(now);
     await this.scheduleRemainingWork();
   }
@@ -1666,7 +1719,7 @@ export class MailboxDO extends DurableObject<Env> {
             reason: error.message,
             rawMimeR2Key: job.rawObjectKey,
           });
-          const stored = this.insertEmail(fallback);
+          const stored = await this.insertEmail(fallback);
           if (!stored) {
             throw new Error("Inbound fallback email was not persisted", {
               cause: error,
@@ -1684,7 +1737,7 @@ export class MailboxDO extends DurableObject<Env> {
               ? null
               : job.rawObjectKey,
           });
-          const stored = this.insertEmail(fallback);
+          const stored = await this.insertEmail(fallback);
           if (!stored) {
             throw new Error("Inbound infrastructure fallback was not persisted", {
               cause: error,
@@ -1769,7 +1822,10 @@ export class MailboxDO extends DurableObject<Env> {
       .orderBy(asc(pendingObjectDeletions.nextAttemptAt))
       .limit(1)
       .all()[0];
-    const nextAttemptAt = [nextInbound, nextObjectDeletion]
+    const officePreviewAttempt = nextOfficePreviewAttempt(this.state.storage.sql);
+    const nextAttemptAt = [nextInbound, nextObjectDeletion,
+      ...(officePreviewAttempt === undefined ? [] : [{ nextAttemptAt: new Date(officePreviewAttempt) }]),
+    ]
       .flatMap((job) => job ? [job.nextAttemptAt.getTime()] : [])
       .reduce<number | null>(
         (earliest, value) => earliest === null ? value : Math.min(earliest, value),

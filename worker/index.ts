@@ -25,6 +25,9 @@ import {
   wellKnownRoutes,
 } from "./oidc/routes";
 export { MailboxDO } from "./mailbox";
+export { OfficePreviewContainer } from "./mail/office-preview-container";
+import { OFFICE_PREVIEW_QUEUE } from "../shared/office-preview";
+import { consumeOfficePreviews } from "./mail/office-preview-queue";
 import { normalizeMailboxAddress } from "./lib/ids";
 import { consumeWebhooks } from "./webhooks/delivery";
 import { WEBHOOK_QUEUE } from "./webhooks/service";
@@ -103,6 +106,7 @@ export default {
     );
   },
   queue(batch, env) {
+    if (batch.queue === OFFICE_PREVIEW_QUEUE) return consumeOfficePreviews(batch, env);
     if (batch.queue === PUSH_NOTIFICATION_QUEUE) {
       return consumePushNotifications(batch, env);
     }

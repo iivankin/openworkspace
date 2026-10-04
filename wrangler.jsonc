@@ -16,6 +16,10 @@
       {
         "name": "MAILBOX",
         "class_name": "MailboxDO"
+      },
+      {
+        "name": "OFFICE_PREVIEW_CONTAINER",
+        "class_name": "OfficePreviewContainer"
       }
     ]
   },
@@ -23,6 +27,11 @@
     "MailboxDO": {
       "type": "durable-object",
       "storage": "sqlite"
+    },
+    "OfficePreviewContainer": {
+      "type": "durable-object",
+      "storage": "sqlite",
+      "container": "office-preview"
     }
   },
   "d1_databases": [
@@ -32,6 +41,12 @@
       "migrations_dir": "drizzle"
     }
   ],
+  "containers": [{
+    "name": "office-preview",
+    "image": "./containers/office-preview/Dockerfile",
+    "instance_type": "standard-1",
+    "max_instances": 2
+  }],
   "r2_buckets": [
     {
       "binding": "MAIL_STORAGE",
@@ -52,6 +67,10 @@
   "queues": {
     "producers": [
       {
+        "binding": "OFFICE_PREVIEWS",
+        "queue": "openworkspace-office-previews"
+      },
+      {
         "binding": "PUSH_NOTIFICATIONS",
         "queue": "openworkspace-push-notifications"
       },
@@ -61,6 +80,13 @@
       }
     ],
     "consumers": [
+      {
+        "queue": "openworkspace-office-previews",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 2,
+        "max_retries": 5
+      },
       {
         "queue": "openworkspace-delivery-events",
         "max_batch_size": 10,

@@ -75,6 +75,18 @@ export const pendingObjectDeletions = sqliteTable(
   ],
 );
 
+export const pendingOfficePreviews = sqliteTable(
+  "pending_office_previews",
+  {
+    sourceKey: text("source_key").primaryKey(),
+    emailId: text("email_id").notNull(),
+    attachmentId: text("attachment_id").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [index("pending_office_previews_next_attempt_idx").on(table.nextAttemptAt)],
+);
+
 /**
  * One row is one message visible in this Durable Object's mailbox. RFC
  * threading metadata and message content are immutable after insertion.

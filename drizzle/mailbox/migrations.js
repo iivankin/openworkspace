@@ -4,6 +4,7 @@ import m0001 from "./0001_lazy_chameleon.sql";
 import m0002 from "./0002_open_susan_delgado.sql";
 import m0003 from "./0003_omniscient_satana.sql";
 import m0004 from "./0004_harsh_rattler.sql";
+import m0005 from "./0005_office_previews.sql";
 
 export default {
   journal,
@@ -13,5 +14,6 @@ export default {
     m0002,
     m0003,
     m0004,
+    m0005,
   },
 };

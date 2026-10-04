@@ -12,15 +12,7 @@ import { EmailHtmlBody } from "./email-html-body";
 import { emailHtmlTextSegments } from "./translation-html";
 import type { MessageDetail } from "./types";
 import { useSanitizedEmailHtml } from "./use-sanitized-email-html";
-
-const COMMON_LANGUAGES = [
-  "en", "es", "fr", "de", "it", "pt", "ru", "uk", "sr", "tr",
-  "ar", "hi", "zh", "ja", "ko",
-];
-
-function browserLanguage() {
-  return navigator.languages?.[0] || navigator.language || "en";
-}
+import { browserLanguage, COMMON_LANGUAGES } from "./translation-language";
 
 export function MessageTranslation({
   message,
