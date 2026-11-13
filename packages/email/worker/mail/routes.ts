@@ -90,6 +90,8 @@ import {
   recipientSuggestionQuerySchema,
   renameFolderSchema,
   reorderFoldersSchema,
+  retentionFolderSchema,
+  retentionSchema,
   replySchema,
   uploadIdSchema,
 } from "./schemas";
@@ -613,6 +615,72 @@ export const mailRoutes = new Hono<AppEnv>()
           c.req.valid("json")
         ),
       });
+    }
+  )
+  .get("/mailboxes/:id/retention", oauthScope(MAIL_READ_SCOPE), async (c) => {
+    const mailboxId = c.req.param("id");
+
+    if (!(await accessibleMailbox(c, mailboxId, "read"))) {
+      return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+    }
+
+    const settings = await mailboxStub(c.env, mailboxId).getRetention();
+
+    return c.json({
+      ok: true as const,
+      retention: {
+        trashDays: settings?.trashDays ?? null,
+        spamDays: settings?.spamDays ?? null,
+      },
+    });
+  })
+  .put(
+    "/mailboxes/:id/retention",
+    oauthScope(MAIL_ORGANIZE_SCOPE),
+    zValidator("json", retentionSchema),
+    async (c) => {
+      const mailboxId = c.req.param("id");
+
+      // Retention deletes mail permanently, so it needs the same access.
+      if (!(await accessibleMailbox(c, mailboxId, "send"))) {
+        return apiError(
+          c,
+          403,
+          "FORBIDDEN",
+          "Send access is required to delete conversations permanently"
+        );
+      }
+
+      const { trashDays, spamDays } = await mailboxStub(
+        c.env,
+        mailboxId
+      ).setRetention(c.req.valid("json"), c.get("user").id);
+
+      return c.json({ ok: true as const, retention: { trashDays, spamDays } });
+    }
+  )
+  .post(
+    "/mailboxes/:id/folders/:folder/empty",
+    oauthScope(MAIL_ORGANIZE_SCOPE),
+    zValidator(
+      "param",
+      z.object({ id: z.string(), folder: retentionFolderSchema })
+    ),
+    async (c) => {
+      const { id: mailboxId, folder } = c.req.valid("param");
+
+      if (!(await accessibleMailbox(c, mailboxId, "send"))) {
+        return apiError(
+          c,
+          403,
+          "FORBIDDEN",
+          "Send access is required to delete conversations permanently"
+        );
+      }
+
+      const result = await mailboxStub(c.env, mailboxId).emptyFolder(folder);
+
+      return c.json({ ok: true as const, ...result });
     }
   )
   .post(

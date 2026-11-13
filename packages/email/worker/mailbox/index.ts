@@ -137,6 +137,7 @@ import {
   mailboxAiConfiguration,
   pendingInbound,
   pendingObjectDeletions,
+  retentionSettings,
   senders,
   unsubscriptions,
 } from "./schema";
@@ -146,6 +147,7 @@ import type {
   NewEmail,
   NewFolder,
   PendingInbound,
+  RetentionSettings,
 } from "./schema";
 import {
   blockFromPattern,
@@ -185,6 +187,14 @@ const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_UNFINISHED_INBOUND_ATTEMPTS = 3;
 
 const ALARM_WAKE_DELAY_MS = 1000;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Bounds one emptying or retention pass, so a huge Trash can't hold the object. */
+const RETENTION_BATCH_SIZE = 100;
+
+export type RetentionFolder = "trash" | "spam";
+
 const PRESENCE_TTL_MS = 60_000;
 const AI_CONFIGURATION_ID = "default";
 
@@ -758,6 +768,8 @@ export class MailboxDO extends DurableObject<Env> {
       })
     );
     this.announceJmapState();
+    // Every move into Trash or Spam publishes, so retention is scheduled here.
+    this.state.waitUntil(this.scheduleRetention());
   }
 
   /** Tells JMAP EventSource streams and (unless `push` is false) push subscribers the new state. */
@@ -3194,7 +3206,11 @@ export class MailboxDO extends DurableObject<Env> {
     return result.length;
   }
 
-  async permanentlyDeleteConversations(conversationIds: string[]) {
+  /** Deletes conversations that are all in `fromState` (Trash unless emptying Spam). */
+  async permanentlyDeleteConversations(
+    conversationIds: string[],
+    fromState: RetentionFolder = "trash"
+  ) {
     const candidates = [...new Set(conversationIds)];
 
     if (!candidates.length) {
@@ -3220,7 +3236,7 @@ export class MailboxDO extends DurableObject<Env> {
 
     if (
       storedConversations.some(
-        (conversation) => conversation.mailboxState !== "trash"
+        (conversation) => conversation.mailboxState !== fromState
       )
     ) {
       return { outcome: "not_in_trash" as const, deletedCount: 0 };
@@ -3450,6 +3466,7 @@ export class MailboxDO extends DurableObject<Env> {
 
     try {
       await this.processInboundJobs(now);
+      await this.processRetention(now);
     } finally {
       // Previews of the mail just stored are queued in the same wake.
       await dispatchOfficePreviewJobs(
@@ -3820,9 +3837,14 @@ export class MailboxDO extends DurableObject<Env> {
       this.state.storage.sql
     );
 
+    const retentionAt = this.nextRetentionAt();
+
     const attemptTimes = [
       nextInbound,
       nextObjectDeletion,
+      ...(retentionAt === null
+        ? []
+        : [{ nextAttemptAt: new Date(retentionAt) }]),
       ...(officePreviewAttempt === undefined
         ? []
         : [{ nextAttemptAt: new Date(officePreviewAttempt) }]),
@@ -3912,6 +3934,121 @@ export class MailboxDO extends DurableObject<Env> {
     if (!delivered) throw new Error("Submitted message was not persisted");
 
     return delivered;
+  }
+
+  getRetention(): RetentionSettings | null {
+    return this.db.select().from(retentionSettings).all()[0] ?? null;
+  }
+
+  async setRetention(
+    input: { trashDays: number | null; spamDays: number | null },
+    userId: string
+  ) {
+    const settings: RetentionSettings = {
+      id: 1,
+      ...input,
+      updatedBy: userId,
+      updatedAt: new Date(),
+    };
+
+    this.db
+      .insert(retentionSettings)
+      .values(settings)
+      .onConflictDoUpdate({ target: retentionSettings.id, set: settings })
+      .run();
+    await this.scheduleRetention();
+
+    return settings;
+  }
+
+  /** Permanently deletes one batch from Trash or Spam; callers repeat while `remaining > 0`. */
+  async emptyFolder(state: RetentionFolder) {
+    const ids = this.db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.mailboxState, state))
+      .orderBy(asc(conversations.timelineAt))
+      .limit(RETENTION_BATCH_SIZE)
+      .all()
+      .map((row) => row.id);
+
+    const result = ids.length
+      ? await this.permanentlyDeleteConversations(ids, state)
+      : { deletedCount: 0 };
+
+    const remaining =
+      this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(conversations)
+        .where(eq(conversations.mailboxState, state))
+        .all()[0]?.count ?? 0;
+
+    return { deleted: result.deletedCount, remaining };
+  }
+
+  private retentionRules() {
+    const settings = this.getRetention();
+
+    return (
+      [
+        ["trash", settings?.trashDays],
+        ["spam", settings?.spamDays],
+      ] as const
+    ).flatMap(([state, days]) => (days ? [{ state, ms: days * DAY_MS }] : []));
+  }
+
+  private async processRetention(now: number) {
+    for (const { state, ms } of this.retentionRules()) {
+      const expired = this.db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.mailboxState, state),
+            lte(conversations.stateChangedAt, new Date(now - ms))
+          )
+        )
+        .orderBy(asc(conversations.stateChangedAt))
+        .limit(RETENTION_BATCH_SIZE)
+        .all()
+        .map((row) => row.id);
+
+      if (expired.length) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- Trash then Spam, one bounded batch each
+        await this.permanentlyDeleteConversations(expired, state);
+      }
+    }
+  }
+
+  /** When the oldest Trash or Spam conversation reaches its retention limit. */
+  private nextRetentionAt() {
+    const due = this.retentionRules().flatMap(({ state, ms }) => {
+      const oldest = this.db
+        .select({ at: conversations.stateChangedAt })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.mailboxState, state),
+            isNotNull(conversations.stateChangedAt)
+          )
+        )
+        .orderBy(asc(conversations.stateChangedAt))
+        .limit(1)
+        .all()[0]?.at;
+
+      return oldest ? [oldest.getTime() + ms] : [];
+    });
+
+    return due.length > 0 ? Math.min(...due) : null;
+  }
+
+  /** Only moves the alarm earlier, so it can run beside `scheduleRemainingWork`. */
+  private async scheduleRetention() {
+    const at = this.nextRetentionAt();
+
+    if (at !== null) {
+      await this.scheduleAlarm(Math.max(Date.now() + ALARM_WAKE_DELAY_MS, at));
+    }
   }
 
   private async scheduleAlarm(at: number) {

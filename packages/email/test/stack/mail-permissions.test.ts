@@ -431,6 +431,44 @@ describe("read-only mailbox access", () => {
       await mailbox.getConversationSnapshot("conv_visible")
     ).not.toBeNull();
 
+    // Emptying and retention delete permanently too, so they need send access.
+    const empty = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/folders/trash/empty`,
+        { method: "POST", headers: { cookie } }
+      )
+    );
+
+    expect(empty.status).toBe(403);
+    expect(
+      await mailbox.getConversationSnapshot("conv_visible")
+    ).not.toBeNull();
+
+    const setRetention = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/retention`,
+        {
+          method: "PUT",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ trashDays: 1, spamDays: null }),
+        }
+      )
+    );
+
+    expect(setRetention.status).toBe(403);
+
+    const readRetention = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/mailboxes/${mailboxId}/retention`,
+        { headers: { cookie } }
+      )
+    );
+
+    expect(readRetention.status).toBe(200);
+    expect(await readRetention.json()).toMatchObject({
+      retention: { trashDays: null, spamDays: null },
+    });
+
     const compose = await worker.fetch(
       new Request("http://example.test/api/mail/messages", {
         method: "POST",

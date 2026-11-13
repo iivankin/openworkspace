@@ -35,6 +35,10 @@ Members of a mailbox can reorder its folders. Inbox always stays first. On
 phones, the bar at the bottom switches mailboxes and scrolls through the
 folders.
 
+In Trash and Spam, the **⋯** menu above the list empties the folder or
+deletes conversations automatically after 7, 30 or 90 days there. Both need
+send access, and both delete mail for everyone in the mailbox.
+
 ## Sender warnings
 
 Incoming mail shows whether the sender passed SPF, DKIM and DMARC, and warns

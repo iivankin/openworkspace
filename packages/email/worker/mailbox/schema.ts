@@ -249,8 +249,17 @@ export const conversations = sqliteTable(
     hasOutgoing: integer("has_outgoing", { mode: "boolean" })
       .notNull()
       .default(false),
+    /**
+     * When `mailbox_state` last changed. Database triggers keep it current, so
+     * every path that moves a conversation (app, JMAP, AI spam, new mail) does.
+     */
+    stateChangedAt: integer("state_changed_at", { mode: "timestamp_ms" }),
   },
   (table) => [
+    index("conversations_state_changed_idx").on(
+      table.mailboxState,
+      table.stateChangedAt
+    ),
     index("conversations_timeline_idx").on(
       table.timelineAt,
       table.latestEmailId
@@ -335,6 +344,15 @@ export const unsubscriptions = sqliteTable("unsubscriptions", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
+/** One row (id 1): days after which Trash and Spam are emptied; null keeps mail. */
+export const retentionSettings = sqliteTable("retention_settings", {
+  id: integer("id").primaryKey(),
+  trashDays: integer("trash_days"),
+  spamDays: integer("spam_days"),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const mailboxAiConfiguration = sqliteTable("mailbox_ai_configuration", {
   id: text("id").primaryKey(),
   instructions: text("instructions").notNull().default(""),
@@ -379,6 +397,8 @@ export type PendingObjectDeletion = typeof pendingObjectDeletions.$inferSelect;
 export type NewPendingInbound = typeof pendingInbound.$inferInsert;
 
 export type ConversationRecord = typeof conversations.$inferSelect;
+
+export type RetentionSettings = typeof retentionSettings.$inferSelect;
 
 export type FolderRecord = typeof folders.$inferSelect;
 

@@ -20,6 +20,7 @@ import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 
 import { ConversationSelectionToolbar } from "./conversation-selection-toolbar";
+import { FolderCleanupMenu } from "./folder-cleanup-menu";
 import { SearchField } from "./mail-app-bar";
 import { folderShowsUnreadCount } from "./mail-folders";
 import { MailboxCaption } from "./mail-mailbox-sheet";
@@ -245,7 +246,7 @@ function emptyFolderHint(systemType: string | null | undefined) {
     }
 
     case "trash": {
-      return "Deleted conversations wait here until you delete them permanently.";
+      return "Deleted conversations wait here until you delete them permanently or they're deleted automatically.";
     }
 
     default: {
@@ -473,6 +474,16 @@ export function ConversationList({ mail }: { mail: MailController }) {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
+                {mailbox?.canSend &&
+                  (activeFolder?.systemType === "trash" ||
+                    activeFolder?.systemType === "spam") && (
+                    <FolderCleanupMenu
+                      mailboxId={mailbox.id}
+                      folder={activeFolder.systemType}
+                      folderName={folderName}
+                      conversationCount={activeFolder.totalCount}
+                    />
+                  )}
                 <SegmentedFilter
                   unreadOnly={unreadOnly}
                   onToggle={mail.toggleUnreadOnly}

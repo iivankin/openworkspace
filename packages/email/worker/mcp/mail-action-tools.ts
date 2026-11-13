@@ -6,6 +6,7 @@ import { apiPath, runTool } from "@open-workspace/core/module";
 import { z } from "zod";
 
 import { MAIL_ORGANIZE_SCOPE, MAIL_READ_SCOPE } from "../../shared/permissions";
+import { retentionFolderSchema, retentionSchema } from "../mail/schemas";
 import {
   conversationIdsSchema,
   entityIdSchema,
@@ -126,6 +127,45 @@ export function registerMailActionTools(
         api.json(apiPath("/mail/conversations/bulk", { mailboxId }), {
           method: "PATCH",
           json: { type: "delete_permanently", conversationIds },
+        })
+      )
+  );
+
+  tool(MAIL_ORGANIZE_SCOPE)(
+    "empty_folder",
+    {
+      title: "Empty Trash or Spam",
+      description:
+        "Permanently delete up to 100 of the oldest conversations in Trash or Spam. Returns { deleted, remaining }; call again while remaining is above 0. Requires send access.",
+      inputSchema: z.object({
+        mailboxId: mailboxIdSchema,
+        folder: retentionFolderSchema,
+      }),
+      annotations: { ...write, destructiveHint: true, idempotentHint: false },
+    },
+    ({ mailboxId, folder }) =>
+      runTool(() =>
+        api.json(
+          `/mail/mailboxes/${encodeURIComponent(mailboxId)}/folders/${folder}/empty`,
+          { method: "POST" }
+        )
+      )
+  );
+
+  tool(MAIL_ORGANIZE_SCOPE)(
+    "set_retention",
+    {
+      title: "Set Trash and Spam retention",
+      description:
+        "Automatically delete conversations once they have been in Trash or Spam for a number of days (1 to 365), or null to keep them until emptied. Requires send access.",
+      inputSchema: retentionSchema.extend({ mailboxId: mailboxIdSchema }),
+      annotations: { ...write, destructiveHint: true },
+    },
+    ({ mailboxId, ...retention }) =>
+      runTool(() =>
+        api.json(`/mail/mailboxes/${encodeURIComponent(mailboxId)}/retention`, {
+          method: "PUT",
+          json: retention,
         })
       )
   );
