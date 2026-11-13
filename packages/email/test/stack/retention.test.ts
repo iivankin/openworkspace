@@ -54,15 +54,6 @@ async function stateChangedAt(mailboxId: string, conversationId: string) {
   return required(row, `${conversationId} exists`).state_changed_at;
 }
 
-function backdate(mailboxId: string, conversationId: string, at: number) {
-  return hooks.mailboxSql(
-    mailboxId,
-    "update conversations set state_changed_at = ? where id = ?",
-    at,
-    conversationId
-  );
-}
-
 async function remainingIds(mailboxId: string) {
   const rows = await hooks.mailboxRows(
     mailboxId,
@@ -73,32 +64,46 @@ async function remainingIds(mailboxId: string) {
   return rows.map((row) => row.id);
 }
 
-describe("state_changed_at", () => {
-  it("is set on insert and moves whenever the conversation changes place", async () => {
+/** Moves conversations into `state` the way the app does. */
+function move(
+  mailbox: ReturnType<typeof mailboxStub>,
+  ids: string[],
+  from: string,
+  state: MailboxState
+) {
+  return mailbox.bulkUpdateConversations(ids, from, { mailboxState: state });
+}
+
+describe("moving into Spam", () => {
+  it("starts the clock once and wakes when the 30-day default is due", async () => {
     const { mailboxId, mailbox } = await seeded([["conv_a", "active"]]);
 
-    expect(await stateChangedAt(mailboxId, "conv_a")).toBeGreaterThan(0);
-
-    await backdate(mailboxId, "conv_a", 1);
-    await mailbox.bulkUpdateConversations(["conv_a"], "inbox", {
-      mailboxState: "trash",
+    // Email({ retention: { trash: 7 } }) in stack.ts reaches the worker.
+    expect((await mailbox.folderView("usr_test")).retention).toEqual({
+      trash: 7,
+      spam: 30,
     });
+    expect(await mailbox.testAlarm()).toBeNull();
 
-    const trashedAt = required(
+    const before = Date.now();
+    await move(mailbox, ["conv_a"], "inbox", "spam");
+
+    const stamped = required(
       await stateChangedAt(mailboxId, "conv_a"),
-      "conv_a is stamped"
+      "moving to Spam stamps conv_a"
     );
 
-    expect(trashedAt).toBeGreaterThan(Date.now() - 60_000);
-
-    // New mail brings a thread back from Trash; that restarts the clock too.
-    await backdate(mailboxId, "conv_a", 1);
-    await mailbox.seedMailbox([], [{ ...incoming("conv_a"), id: "msg_new" }]);
-
+    expect(stamped).toBeGreaterThanOrEqual(before);
     expect(
-      (await mailbox.getConversationSnapshot("conv_a"))?.mailboxState
-    ).toBe("active");
-    expect(await stateChangedAt(mailboxId, "conv_a")).toBeGreaterThan(1);
+      await pollUntil(() => mailbox.testAlarm(), {
+        failure: "moving mail into Spam set no alarm",
+      })
+    ).toBe(stamped + 30 * DAY_MS);
+
+    // A move within Spam is not entering it, so the clock keeps running.
+    await move(mailbox, ["conv_a"], "spam", "spam");
+
+    expect(await stateChangedAt(mailboxId, "conv_a")).toBe(stamped);
   });
 });
 
@@ -137,57 +142,37 @@ describe("emptyFolder", () => {
 });
 
 describe("retention", () => {
-  it("deletes only conversations past the limit and wakes for the next one", async () => {
+  it("deletes Trash past 7 days and wakes for the next one", async () => {
     const { mailboxId, mailbox } = await seeded([
-      ["conv_old", "trash"],
-      ["conv_new", "trash"],
-      ["conv_spam", "spam"],
+      ["conv_old", "active"],
+      ["conv_new", "active"],
       ["conv_inbox", "active"],
     ]);
 
-    const now = Date.now();
-    await backdate(mailboxId, "conv_old", now - 8 * DAY_MS);
-    await backdate(mailboxId, "conv_new", now - 6 * DAY_MS);
-    await backdate(mailboxId, "conv_spam", now - 100 * DAY_MS);
-    await backdate(mailboxId, "conv_inbox", now - 100 * DAY_MS);
+    await move(mailbox, ["conv_old", "conv_new"], "inbox", "trash");
 
-    await mailbox.setRetention({ trashDays: 7, spamDays: null }, "usr_test");
+    // The move stamped both; shift those stamps back as if days had passed.
+    await hooks.mailboxSql(
+      mailboxId,
+      "update conversations set state_changed_at = state_changed_at - ? where id = ?",
+      8 * DAY_MS,
+      "conv_old"
+    );
+    await hooks.mailboxSql(
+      mailboxId,
+      "update conversations set state_changed_at = state_changed_at - ? where id = ?",
+      6 * DAY_MS,
+      "conv_new"
+    );
 
-    // conv_old is already due, so the alarm is set for right away.
-    expect(required(await mailbox.testAlarm(), "an alarm is set")).toBeLessThan(
-      now + 5000
+    const newAt = required(
+      await stateChangedAt(mailboxId, "conv_new"),
+      "conv_new is stamped"
     );
 
     await hooks.runAlarm(mailboxId);
 
-    expect(await remainingIds(mailboxId)).toEqual([
-      "conv_inbox",
-      "conv_new",
-      "conv_spam",
-    ]);
-    expect(await mailbox.testAlarm()).toBe(now - 6 * DAY_MS + 7 * DAY_MS);
-  });
-
-  it("schedules a wake when mail is moved into Trash", async () => {
-    const { mailboxId, mailbox } = await seeded([["conv_a", "active"]]);
-    await mailbox.setRetention({ trashDays: 30, spamDays: 30 }, "usr_test");
-
-    expect(await mailbox.testAlarm()).toBeNull();
-
-    const before = Date.now();
-    await mailbox.bulkUpdateConversations(["conv_a"], "inbox", {
-      mailboxState: "trash",
-    });
-
-    const alarm = await pollUntil(() => mailbox.testAlarm(), {
-      failure: "moving mail into Trash set no alarm",
-    });
-
-    // The trigger stamps whole seconds.
-    expect(alarm).toBeGreaterThanOrEqual(before - 1000 + 30 * DAY_MS);
-    expect(alarm).toBe(
-      required(await stateChangedAt(mailboxId, "conv_a"), "conv_a is stamped") +
-        30 * DAY_MS
-    );
+    expect(await remainingIds(mailboxId)).toEqual(["conv_inbox", "conv_new"]);
+    expect(await mailbox.testAlarm()).toBe(newAt + 7 * DAY_MS);
   });
 });

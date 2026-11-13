@@ -32,14 +32,6 @@ export const mailboxAiConfigurationSchema = z.object({
   confidenceThreshold: z.number().int().min(50).max(100),
 });
 
-const retentionDaysSchema = z.number().int().min(1).max(365).nullable();
-
-/** Days after which Trash and Spam are emptied; null keeps mail until emptied. */
-export const retentionSchema = z.object({
-  trashDays: retentionDaysSchema,
-  spamDays: retentionDaysSchema,
-});
-
 export const retentionFolderSchema = z.enum(["trash", "spam"]);
 
 /** Every folder but Inbox, in order: the movable system folders and the custom ones. */
