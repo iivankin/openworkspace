@@ -49,13 +49,26 @@ export type ClientModule = {
   /**
    * Sections in the editor of a team's saved address, under Administration →
    * Teams, e.g. a shared inbox's signature. Only people who can manage teams
-   * see them; each section saves through the module's own routes, guarded
-   * with `requirePermission("manage_teams")`.
+   * see them. A section registers with `useAddressSection({ dirty, save })`,
+   * and the editor's "Save address" saves it after the address; `save` uses
+   * the module's own routes, guarded with `requirePermission("manage_teams")`.
    */
   teamAddress?: {
     /** Unique among every module's team address sections. */
     id: string;
     Component: ComponentType<{ address: TeamAddress }>;
+  }[];
+  /**
+   * Sections in the editor of a person's saved address, under
+   * Administration → People, e.g. a forward's destinations. The counterpart
+   * of `teamAddress`: a section registers with `useAddressSection` and saves
+   * with "Save address", through routes guarded with
+   * `requirePermission("manage_people")`.
+   */
+  userAddress?: {
+    /** Unique among every module's person address sections. */
+    id: string;
+    Component: ComponentType<{ address: UserAddress }>;
   }[];
   /**
    * Webhook events the module sends, offered in the webhook editor before
@@ -99,14 +112,28 @@ export type ClientModule = {
   beforeSignOut?: () => Promise<void>;
 };
 
-/** A team's address, as a module's `teamAddress` section gets it. */
-export type TeamAddress = {
+/** What an address section gets in either editor: the address as the form has it. */
+type EditedAddress = {
   mailboxId: string;
   address: string;
   displayName: string;
-  /** A shared inbox, or a mailing list that copies mail to members. */
+  /**
+   * How it delivers: its own mailbox, a mailing list (teams), an alias, or
+   * a forward. The editor's current choice, which may not be saved yet.
+   */
   delivery: MailboxDelivery;
-  teamId: string;
+  /** A forward's outside addresses as the form has them; empty otherwise. */
+  forwardTo: string[];
+};
+
+/** A team's address, as a module's `teamAddress` section gets it. */
+export type TeamAddress = EditedAddress & { teamId: string };
+
+/** A person's address, as a module's `userAddress` section gets it. */
+export type UserAddress = EditedAddress & {
+  userId: string;
+  /** Their primary address, which always keeps its own mailbox. */
+  isPrimary: boolean;
 };
 
 /** The modules built into this app, in the order they were listed. */
