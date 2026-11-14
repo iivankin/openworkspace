@@ -18,6 +18,7 @@ import {
   textWithQuotedContext,
 } from "./outbound-content";
 import { address, replyThreadHeaders } from "./rfc";
+import type { InlineImage } from "./rich-content";
 import type { composeSchema } from "./schemas";
 import {
   copyStoredAttachmentToMessage,
@@ -28,9 +29,15 @@ import {
 
 const DOWNLOAD_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type OutgoingMessageInput = z.infer<typeof composeSchema> & {
+// Stored image references are resolved to `inlineImages` by the routes.
+export type OutgoingMessageInput = Omit<
+  z.infer<typeof composeSchema>,
+  "storedImages"
+> & {
   /** Set by the route from the authenticated session. */
   userId: string;
+  /** Saved images (rich-content.ts) the body uses, sent inline like composer images. */
+  inlineImages?: InlineImage[];
 };
 
 type PreparedAttachment = StoredAttachment & {
@@ -43,7 +50,13 @@ export class ComposerAttachmentLimitError extends Error {}
 
 type OutgoingAttachmentDraft = Pick<
   OutgoingMessageInput,
-  "attachments" | "bodyHtml" | "bodyText" | "mailboxId" | "subject" | "userId"
+  | "attachments"
+  | "bodyHtml"
+  | "bodyText"
+  | "mailboxId"
+  | "subject"
+  | "userId"
+  | "inlineImages"
 >;
 
 export async function discardPreparedObjects(env: Env, storageKeys: string[]) {
@@ -163,18 +176,41 @@ export async function messageIdForRequest(
   return `msg_${await hashToken(`${mailboxId}:${requestId}`)}`;
 }
 
-function loadPreparedComposerAttachments(input: {
+async function loadPreparedComposerAttachments(input: {
   env: Env;
   compose: OutgoingAttachmentDraft;
   storagePrefix: string;
   finalized: boolean;
-}) {
+}): Promise<PreparedAttachment[]> {
   const loadUpload = input.finalized
     ? loadComposerUpload
     : loadComposerUploadMetadata;
 
-  return Promise.all(
-    input.compose.attachments.map(async (file, index) => {
+  const uploads = input.compose.attachments;
+
+  const savedImages = (input.compose.inlineImages ?? []).map(
+    (image, offset) => {
+      const id = `att_${uploads.length + offset + 1}`;
+
+      return {
+        id,
+        sourceObjectKey: image.r2Key,
+        r2Key: `${input.storagePrefix}/attachments/${id}`,
+        filename: image.filename,
+        contentType: image.contentType,
+        size: image.size,
+        contentId: image.contentId,
+        disposition: "inline",
+        delivery: "attached",
+        downloadTokenHash: null,
+        downloadExpiresAt: null,
+        downloadUrl: null,
+      } satisfies PreparedAttachment;
+    }
+  );
+
+  const uploaded = await Promise.all(
+    uploads.map(async (file, index) => {
       try {
         const upload = await loadUpload({
           env: input.env,
@@ -216,6 +252,8 @@ function loadPreparedComposerAttachments(input: {
       }
     })
   );
+
+  return [...uploaded, ...savedImages];
 }
 
 function planOutgoingAttachments(input: {

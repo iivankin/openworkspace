@@ -104,17 +104,18 @@ export const uploadIdSchema = z
   .max(80)
   .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid");
 
+const contentIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid");
+
 export const outboundAttachmentSchema = z
   .object({
     uploadId: uploadIdSchema,
     disposition: z.enum(["attachment", "inline"]).default("attachment"),
-    contentId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(255)
-      .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid")
-      .optional(),
+    contentId: contentIdSchema.optional(),
   })
   .superRefine((attachment, context) => {
     if (attachment.disposition === "inline" && !attachment.contentId) {
@@ -134,8 +135,55 @@ export const outboundAttachmentSchema = z
     }
   });
 
+/** Saved rich content from the composer's editor (rich-content.ts). */
+export const richContentFields = {
+  /** Stored as given; no text and no image deletes the content. */
+  html: z.string().max(20_000),
+  text: z.string().max(10_000),
+  /**
+   * Its `cid:` images: a new composer upload (`uploadId`), or one it already
+   * had, kept under its content id.
+   */
+  images: z
+    .array(
+      z.object({
+        contentId: contentIdSchema,
+        uploadId: uploadIdSchema.optional(),
+      })
+    )
+    .max(10)
+    .default([]),
+  /** The mailbox new images were uploaded through (uploads are per mailbox). */
+  uploadMailboxId: z.string().min(1).max(80).optional(),
+};
+
+export const signatureSchema = z.object({
+  ...richContentFields,
+  useOnNew: z.boolean().default(true),
+  useOnReply: z.boolean().default(true),
+});
+
 export const outboundMessageContentFields = {
   bodyText: z.string().max(500_000).default(""),
+  /**
+   * Appends the signature that applies: the team address's, or the sender's
+   * own for their own mailbox. For API and MCP callers; the web app puts the
+   * signature in its editor instead.
+   */
+  includeSignature: z.boolean().optional(),
+  /**
+   * Saved images (a signature's) the body shows by `cid:`, sent inline
+   * without uploading them again.
+   */
+  storedImages: z
+    .array(
+      z.object({
+        ownerId: z.string().min(1).max(80),
+        contentId: contentIdSchema,
+      })
+    )
+    .max(MAX_COMPOSER_ATTACHMENT_COUNT)
+    .default([]),
   bodyHtml: z.string().max(1_000_000).optional(),
   attachments: z
     .array(outboundAttachmentSchema)

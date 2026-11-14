@@ -1,3 +1,4 @@
+import { useAuth } from "@open-workspace/core/ui";
 import {
   useEffect,
   useEffectEvent,
@@ -25,6 +26,7 @@ import type { RecipientFieldValue } from "./composer-recipients";
 import { useComposerSession } from "./composer-session";
 import { isInlineComposerImage } from "./composer-upload-client";
 import { ReplyToWarning } from "./reply-to-warning";
+import { messageSignatureHtml } from "./signature";
 import type { Mailbox, MessageDetail } from "./types";
 import { useComposeSubmission } from "./use-compose-submission";
 import { useComposerAttachmentPreflight } from "./use-composer-attachment-preflight";
@@ -38,6 +40,7 @@ const EMPTY_CONTENT: ComposerContent = {
   bodyHtml: "",
   bodyText: "",
   inlineAssetIds: [],
+  storedImages: [],
   linkedAssetIds: [],
 };
 
@@ -200,6 +203,19 @@ export function ComposeWindow({
   const { session, snapshot } = useComposerSession(
     mailbox.id,
     forwardedMessage?.attachments
+  );
+
+  const { user } = useAuth();
+
+  // The signature that applies, as editable content; the window opens empty,
+  // so it is only ever added once.
+  // oxlint-disable-next-line react/hook-use-state -- read once, when the editor is created; nothing sets it
+  const [initialHtml] = useState(() =>
+    messageSignatureHtml(
+      mailbox,
+      forwardedMessage ? "reply" : "new",
+      user?.name ?? ""
+    )
   );
 
   const recipients = validateComposerRecipients({
@@ -436,6 +452,7 @@ export function ComposeWindow({
           }}
           onChooseInlineImage={() => inlineFileInput.current?.click()}
           onSubmitShortcut={() => form.current?.requestSubmit()}
+          initialHtml={initialHtml}
           dragging={dropTarget}
           disabled={busy}
         />
