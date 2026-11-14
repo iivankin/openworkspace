@@ -31,6 +31,7 @@ type ComposeSubmissionInput = {
   uploadLimitError: string | null;
   uploadsPending: boolean;
   uploadsFailed: boolean;
+  draftId: string;
   onClose: () => void;
 };
 
@@ -121,10 +122,13 @@ async function prepareComposeSubmission(
     bodyHtml:
       content.bodyText.trim() ||
       content.inlineAssetIds.length ||
-      content.linkedAssetIds.length
+      content.linkedAssetIds.length ||
+      content.storedImages.length
         ? content.bodyHtml
         : undefined,
     uploadedAttachments,
+    storedImages: content.storedImages,
+    draftId: input.draftId,
   };
 
   const command: MailSendDraft = input.forwardedMessage
@@ -180,7 +184,11 @@ function submissionValidationError(input: ComposeSubmissionInput) {
 }
 
 function hasAuthoredContent(content: ComposerContent) {
-  return Boolean(content.bodyText.trim() || content.inlineAssetIds.length);
+  return Boolean(
+    content.bodyText.trim() ||
+    content.inlineAssetIds.length ||
+    content.storedImages.length
+  );
 }
 
 function preflightContext(

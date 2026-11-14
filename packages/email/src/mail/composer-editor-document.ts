@@ -1,12 +1,18 @@
 import type { Editor } from "@tiptap/react";
 
+import type { StoredImageRef } from "../../shared/rich-content";
 import type { ComposerSession } from "./composer-session";
+import { takeStoredImages } from "./rich-content";
 
 export type ComposerContent = {
   bodyHtml: string;
+  /** The editor's own HTML, asset references included, which a draft keeps. */
+  editorHtml: string;
   bodyText: string;
   inlineAssetIds: string[];
   linkedAssetIds: string[];
+  /** Saved images (rich-content.ts) the body shows, sent by reference. */
+  storedImages: StoredImageRef[];
 };
 
 /**
@@ -17,8 +23,9 @@ export function composerContent(
   editor: Editor,
   session: ComposerSession
 ): ComposerContent {
+  const editorHtml = editor.getHTML();
   const wrapper = document.createElement("div");
-  wrapper.innerHTML = editor.getHTML();
+  wrapper.innerHTML = editorHtml;
   const inlineAssetIds: string[] = [];
   const linkedAssetIds: string[] = [];
 
@@ -56,10 +63,14 @@ export function composerContent(
     reference.remove();
   }
 
+  const storedImages = takeStoredImages(wrapper);
+
   return {
     bodyHtml: wrapper.innerHTML,
+    editorHtml,
     bodyText: editor.getText({ blockSeparator: "\n\n" }),
     inlineAssetIds,
     linkedAssetIds,
+    storedImages,
   };
 }

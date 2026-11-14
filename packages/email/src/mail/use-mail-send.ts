@@ -3,6 +3,7 @@ import type { SuccessfulResponse } from "@open-workspace/core/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { ReplyActionMode } from "../../shared/mail";
+import type { StoredImageRef } from "../../shared/rich-content";
 import { mailApi } from "../lib/mail-api";
 import type { SubmittedComposerUpload } from "./composer-session";
 import { scheduleMailboxRefresh } from "./mail-query-cache";
@@ -17,6 +18,10 @@ type MessageContent = {
   bodyText: string;
   bodyHtml?: string;
   uploadedAttachments?: SubmittedComposerUpload[];
+  /** Saved images the body shows by `cid:`, e.g. the signature's. */
+  storedImages?: StoredImageRef[];
+  /** The composer's draft, which the server deletes once the message is accepted. */
+  draftId?: string;
 };
 
 type MailSendInput =
@@ -85,6 +90,8 @@ export function useMailSend() {
         bodyText: input.bodyText,
         bodyHtml: input.bodyHtml,
         attachments: input.uploadedAttachments ?? [],
+        storedImages: input.storedImages ?? [],
+        draftId: input.draftId,
       };
 
       if (input.kind === "reply") {

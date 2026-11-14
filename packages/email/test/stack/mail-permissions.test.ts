@@ -444,6 +444,69 @@ describe("read-only mailbox access", () => {
       await mailbox.getConversationSnapshot("conv_visible")
     ).not.toBeNull();
 
+    // A team inbox's signature is for people who manage teams.
+    const signatureCalls = await Promise.all(
+      ["GET", "PUT"].map((method) =>
+        worker.fetch(
+          new Request(
+            `http://example.test/api/mail/team-signatures/${mailboxId}`,
+            {
+              method,
+              headers: { cookie, "content-type": "application/json" },
+              body:
+                method === "PUT"
+                  ? JSON.stringify({ html: "<p>Reader</p>", text: "Reader" })
+                  : undefined,
+            }
+          )
+        )
+      )
+    );
+
+    expect(signatureCalls.map((response) => response.status)).toEqual([
+      403, 403,
+    ]);
+    await Promise.all(signatureCalls.map((response) => response.json()));
+
+    expect(
+      await env.DB.prepare("SELECT count(*) AS count FROM signatures").first()
+    ).toEqual({ count: 0 });
+
+    // Drafts become messages, so they need send access too.
+    const saveDraft = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/drafts/drf_readonly1?mailboxId=${mailboxId}`,
+        {
+          method: "PUT",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ expectedVersion: 0, kind: "compose" }),
+        }
+      )
+    );
+
+    expect(saveDraft.status).toBe(403);
+    await saveDraft.json();
+
+    const listDrafts = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/drafts?mailboxId=${mailboxId}`,
+        { headers: { cookie } }
+      )
+    );
+
+    expect(listDrafts.status).toBe(403);
+    await listDrafts.json();
+
+    const draftFile = await worker.fetch(
+      new Request(
+        `http://example.test/api/mail/drafts/files/upl_${"0".repeat(32)}?mailboxId=${mailboxId}`,
+        { headers: { cookie } }
+      )
+    );
+
+    expect(draftFile.status).toBe(403);
+    await draftFile.json();
+
     const compose = await worker.fetch(
       new Request("http://example.test/api/mail/messages", {
         method: "POST",

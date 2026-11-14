@@ -104,17 +104,18 @@ export const uploadIdSchema = z
   .max(80)
   .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid");
 
+const contentIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid");
+
 export const outboundAttachmentSchema = z
   .object({
     uploadId: uploadIdSchema,
     disposition: z.enum(["attachment", "inline"]).default("attachment"),
-    contentId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(255)
-      .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid")
-      .optional(),
+    contentId: contentIdSchema.optional(),
   })
   .superRefine((attachment, context) => {
     if (attachment.disposition === "inline" && !attachment.contentId) {
@@ -134,8 +135,58 @@ export const outboundAttachmentSchema = z
     }
   });
 
+/** Saved rich content from the composer's editor (rich-content.ts). */
+export const richContentFields = {
+  /** Stored as given; no text and no image deletes the content. */
+  html: z.string().max(20_000),
+  text: z.string().max(10_000),
+  /**
+   * Its `cid:` images: a new composer upload (`uploadId`), or one it already
+   * had, kept under its content id.
+   */
+  images: z
+    .array(
+      z.object({
+        contentId: contentIdSchema,
+        uploadId: uploadIdSchema.optional(),
+      })
+    )
+    .max(10)
+    .default([]),
+  /** The mailbox new images were uploaded through (uploads are per mailbox). */
+  uploadMailboxId: z.string().min(1).max(80).optional(),
+};
+
+export const signatureSchema = z.object({
+  ...richContentFields,
+  useOnNew: z.boolean().default(true),
+  useOnReply: z.boolean().default(true),
+});
+
+/** Saved images (a signature's) a body shows by `cid:`, by owner and content id. */
+const storedImagesSchema = z
+  .array(
+    z.object({
+      ownerId: z.string().min(1).max(80),
+      contentId: contentIdSchema,
+    })
+  )
+  .max(MAX_COMPOSER_ATTACHMENT_COUNT)
+  .default([]);
+
 export const outboundMessageContentFields = {
   bodyText: z.string().max(500_000).default(""),
+  /**
+   * Appends the signature that applies: the team address's, or the sender's
+   * own for their own mailbox. For API and MCP callers; the web app puts the
+   * signature in its editor instead.
+   */
+  includeSignature: z.boolean().optional(),
+  /**
+   * Saved images (a signature's) the body shows by `cid:`, sent inline
+   * without uploading them again.
+   */
+  storedImages: storedImagesSchema,
   bodyHtml: z.string().max(1_000_000).optional(),
   attachments: z
     .array(outboundAttachmentSchema)
@@ -172,8 +223,14 @@ export const outboundContentFields = {
   ...outboundMessageContentFields,
 };
 
+export const draftIdSchema = z
+  .string()
+  .regex(/^drf_[A-Za-z0-9-]{8,64}$/u, "Draft id is invalid");
+
 const outboundRequestFields = {
   requestId: z.uuid(),
+  /** The sender's draft of this message, deleted once it is accepted. */
+  draftId: draftIdSchema.optional(),
   ...outboundContentFields,
 };
 
@@ -318,3 +375,59 @@ export const unsubscribeSchema = z.object({
 export const bulkReportSchema = z.object({
   conversationIds: z.array(z.string().trim().min(1).max(255)).min(1).max(100),
 });
+
+/** Addresses as typed: a draft may hold ones that aren't valid yet. */
+const draftAddressesSchema = z
+  .array(z.string().trim().min(1).max(320))
+  .max(MAX_MAIL_RECIPIENTS)
+  .default([]);
+
+const draftReferenceSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .nullable()
+  .default(null);
+
+/** A composer file a draft keeps, named by its upload; the server adds the rest. */
+const draftAttachmentsSchema = z
+  .array(z.object({ assetId: z.uuid() }).and(outboundAttachmentSchema))
+  .max(MAX_COMPOSER_ATTACHMENT_COUNT)
+  .default([])
+  .refine(
+    (attachments) =>
+      new Set(attachments.map((file) => file.uploadId)).size ===
+      attachments.length,
+    { message: "Duplicate attachment uploads are not allowed" }
+  );
+
+// A draft row stays well under the Durable Object's 2 MB value limit even
+// when every character takes three UTF-8 bytes.
+export const saveDraftSchema = z
+  .object({
+    /** The version this save is based on; 0 creates the draft. */
+    expectedVersion: z.number().int().nonnegative(),
+    kind: z.enum(["compose", "reply", "forward"]),
+    sourceEmailId: draftReferenceSchema,
+    conversationId: draftReferenceSchema,
+    replyMode: z.enum(replyActionModes).nullable().default(null),
+    to: draftAddressesSchema,
+    cc: draftAddressesSchema,
+    bcc: draftAddressesSchema,
+    replyTo: z.string().trim().max(320).nullable().default(null),
+    subject: z.string().max(998).default(""),
+    bodyText: z.string().max(150_000).default(""),
+    bodyHtml: z.string().max(200_000).nullable().default(null),
+    editorHtml: z.string().max(200_000).nullable().default(null),
+    attachments: draftAttachmentsSchema,
+    /** Signature images the HTML shows; the draft keeps its own copies. */
+    storedImages: storedImagesSchema,
+  })
+  .refine((value) => value.kind === "compose" || value.sourceEmailId, {
+    path: ["sourceEmailId"],
+    message: "Replies and forwards name their message",
+  })
+  .refine((value) => value.kind !== "reply" || value.replyMode, {
+    path: ["replyMode"],
+    message: "Replies name their reply mode",
+  });

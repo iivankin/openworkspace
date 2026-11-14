@@ -24,6 +24,15 @@ Under **Teams** you create team addresses. Each one is either:
 - a mailing list, which copies each message into every member's primary
   mailbox.
 
+Each shared inbox can have one signature, set in its address's editor under
+**Teams** and saved with **Save address**: everyone sending from it gets the
+same one, with `{name}` replaced by the sender's name. A shared inbox without
+one adds no signature. Your own signature, under **Settings → Signature**,
+goes on mail from your own addresses. Both can hold images and can be left
+off new messages or off replies and forwards. A new message, reply or forward
+opens with the signature already in it, so you can change or delete it for
+that message. API callers ask for it with `includeSignature: true`.
+
 The Everyone team includes everyone, at `all@`. You also use teams to choose
 who can sign in to each [single sign-on app](sso.md).
 
@@ -70,6 +79,26 @@ or moving it to Inbox from the app or a mail app), it goes back into that
 conversation and the conversation returns to Inbox, unless that conversation
 is in Trash or Spam; then it stays on its own in Inbox.
 
+## Drafts
+
+What you write is saved as a draft a couple of seconds after you stop typing,
+and again when you close the composer, leave the conversation, switch tabs or
+close the page; leaving while a save is still pending asks first. A composer
+holding nothing but your signature isn't saved. Drafts are yours alone, even
+in a shared mailbox, and wait in the **Drafts** folder after Sent: a new
+message or forward opens in the composer, a reply opens its conversation with
+the reply box as you left it. Other folders show **Draft** next to a
+conversation you started a reply in. A conversation keeps one reply draft:
+replying to another message in it asks before discarding the one you started.
+The open composer is in the address (`?compose=…`), so reloading reopens it.
+Sending deletes the draft; so does the trash button in the composer, **×** on
+a reply, or selecting drafts in Drafts and discarding them. Drafts keep their
+attachments, inline images and signature images for as long as the draft
+exists, though uploads not yet finished when you close the composer are
+dropped. If the same draft is open in two windows, only the first one to save
+keeps saving. Mail apps see the same drafts in their Drafts mailbox (see
+[MCP and JMAP](mcp-and-jmap.md)).
+
 ## Attachments
 
 PDFs open in a built-in viewer. Word, Excel, PowerPoint, OpenDocument and RTF
@@ -89,15 +118,16 @@ simply expires keeps them.
 
 ## Settings
 
-| Page           | What it holds                                                                                 |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| Profile        | Your profile photo (JPEG, PNG, WebP or GIF, up to 2 MB)                                       |
-| Appearance     | Light, dark, or your device's theme                                                           |
-| Sessions       | Where you're signed in. Revoke a session to sign that browser out and stop its notifications. |
-| MCP            | How to connect an AI agent ([MCP and JMAP](mcp-and-jmap.md))                                  |
-| Connected apps | The apps you approved ([MCP and JMAP](mcp-and-jmap.md#connected-apps))                        |
-| Notifications  | Push notifications on this device, and which mailboxes send them                              |
-| Mail apps      | The address for mail apps ([MCP and JMAP](mcp-and-jmap.md#connect-a-jmap-mail-client))        |
+| Page           | What it holds                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------ |
+| Profile        | Your profile photo (JPEG, PNG, WebP or GIF, up to 2 MB)                                                |
+| Appearance     | Light, dark, or your device's theme                                                                    |
+| Sessions       | Where you're signed in. Revoke a session to sign that browser out and stop its notifications.          |
+| MCP            | How to connect an AI agent ([MCP and JMAP](mcp-and-jmap.md))                                           |
+| Connected apps | The apps you approved ([MCP and JMAP](mcp-and-jmap.md#connected-apps))                                 |
+| Notifications  | Push notifications on this device, and which mailboxes send them                                       |
+| Signature      | Your signature for mail from your own addresses, and whether new messages, replies and forwards get it |
+| Mail apps      | The address for mail apps ([MCP and JMAP](mcp-and-jmap.md#connect-a-jmap-mail-client))                 |
 
 ## Administration
 
