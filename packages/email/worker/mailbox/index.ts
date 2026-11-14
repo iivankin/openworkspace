@@ -15,6 +15,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -67,6 +68,7 @@ import {
   EmailAiClassificationError,
   MAILBOX_AI_MAX_ATTEMPTS,
 } from "../mail/ai-classification";
+import { keysAwaitingArchive, sendArchived } from "../mail/archive";
 import { classificationSignals } from "../mail/classification-signals";
 import type { ClassificationSignals } from "../mail/classification-signals";
 import { deliveryFacts } from "../mail/delivery-facts";
@@ -181,6 +183,9 @@ const COUNTS_VERSION_KEY = "inboxCountsVersion";
 const INBOUND_ALARM_BATCH_SIZE = 1;
 const OBJECT_DELETION_ALARM_BATCH_SIZE = 100;
 const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
+
+/** A raw copy not yet in the mail archive waits for the hourly archive retry. */
+const ARCHIVE_WAIT_MS = 60 * 60 * 1000;
 const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
 
 /** Attempts a delivery may end without an outcome (alarm killed) before it is stored unparsed. */
@@ -1319,6 +1324,76 @@ export class MailboxDO extends DurableObject<Env> {
     }
 
     return moved;
+  }
+
+  /**
+   * A page of messages in id order for a backup snapshot: up to `limit`
+   * rows with their place, read state and stored hash, cut after the
+   * `newLimit`-th message with no hash, whose full rows come along to be
+   * read and stored. `more` is whether messages follow the page.
+   */
+  listBackupEmails(afterId: string | null, limit: number, newLimit: number) {
+    const page = this.db
+      .select({
+        id: emails.id,
+        conversationId: emails.conversationId,
+        direction: emails.direction,
+        subject: emails.subject,
+        timelineAt: emails.timelineAt,
+        backupSha256: emails.backupSha256,
+        mailboxState: conversations.mailboxState,
+        folderName: folders.name,
+        seen: sql<number>`exists (
+          select 1 from ${emailReadStates}
+          where ${emailReadStates.emailId} = ${emails.id}
+        )`.mapWith(Boolean),
+      })
+      .from(emails)
+      .innerJoin(conversations, eq(conversations.id, emails.conversationId))
+      .leftJoin(folders, eq(folders.id, conversations.folderId))
+      .where(afterId ? gt(emails.id, afterId) : undefined)
+      .orderBy(asc(emails.id))
+      .limit(limit + 1)
+      .all();
+
+    let more = page.length > limit;
+    let rows = page.slice(0, limit);
+    const unknown = rows.filter((row) => !row.backupSha256);
+    const cut = unknown[newLimit - 1];
+
+    if (cut && unknown.length > newLimit) {
+      rows = rows.slice(0, rows.indexOf(cut) + 1);
+      more = true;
+    }
+
+    const ids = rows.flatMap((row) => (row.backupSha256 ? [] : [row.id]));
+    const full: Email[] = [];
+
+    // A statement binds at most 100 parameters.
+    for (let index = 0; index < ids.length; index += 90) {
+      full.push(
+        ...this.db
+          .select()
+          .from(emails)
+          .where(inArray(emails.id, ids.slice(index, index + 90)))
+          .all()
+      );
+    }
+
+    return { rows, full, more };
+  }
+
+  /** Records the hashes of messages a backup stored. */
+  setBackupHashes(hashes: { id: string; sha256: string }[]) {
+    this.ctx.storage.transactionSync(() => {
+      for (const { id, sha256 } of hashes) {
+        this.db
+          .update(emails)
+          .set({ backupSha256: sha256 })
+          .where(eq(emails.id, id))
+          .run();
+      }
+    });
   }
 
   getEmail(id: string) {
@@ -3829,8 +3904,24 @@ export class MailboxDO extends DurableObject<Env> {
         .run();
     }
 
+    // Raw copies the mail archive doesn't have yet stay until it does.
+    const awaitingArchive = await keysAwaitingArchive(
+      this.bindings,
+      objectKeys.filter((key) => !referencedObjectKeys.has(key))
+    ).catch(() => new Set(objectKeys));
+
+    for (const key of awaitingArchive) {
+      this.db
+        .update(pendingObjectDeletions)
+        .set({ nextAttemptAt: new Date(now + ARCHIVE_WAIT_MS) })
+        .where(eq(pendingObjectDeletions.objectKey, key))
+        .run();
+    }
+
     const deletableJobs = jobs.filter(
-      (job) => !referencedObjectKeys.has(job.objectKey)
+      (job) =>
+        !referencedObjectKeys.has(job.objectKey) &&
+        !awaitingArchive.has(job.objectKey)
     );
 
     if (!deletableJobs.length) return;
@@ -3958,7 +4049,16 @@ export class MailboxDO extends DurableObject<Env> {
     }
 
     try {
-      const result = await this.bindings.EMAIL.send(delivery);
+      const result = await sendArchived(
+        this.bindings,
+        {
+          id: message.id,
+          mailboxId: this.state.id.name ?? "unknown-mailbox",
+          date: message.timelineAt,
+        },
+        delivery
+      );
+
       this.updateTransport(message.id, {
         state: "submitted",
         messageIdHeader: result.messageId,
