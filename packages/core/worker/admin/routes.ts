@@ -73,7 +73,10 @@ import {
 } from "../webhooks/service";
 import { brandingAdminRoutes } from "../workspace-branding";
 import { adminAccessGuard } from "./access-guard";
-import { mailboxAdminRoutes } from "./mailbox-routes";
+import {
+  announceMailboxAccessChanged,
+  mailboxAdminRoutes,
+} from "./mailbox-routes";
 import { rejectDeploymentManaged } from "./managed-apps";
 import { mcpClientAdminRoutes } from "./mcp-client-routes";
 import {
@@ -359,6 +362,9 @@ export const adminRoutes = new Hono<AppEnv>()
           delivery: mailboxes.delivery,
           listPosting: mailboxes.listPosting,
           isPrimary: mailboxes.isPrimary,
+          aliasOf: mailboxes.aliasOf,
+          forwardTo: mailboxes.forwardTo,
+          catchAll: mailboxes.catchAll,
           domain: mailboxes.domain,
           createdByUserId: mailboxes.createdByUserId,
           createdAt: mailboxes.createdAt,
@@ -753,6 +759,9 @@ export const adminRoutes = new Hono<AppEnv>()
         alongside: personalMailboxUpdate ? [personalMailboxUpdate] : [],
         defer: (task) => c.executionCtx.waitUntil(task),
       });
+      await announceMailboxAccessChanged(c.env, (task) =>
+        c.executionCtx.waitUntil(task)
+      );
     } else if (personalMailboxUpdate) {
       await personalMailboxUpdate;
     }

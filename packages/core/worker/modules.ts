@@ -101,8 +101,29 @@ export type WorkspaceModule = {
     (env: Env, source: ModuleWebhookSource) => Promise<object>
   >;
   hooks?: {
-    /** An address was deleted; remove what the module stored for it. */
+    /**
+     * An address was created or changed, e.g. a forward's destinations. Runs
+     * after the change is stored; a failure is logged, not undone.
+     */
+    mailboxSaved?: (env: Env, mailboxId: string) => Promise<void>;
+    /**
+     * An address was deleted; remove what the module stored for it. Deleting
+     * a mailbox deletes its aliases first, and this runs for each of them.
+     */
     mailboxDeleted?: (env: Env, mailboxId: string) => Promise<void>;
+    /**
+     * Someone may have lost access to a mailbox: a person was disabled or
+     * taken off a team, a team's members or send rights changed, or a team
+     * address moved to another team. Runs after the change is stored; a
+     * failure is logged, not undone. Check what the module keeps per person
+     * against `mailboxAccess` (`canSend`) and `users.status`: a disabled
+     * person keeps their rows there. `defer` is the request's `waitUntil`,
+     * for `deleteMailboxAddress`.
+     */
+    mailboxAccessChanged?: (
+      env: Env,
+      defer: (task: Promise<unknown>) => void
+    ) => Promise<void>;
     /**
      * One browser session ended on purpose: the person or an administrator
      * revoked it, or it signed out. Returns the statements that drop what

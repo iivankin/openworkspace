@@ -125,8 +125,40 @@ const ownNotes = new Hono<AppEnv>()
   routes with `requirePermission(id)`, under `/api/admin/<section>`.
 - A `teamAddress` section on `ClientModule` adds settings to a team's address
   under **Administration → Teams**, such as a shared inbox's signature. It
-  saves through your own routes; guard them with
-  `requirePermission("manage_teams")`.
+  has no save button of its own: call `useAddressSection({ dirty, save })`
+  from `@open-workspace/core/ui`. "Save address" is enabled when the address
+  or any section is `dirty`. It saves the address first, then calls `save`
+  for each dirty section, and closes the editor only if all of them succeed.
+  If a `save` throws, its message is shown and the editor stays open. `save`
+  goes through your own routes; guard them with
+  `requirePermission("manage_teams")`. The section gets the form's current
+  `delivery` (and a forward's `forwardTo`), so it can hide as soon as the
+  delivery changes: unmount the component that calls `useAddressSection`,
+  and it stops taking part.
+- A `userAddress` section does the same for a person's address under
+  **Administration → People**; guard its routes with
+  `requirePermission("manage_people")`.
+- An address delivers as `inbox` (its own mailbox), `list` (a team's mailing
+  list), `alias` (into the mailbox `aliasOf`) or `forward` (to the outside
+  addresses `forwardTo`), and an inbox may be its domain's `catchAll`.
+  `hooks.mailboxSaved` runs after an address is created or changed, and
+  `hooks.mailboxDeleted` after one is deleted. Deleting a mailbox deletes its
+  aliases first, so both run for each of them.
+- Don't write `mailboxes` yourself. `createMailboxAddress` and
+  `deleteMailboxAddress` from `@open-workspace/core/module` create and delete
+  an address the way the admin API does: they check the domain, that the
+  address is free and that its delivery is valid, send the `mailbox.created`
+  and `mailbox.deleted` webhooks and run the hooks above. Who may create the
+  address is yours to check. An alias gets the `ownerUserId` or `teamId` of
+  the mailbox it delivers into, and `createdByUserId` names the person it was
+  made for.
+- `hooks.mailboxAccessChanged` runs after someone may have lost access to a
+  mailbox: a person was disabled or taken off a team, a team's members or
+  send rights changed, or a team address moved to another team. If the module
+  keeps something per person and mailbox, such as an alias made for them,
+  check it against `mailboxAccess` (`canSend`) and `users.status` (a disabled
+  person keeps their rows in `mailboxAccess`) and remove what no longer holds.
+  Pass the hook's `defer` to `deleteMailboxAddress`.
 - Register MCP tools through `tool(scope)`, and implement them by calling your
   own routes through `api`, so a token only sees what its scopes allow.
 - Declare webhook events once in `shared/`, on both the server and client
