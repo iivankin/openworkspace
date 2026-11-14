@@ -41,6 +41,7 @@ import {
 } from "./access";
 import type { MailboxListRow } from "./access";
 import { translateEmailSegments } from "./ai-translation";
+import { autoReplyRoutes } from "./auto-reply-routes";
 import { BIMI_LOGO_HEADERS, bimiLogoPath, bimiObjectKey } from "./bimi";
 import {
   decodeConversationCursor,
@@ -68,12 +69,13 @@ import {
 import {
   OutgoingContextError,
   resolveForwardContext,
+  mailboxAliases,
   resolveReplyContext,
 } from "./outgoing-context";
 import { participantLabels } from "./participants";
 import { signR2GetUrl } from "./r2-presigned-urls";
 import { signRemoteToken } from "./remote-token";
-import { buildReplyPlan } from "./reply-plan";
+import { buildReplyPlan, replyAlias } from "./reply-plan";
 import { mailSafetyRoutes } from "./safety-routes";
 import {
   attachmentPreflightSchema,
@@ -98,6 +100,8 @@ import {
 import { cachedWorkspaceIdentity, spamhausDqsKey } from "./security-settings";
 import type { WorkspaceIdentity } from "./security-settings";
 import { storedSenderIntel } from "./sender-intel";
+import { signatureRoutes } from "./signature-routes";
+import { withSignature } from "./signatures";
 import {
   createComposerUploadIntent,
   discardComposerUploads,
@@ -356,10 +360,33 @@ function outgoingFailure(c: Parameters<typeof apiError>[0], cause: unknown) {
 export function mailboxListView(rows: MailboxListRow[]) {
   return {
     mailboxes: rows.map(
-      ({ ownerUserId, isPrimary: _isPrimary, ...mailbox }) => ({
-        ...mailbox,
-        kind: mailboxKind(ownerUserId),
-      })
+      ({
+        ownerUserId,
+        isPrimary: _isPrimary,
+        signatureUserId,
+        signatureMailboxId,
+        signatureHtml,
+        signatureUseOnNew,
+        signatureUseOnReply,
+        ...mailbox
+      }) => {
+        const signatureOwnerId = signatureUserId ?? signatureMailboxId;
+
+        return {
+          ...mailbox,
+          kind: mailboxKind(ownerUserId),
+          /** The signature sending from here adds (signatures.ts), if any. */
+          signature:
+            signatureOwnerId && signatureHtml !== null
+              ? {
+                  ownerId: signatureOwnerId,
+                  html: signatureHtml,
+                  useOnNew: signatureUseOnNew ?? true,
+                  useOnReply: signatureUseOnReply ?? true,
+                }
+              : null,
+        };
+      }
     ),
   };
 }
@@ -928,21 +955,23 @@ export const mailRoutes = new Hono<AppEnv>()
         ...new Set(view.readStates.map((readState) => readState.userId)),
       ].filter((userId) => userId !== currentUserId);
 
-      const [readers, [identity, workspaceBlocks], bodies] = await Promise.all([
-        otherReaderIds.length
-          ? timed(c, "d1", "readers", () =>
-              listMailboxUsersByIds(c.env.DB, mailboxId, otherReaderIds)
+      const [readers, [identity, workspaceBlocks], bodies, aliases] =
+        await Promise.all([
+          otherReaderIds.length
+            ? timed(c, "d1", "readers", () =>
+                listMailboxUsersByIds(c.env.DB, mailboxId, otherReaderIds)
+              )
+            : [],
+          workspace,
+          Promise.all(
+            view.messages.map((stored) =>
+              stored.bodyHtmlR2Key
+                ? readStoredBody(c, stored.bodyHtmlR2Key)
+                : null
             )
-          : [],
-        workspace,
-        Promise.all(
-          view.messages.map((stored) =>
-            stored.bodyHtmlR2Key
-              ? readStoredBody(c, stored.bodyHtmlR2Key)
-              : null
-          )
-        ),
-      ]);
+          ),
+          timed(c, "d1", "aliases", () => mailboxAliases(c.env.DB, mailboxId)),
+        ]);
 
       /** One proxy token per remote image URL in the HTML (remote-token.ts). */
       const remoteTokens = async (bodyHtml: string) =>
@@ -1015,7 +1044,8 @@ export const mailRoutes = new Hono<AppEnv>()
           return {
             ...toMessageDetail(
               email,
-              access.address,
+              // Mail that came through an alias is answered from it.
+              replyAlias(email, aliases)?.address ?? access.address,
               identity,
               view.history,
               safety,
@@ -1656,14 +1686,22 @@ export const mailRoutes = new Hono<AppEnv>()
     oauthScope(MAIL_SEND_SCOPE),
     zValidator("json", composeSchema),
     async (c) => {
-      const input = c.req.valid("json");
-      const access = await accessibleMailbox(c, input.mailboxId, "send");
+      const body = c.req.valid("json");
+      const access = await accessibleMailbox(c, body.mailboxId, "send");
 
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Send access is required");
       }
 
       try {
+        const input = await withSignature({
+          env: c.env,
+          sender: c.get("user"),
+          mailbox: access,
+          kind: "new",
+          message: body,
+        });
+
         const submission = await submitOutgoing({
           env: c.env,
           requestUrl: c.req.url,
@@ -1694,14 +1732,22 @@ export const mailRoutes = new Hono<AppEnv>()
     oauthScope(MAIL_SEND_SCOPE),
     zValidator("json", replySchema),
     async (c) => {
-      const input = c.req.valid("json");
-      const access = await accessibleMailbox(c, input.mailboxId, "send");
+      const body = c.req.valid("json");
+      const access = await accessibleMailbox(c, body.mailboxId, "send");
 
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Send access is required");
       }
 
       try {
+        const input = await withSignature({
+          env: c.env,
+          sender: c.get("user"),
+          mailbox: access,
+          kind: "reply",
+          message: body,
+        });
+
         const context = await resolveReplyContext({
           env: c.env,
           mailboxId: input.mailboxId,
@@ -1724,6 +1770,7 @@ export const mailRoutes = new Hono<AppEnv>()
             bodyText: input.bodyText,
             bodyHtml: input.bodyHtml,
             attachments: input.attachments,
+            inlineImages: input.inlineImages,
           },
           conversationId: context.detached
             ? createId("conv")
@@ -1731,8 +1778,9 @@ export const mailRoutes = new Hono<AppEnv>()
           related: context.source,
           forwarded: null,
           includeRelatedContext: context.includeRelatedContext,
-          fromAddress: access.address,
-          fromName: access.displayName,
+          // Mail that came through an alias is answered from that alias.
+          fromAddress: context.from?.address ?? access.address,
+          fromName: context.from?.displayName ?? access.displayName,
           defer: (task) => c.executionCtx.waitUntil(task),
         });
 
@@ -1750,14 +1798,22 @@ export const mailRoutes = new Hono<AppEnv>()
     oauthScope(MAIL_SEND_SCOPE),
     zValidator("json", forwardSchema),
     async (c) => {
-      const input = c.req.valid("json");
-      const access = await accessibleMailbox(c, input.mailboxId, "send");
+      const body = c.req.valid("json");
+      const access = await accessibleMailbox(c, body.mailboxId, "send");
 
       if (!access) {
         return apiError(c, 403, "FORBIDDEN", "Send access is required");
       }
 
       try {
+        const input = await withSignature({
+          env: c.env,
+          sender: c.get("user"),
+          mailbox: access,
+          kind: "reply",
+          message: body,
+        });
+
         const context = await resolveForwardContext({
           env: c.env,
           mailboxId: input.mailboxId,
@@ -1790,4 +1846,6 @@ export const mailRoutes = new Hono<AppEnv>()
       }
     }
   )
-  .route("/", mailSafetyRoutes);
+  .route("/", mailSafetyRoutes)
+  .route("/", signatureRoutes)
+  .route("/", autoReplyRoutes);

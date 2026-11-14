@@ -10,6 +10,7 @@ import {
   MAX_CUSTOM_FOLDER_COUNT,
   MAX_MAIL_RECIPIENTS,
   replyActionModes,
+  autoReplyAudiences,
 } from "../../shared/mail";
 import {
   MAX_TRANSLATION_CHARACTERS,
@@ -104,17 +105,18 @@ export const uploadIdSchema = z
   .max(80)
   .regex(/^upl_[a-f0-9]{32}$/u, "Attachment upload id is invalid");
 
+const contentIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid");
+
 export const outboundAttachmentSchema = z
   .object({
     uploadId: uploadIdSchema,
     disposition: z.enum(["attachment", "inline"]).default("attachment"),
-    contentId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(255)
-      .regex(/^[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+$/u, "Content ID is invalid")
-      .optional(),
+    contentId: contentIdSchema.optional(),
   })
   .superRefine((attachment, context) => {
     if (attachment.disposition === "inline" && !attachment.contentId) {
@@ -134,8 +136,98 @@ export const outboundAttachmentSchema = z
     }
   });
 
+/** Saved rich content from the composer's editor (rich-content.ts). */
+export const richContentFields = {
+  /** Stored as given; no text and no image deletes the content. */
+  html: z.string().max(20_000),
+  text: z.string().max(10_000),
+  /**
+   * Its `cid:` images: a new composer upload (`uploadId`), or one it already
+   * had, kept under its content id.
+   */
+  images: z
+    .array(
+      z.object({
+        contentId: contentIdSchema,
+        uploadId: uploadIdSchema.optional(),
+      })
+    )
+    .max(10)
+    .default([]),
+  /** The mailbox new images were uploaded through (uploads are per mailbox). */
+  uploadMailboxId: z.string().min(1).max(80).optional(),
+};
+
+export const signatureSchema = z.object({
+  ...richContentFields,
+  useOnNew: z.boolean().default(true),
+  useOnReply: z.boolean().default(true),
+});
+
+const timestamp = z.iso
+  .datetime({ offset: true })
+  .transform((value) => new Date(value));
+
+/** One of an auto-reply's two messages; kept when switched off. */
+const autoReplyMessageFields = {
+  enabled: z.boolean(),
+  subject: z
+    .string()
+    .trim()
+    .max(998)
+    .nullable()
+    .default(null)
+    .transform((value) => value || null),
+  ...richContentFields,
+};
+
+export const autoReplyFields = {
+  enabled: z.boolean(),
+  startsAt: timestamp.nullable().default(null),
+  endsAt: timestamp.nullable().default(null),
+  replyIntervalDays: z.number().int().min(1).max(30).default(4),
+  /** For senders in the workspace's mail domains. */
+  inside: z.object(autoReplyMessageFields),
+  /** For everyone else, or only people the mailbox has written to. */
+  outside: z.object({
+    ...autoReplyMessageFields,
+    audience: z.enum(autoReplyAudiences).default("everyone"),
+  }),
+};
+
+export const autoReplySchema = z
+  .object(autoReplyFields)
+  .superRefine((value, context) => {
+    if (value.startsAt && value.endsAt && value.endsAt <= value.startsAt) {
+      context.addIssue({
+        code: "custom",
+        path: ["endsAt"],
+        message: "The end must be after the start",
+      });
+    }
+  });
+
 export const outboundMessageContentFields = {
   bodyText: z.string().max(500_000).default(""),
+  /**
+   * Appends the signature that applies: the team address's, or the sender's
+   * own for their own mailbox. For API and MCP callers; the web app puts the
+   * signature in its editor instead.
+   */
+  includeSignature: z.boolean().optional(),
+  /**
+   * Saved images (a signature's) the body shows by `cid:`, sent inline
+   * without uploading them again.
+   */
+  storedImages: z
+    .array(
+      z.object({
+        ownerId: z.string().min(1).max(80),
+        contentId: contentIdSchema,
+      })
+    )
+    .max(MAX_COMPOSER_ATTACHMENT_COUNT)
+    .default([]),
   bodyHtml: z.string().max(1_000_000).optional(),
   attachments: z
     .array(outboundAttachmentSchema)

@@ -24,6 +24,35 @@ Under **Teams** you create team addresses. Each one is either:
 - a mailing list, which copies each message into every member's primary
   mailbox.
 
+Each shared inbox can have one signature, set in its address's editor under
+**Teams** and saved with **Save address**: everyone sending from it gets the
+same one, with `{name}` replaced by the sender's name. A shared inbox without
+one adds no signature. Your own signature, under **Settings → Signature**,
+goes on mail from your own addresses. Both can hold images and can be left
+off new messages or off replies and forwards. A new message, reply or forward
+opens with the signature already in it, so you can change or delete it for
+that message. API callers ask for it with `includeSignature: true`.
+
+### Aliases, forwards and catch-all
+
+An address under **People** or **Teams** can also be:
+
+- an **alias**, which delivers into another mailbox of the same person or
+  team. Replies to mail sent to the alias come from the alias.
+- a **forward**, which sends each message on, unchanged, to up to five
+  outside addresses. Cloudflare emails each new address a link to confirm
+  it, and mail goes only to confirmed ones; the address editor shows which
+  are **Confirmed** and which are **Waiting for confirmation**. Forwarding
+  happens as mail arrives, so it skips mail that fails DMARC and mail from
+  senders blocked for everyone, and never sends mail back to its sender. A
+  message forwarded three times isn't forwarded again. If no destination is
+  confirmed, or every forward fails, the sender gets a bounce.
+
+An address with its own mailbox can be the **catch-all** for its domain (one
+per domain): it also gets mail sent to addresses on that domain that don't
+exist. Mail to `sam+anything@` goes to `sam@` when there's no address
+`sam+anything@` itself. Deleting a mailbox deletes its aliases too.
+
 The Everyone team includes everyone, at `all@`. You also use teams to choose
 who can sign in to each [single sign-on app](sso.md).
 
@@ -89,15 +118,35 @@ simply expires keeps them.
 
 ## Settings
 
-| Page           | What it holds                                                                                 |
-| -------------- | --------------------------------------------------------------------------------------------- |
-| Profile        | Your profile photo (JPEG, PNG, WebP or GIF, up to 2 MB)                                       |
-| Appearance     | Light, dark, or your device's theme                                                           |
-| Sessions       | Where you're signed in. Revoke a session to sign that browser out and stop its notifications. |
-| MCP            | How to connect an AI agent ([MCP and JMAP](mcp-and-jmap.md))                                  |
-| Connected apps | The apps you approved ([MCP and JMAP](mcp-and-jmap.md#connected-apps))                        |
-| Notifications  | Push notifications on this device, and which mailboxes send them                              |
-| Mail apps      | The address for mail apps ([MCP and JMAP](mcp-and-jmap.md#connect-a-jmap-mail-client))        |
+| Page           | What it holds                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------ |
+| Profile        | Your profile photo (JPEG, PNG, WebP or GIF, up to 2 MB)                                                |
+| Appearance     | Light, dark, or your device's theme                                                                    |
+| Sessions       | Where you're signed in. Revoke a session to sign that browser out and stop its notifications.          |
+| MCP            | How to connect an AI agent ([MCP and JMAP](mcp-and-jmap.md))                                           |
+| Connected apps | The apps you approved ([MCP and JMAP](mcp-and-jmap.md#connected-apps))                                 |
+| Notifications  | Push notifications on this device, and which mailboxes send them                                       |
+| Signature      | Your signature for mail from your own addresses, and whether new messages, replies and forwards get it |
+| Auto-reply     | Automatic replies from your own mailboxes while you're away ([Auto-reply](#auto-reply))                |
+| Mail apps      | The address for mail apps ([MCP and JMAP](mcp-and-jmap.md#connect-a-jmap-mail-client))                 |
+
+## Auto-reply
+
+An address with its own mailbox can answer incoming mail automatically, from
+a start to an end you pick, or until turned off. It has two messages, each of
+which can be off: one for people at the workspace's mail domains and one for
+everyone else, or only for people the mailbox has written to. Messages can
+hold images; no signature is added. Each sender gets at most one reply every
+few days (four unless changed).
+
+You set your own under **Settings → Auto-reply**; while it runs, a banner in
+Mail turns it off. A shared inbox's is set in its address's editor under
+**Teams**, and anyone's under **People**, saved with **Save address**. Mail to
+an alias is answered from the alias by its mailbox's auto-reply; mail through
+a plus address or the catch-all is answered too. Copies of mailing list posts,
+mail from other lists, bounces, other automatic replies, calendar mail, and
+mail in Spam or Trash never are. Replies are marked `Auto-Submitted:
+auto-replied` and aren't kept in Sent.
 
 ## Administration
 

@@ -1,12 +1,24 @@
 import { preloadable } from "@open-workspace/core/ui";
-import type { ClientModule } from "@open-workspace/core/ui";
-import { Bell, Mail, MonitorSmartphone, ShieldBan } from "lucide-react";
-import { lazy } from "react";
+import type {
+  ClientModule,
+  TeamAddress,
+  UserAddress,
+} from "@open-workspace/core/ui";
+import {
+  Bell,
+  Mail,
+  MonitorSmartphone,
+  PenLine,
+  Plane,
+  ShieldBan,
+} from "lucide-react";
+import { lazy, Suspense } from "react";
 
 import { MAIL_ROUTE } from "../shared/mail-path";
 import { EMAIL_MODULE } from "../shared/module";
 import { MANAGE_BLOCKED_SENDERS } from "../shared/permissions";
 import { emailWebhookEvents } from "../shared/webhooks";
+import { ForwardDestinations } from "./admin/forward-destinations";
 import { prefetchMail } from "./mail/mail-prefetch";
 import { loadSanitizer } from "./mail/mail-queries";
 import { seedMail } from "./mail/mail-seed";
@@ -25,6 +37,39 @@ const mailBackground = preloadable(() =>
 
 const MailboxRoute = mailboxRoute.Component;
 
+const TeamSignature = lazy(() =>
+  import("./admin/team-signature").then((module) => ({
+    default: module.TeamSignature,
+  }))
+);
+
+// Core renders team address sections without a Suspense boundary of their own.
+function TeamSignatureSection({ address }: { address: TeamAddress }) {
+  return (
+    <Suspense fallback={null}>
+      <TeamSignature address={address} />
+    </Suspense>
+  );
+}
+
+const AddressAutoReply = lazy(() =>
+  import("./admin/address-auto-reply").then((module) => ({
+    default: module.AddressAutoReply,
+  }))
+);
+
+function AddressAutoReplySection({
+  address,
+}: {
+  address: TeamAddress | UserAddress;
+}) {
+  return (
+    <Suspense fallback={null}>
+      <AddressAutoReply address={address} />
+    </Suspense>
+  );
+}
+
 const mail: ClientModule = {
   name: EMAIL_MODULE,
   home: { label: "mail", Component: MailboxRoute },
@@ -39,6 +84,28 @@ const mail: ClientModule = {
       Component: lazy(() =>
         import("./settings/notifications-page").then((module) => ({
           default: module.NotificationsSettings,
+        }))
+      ),
+    },
+    {
+      id: "signature",
+      label: "Signature",
+      description: "Added to messages you send from your own mailboxes.",
+      Icon: PenLine,
+      Component: lazy(() =>
+        import("./settings/signature-page").then((module) => ({
+          default: module.SignatureSettings,
+        }))
+      ),
+    },
+    {
+      id: "auto-reply",
+      label: "Auto-reply",
+      description: "Answer incoming mail automatically while you're away.",
+      Icon: Plane,
+      Component: lazy(() =>
+        import("./settings/auto-reply-page").then((module) => ({
+          default: module.AutoReplySettings,
         }))
       ),
     },
@@ -69,6 +136,16 @@ const mail: ClientModule = {
         }))
       ),
     },
+  ],
+  teamAddress: [
+    { id: "signature", Component: TeamSignatureSection },
+    { id: "auto-reply", Component: AddressAutoReplySection },
+    // A forward's destinations, Confirmed or Waiting, in both address editors.
+    { id: "forward-destinations", Component: ForwardDestinations },
+  ],
+  userAddress: [
+    { id: "auto-reply", Component: AddressAutoReplySection },
+    { id: "forward-destinations", Component: ForwardDestinations },
   ],
   webhookEvents: emailWebhookEvents,
   background: mailBackground.Component,

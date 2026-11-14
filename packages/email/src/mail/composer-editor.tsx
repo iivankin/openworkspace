@@ -27,6 +27,7 @@ import type {
 } from "./composer-session";
 import { ComposerToolbar } from "./composer-toolbar";
 import { isInlineComposerImage } from "./composer-upload-client";
+import { StoredImage } from "./rich-content";
 
 export type { ComposerContent } from "./composer-editor-document";
 
@@ -52,6 +53,12 @@ export const ComposerEditor = forwardRef<
     onSubmitShortcut: () => void;
     dragging: boolean;
     disabled: boolean;
+    /** What the editor opens with, e.g. a saved signature; read once. */
+    initialHtml?: string;
+    /** The editor's accessible name; read once. */
+    label?: string;
+    /** Read once. */
+    placeholder?: string;
   }
 >(function ComposerEditor(
   {
@@ -64,6 +71,9 @@ export const ComposerEditor = forwardRef<
     onSubmitShortcut,
     dragging,
     disabled,
+    initialHtml = "",
+    label = "Message body",
+    placeholder = "Write a message",
   },
   ref
 ) {
@@ -102,11 +112,12 @@ export const ComposerEditor = forwardRef<
         },
         strike: false,
       }),
-      Placeholder.configure({ placeholder: "Write a message" }),
+      Placeholder.configure({ placeholder }),
       // Read once, when the editor is created: pass a stable function.
       ComposerAsset.configure({ session, onAssetsChanged: onAssetsChange }),
+      StoredImage,
     ],
-    content: "",
+    content: initialHtml,
     editorProps: {
       attributes: {
         class: [
@@ -121,7 +132,7 @@ export const ComposerEditor = forwardRef<
           "[&_.is-editor-empty:first-child::before]:pointer-events-none [&_.is-editor-empty:first-child::before]:float-left [&_.is-editor-empty:first-child::before]:h-0 [&_.is-editor-empty:first-child::before]:text-muted-foreground [&_.is-editor-empty:first-child::before]:content-[attr(data-placeholder)]",
         ].join(" "),
         role: "textbox",
-        "aria-label": "Message body",
+        "aria-label": label,
         "aria-multiline": "true",
         "data-composer-editor-content": "",
       },
@@ -213,7 +224,8 @@ export const ComposerEditor = forwardRef<
   });
 
   useEffect(() => {
-    editor.setEditable(!disabled);
+    // Not an edit: no update event, so onChange only follows the person.
+    editor.setEditable(!disabled, false);
   }, [disabled, editor]);
 
   useEffect(

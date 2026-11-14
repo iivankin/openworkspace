@@ -12,7 +12,7 @@
  */
 
 // The contract.
-export type { ClientModule, TeamAddress } from "./modules";
+export type { ClientModule, TeamAddress, UserAddress } from "./modules";
 
 // UI components.
 export * from "./components/ui/alert-dialog";
@@ -23,9 +23,13 @@ export * from "./components/ui/badge";
 
 export * from "./components/ui/button";
 
+export * from "./components/ui/calendar";
+
 export * from "./components/ui/checkbox";
 
 export * from "./components/ui/combobox";
+
+export * from "./components/ui/date-time-picker";
 
 export * from "./components/ui/dialog";
 
@@ -76,6 +80,10 @@ export { AppearanceMenuRow } from "./components/appearance-menu-row";
 export { useWorkspaceBrand, WorkspaceLogo } from "./components/workspace-logo";
 
 // The session and hooks.
+export { useAddressSection } from "./admin/address-sections";
+
+export type { AddressSection } from "./admin/address-sections";
+
 export { useAuth } from "./auth/auth-context";
 
 export { type ConfirmOptions, useConfirm } from "./hooks/use-confirm";
