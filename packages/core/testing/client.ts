@@ -171,6 +171,8 @@ export const hooks = {
     to: string;
     raw: string;
     headers?: [string, string][];
+    /** Destinations Email Routing refuses to forward to. */
+    unverified?: string[];
   }) {
     return callRoute("email", message, emailResult);
   },

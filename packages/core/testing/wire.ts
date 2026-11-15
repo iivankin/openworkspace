@@ -159,6 +159,11 @@ export const emailCall = z.object({
   to: z.string(),
   raw: z.string(),
   headers: headerList.optional(),
+  /**
+   * Destinations Email Routing hasn't verified: `message.forward()` to one
+   * fails, as Cloudflare's does.
+   */
+  unverified: z.array(z.string()).optional(),
 });
 
 export type EmailCall = z.infer<typeof emailCall>;
@@ -169,6 +174,8 @@ export const emailResult = z.object({
   forwarded: z.array(
     z.object({ to: z.string(), headers: headerList.optional() })
   ),
+  /** What the Worker threw; Cloudflare answers the sending server 5xx. */
+  error: z.string().optional(),
 });
 
 export const scheduledCall = z

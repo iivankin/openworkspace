@@ -8,6 +8,7 @@ import {
 import type { AppEnv } from "@open-workspace/core/module";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import type { Context } from "hono";
 
 import { createDestinations, destinationStatuses } from "./email-routing";
 
@@ -38,28 +39,39 @@ export async function addForwardDestinations(env: Env, mailboxId: string) {
 }
 
 /**
- * Whether each of a forward's saved destinations confirmed Cloudflare's
- * email, for the address editor under People or Teams; only people who
- * manage that address see it.
+ * A forward's saved destinations, if the signed-in person manages the
+ * address: null when it doesn't exist, false when they may not manage it.
+ */
+async function managedForward(c: Context<AppEnv>, mailboxId: string) {
+  const address = await forwardAddress(c.env.DB, mailboxId);
+
+  if (!address) return null;
+
+  if (!can(c, address.ownerUserId ? "manage_people" : "manage_teams")) {
+    return false;
+  }
+
+  return address.delivery === "forward" ? (address.forwardTo ?? []) : [];
+}
+
+const notFound = "Address not found";
+const forbidden = "You do not have permission to manage this address";
+
+/**
+ * A forward's saved destinations for the address editor under People or
+ * Teams, which only people who manage that address see: whether each
+ * confirmed Cloudflare's email, or is missing from Email Routing because
+ * adding it failed. Saving the address in the editor adds missing ones
+ * again (POST), so a failure shows there instead of only in the logs.
  */
 export const forwardDestinationRoutes = new Hono<AppEnv>()
   .use("*", requireAuth)
   .get("/:mailboxId", async (c) => {
-    const address = await forwardAddress(c.env.DB, c.req.param("mailboxId"));
+    const forwardTo = await managedForward(c, c.req.param("mailboxId"));
 
-    if (!address) return apiError(c, 404, "NOT_FOUND", "Address not found");
+    if (forwardTo === null) return apiError(c, 404, "NOT_FOUND", notFound);
 
-    if (!can(c, address.ownerUserId ? "manage_people" : "manage_teams")) {
-      return apiError(
-        c,
-        403,
-        "FORBIDDEN",
-        "You do not have permission to manage this address"
-      );
-    }
-
-    const forwardTo =
-      address.delivery === "forward" ? (address.forwardTo ?? []) : [];
+    if (forwardTo === false) return apiError(c, 403, "FORBIDDEN", forbidden);
 
     const statuses = forwardTo.length ? await destinationStatuses(c.env) : null;
 
@@ -69,7 +81,32 @@ export const forwardDestinationRoutes = new Hono<AppEnv>()
       connected: statuses !== null || !forwardTo.length,
       destinations: forwardTo.map((email) => ({
         email,
-        confirmed: statuses?.get(email.toLowerCase()) === "confirmed",
+        /** Null when Email Routing isn't connected. */
+        status: statuses
+          ? (statuses.get(email.toLowerCase()) ?? ("missing" as const))
+          : null,
       })),
     });
+  })
+  .post("/:mailboxId", async (c) => {
+    const forwardTo = await managedForward(c, c.req.param("mailboxId"));
+
+    if (forwardTo === null) return apiError(c, 404, "NOT_FOUND", notFound);
+
+    if (forwardTo === false) return apiError(c, 403, "FORBIDDEN", forbidden);
+
+    try {
+      await createDestinations(c.env, forwardTo);
+    } catch (error) {
+      console.error("Could not add forward destinations", error);
+
+      return apiError(
+        c,
+        502,
+        "BAD_GATEWAY",
+        "Cloudflare didn't add the forward destinations; save again to retry"
+      );
+    }
+
+    return c.json({ ok: true as const });
   });

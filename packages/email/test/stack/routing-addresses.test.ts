@@ -91,6 +91,8 @@ function deliver(input: {
   to: string;
   messageId: string;
   failsDmarc?: boolean;
+  /** Destinations Email Routing refuses, as it does unconfirmed ones. */
+  unverified?: string[];
 }) {
   const from = input.from ?? "client@outside.test";
 
@@ -98,6 +100,7 @@ function deliver(input: {
     from,
     to: input.to,
     raw: rawMessage({ ...input, from }),
+    unverified: input.unverified,
   });
 }
 
@@ -283,7 +286,7 @@ describe("the catch-all", () => {
 });
 
 describe("a forward", () => {
-  it("adds its destinations and forwards only to confirmed ones", async () => {
+  it("adds its destinations and forwards to the ones Email Routing accepts", async () => {
     const routing = fakeEmailRouting();
 
     const forwardId = await createAddress({
@@ -309,23 +312,23 @@ describe("a forward", () => {
     expect(await statuses.json()).toMatchObject({
       connected: true,
       destinations: [
-        { email: "pr@agency.test", confirmed: false },
-        { email: "client@outside.test", confirmed: false },
+        { email: "pr@agency.test", status: "waiting" },
+        { email: "client@outside.test", status: "waiting" },
       ],
     });
 
+    // Email Routing refuses unconfirmed destinations itself; with none left,
+    // the Worker throws and the sender gets a bounce.
     const unconfirmed = await deliver({
       to: "press@example.test",
       messageId: "press-1@x.test",
+      unverified: ["pr@agency.test", "client@outside.test"],
     });
 
-    expect(unconfirmed.rejection).toBe(
-      "press@example.test has no confirmed address to forward to"
+    expect(unconfirmed.error).toBe(
+      "Forwarding mail for press@example.test failed"
     );
     expect(unconfirmed.forwarded).toEqual([]);
-
-    routing.confirm("pr@agency.test");
-    routing.confirm("client@outside.test");
 
     const confirmed = await deliver({
       to: "press@example.test",
@@ -333,6 +336,7 @@ describe("a forward", () => {
     });
 
     // Never back to its sender; the hop count goes along.
+    expect(confirmed.error).toBeUndefined();
     expect(confirmed.rejection).toBeUndefined();
     expect(confirmed.forwarded).toEqual([
       {
@@ -348,6 +352,41 @@ describe("a forward", () => {
     });
 
     expect(failing.forwarded).toEqual([]);
+  });
+
+  it("shows a destination Email Routing lacks, and adds it again", async () => {
+    const routing = fakeEmailRouting();
+
+    const forwardId = await createAddress({
+      address: "media@example.test",
+      displayName: "Media",
+      ownerUserId: null,
+      teamId,
+      delivery: "forward",
+      forwardTo: ["desk@agency.test"],
+    });
+
+    // As if adding it had failed when the address was saved.
+    routing.verified.delete("desk@agency.test");
+
+    const missing = await call(
+      adminCookie,
+      `/api/mail/forward-destinations/${forwardId}`
+    );
+
+    expect(await missing.json()).toMatchObject({
+      destinations: [{ email: "desk@agency.test", status: "missing" }],
+    });
+
+    const retried = await call(
+      adminCookie,
+      `/api/mail/forward-destinations/${forwardId}`,
+      { method: "POST" }
+    );
+
+    expect(retried.status).toBe(200);
+    await retried.body?.cancel();
+    expect(routing.verified.get("desk@agency.test")).toBe(false);
   });
 
   it("shows its destinations only to people who manage the address", async () => {

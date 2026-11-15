@@ -42,7 +42,9 @@ An address under **People** or **Teams** can also be:
 - a **forward**, which sends each message on, unchanged, to up to five
   outside addresses. Cloudflare emails each new address a link to confirm
   it, and mail goes only to confirmed ones; the address editor shows which
-  are **Confirmed** and which are **Waiting for confirmation**. Forwarding
+  are **Confirmed** and which are **Waiting for confirmation**. If
+  Cloudflare couldn't add one, it shows **Not added to Cloudflare**, and
+  **Save address** tries again. Forwarding
   happens as mail arrives, so it skips mail that fails DMARC and mail from
   senders blocked for everyone, and never sends mail back to its sender. A
   message forwarded three times isn't forwarded again. If no destination is

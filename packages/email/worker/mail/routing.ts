@@ -9,7 +9,6 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { headerValues } from "../../shared/mail-headers";
 import { workspaceBlockFor } from "../mailbox/senders";
 import { parseInboundAuthentication } from "./auth-headers";
-import { destinationStatuses } from "./email-routing";
 import { rawHeaderText } from "./inbound";
 import { workspaceBlockPatterns } from "./workspace-safety";
 
@@ -181,9 +180,10 @@ async function forwardRefusal(
 
 /**
  * Forwards a message unchanged through Email Routing, so the original
- * sender stays and its DKIM signature still verifies: only to destinations
- * that confirmed Cloudflare's email, never to the sender itself, and each
- * forward adds one to the hop header.
+ * sender stays and its DKIM signature still verifies: never to the sender
+ * itself, and each forward adds one to the hop header. Email Routing itself
+ * refuses a destination that hasn't confirmed Cloudflare's email, so this
+ * tries every destination and logs the ones it refused.
  */
 export async function forwardInbound(input: {
   env: Env;
@@ -204,16 +204,13 @@ export async function forwardInbound(input: {
   }
 
   const sender = normalizeMailboxAddress(message.from);
-  const statuses = await destinationStatuses(env);
 
   const destinations = input.forwardTo.filter(
-    (destination) =>
-      normalizeMailboxAddress(destination) !== sender &&
-      statuses?.get(destination.toLowerCase()) === "confirmed"
+    (destination) => normalizeMailboxAddress(destination) !== sender
   );
 
   if (!destinations.length) {
-    message.setReject(`${recipient} has no confirmed address to forward to`);
+    message.setReject(`${recipient} has no other address to forward to`);
 
     return;
   }
@@ -226,14 +223,18 @@ export async function forwardInbound(input: {
     )
   );
 
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
-      console.error(`Could not forward mail for ${recipient}`, result.reason);
+      console.error(
+        `Could not forward mail for ${recipient} to ${destinations[index]}`,
+        result.reason
+      );
     }
   }
 
-  // When every forward failed, throwing doesn't make the sending server try
-  // again: Cloudflare answers it 521 5.3.0, and the sender gets a bounce.
+  // When every forward failed (none confirmed, say), throwing doesn't make
+  // the sending server try again: Cloudflare answers it 521 5.3.0, and the
+  // sender gets a bounce.
   if (results.every((result) => result.status === "rejected")) {
     throw new Error(`Forwarding mail for ${recipient} failed`);
   }

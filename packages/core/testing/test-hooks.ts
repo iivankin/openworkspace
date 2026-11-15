@@ -404,7 +404,14 @@ function testHooks(workspace: Handlers, options: TestHookOptions) {
 
       // Inbound mail as Email Routing hands it to the Worker.
       case "email": {
-        const { from, to, raw, headers } = emailCall.parse(input);
+        const {
+          from,
+          to,
+          raw,
+          headers,
+          unverified = [],
+        } = emailCall.parse(input);
+
         let rejection: string | undefined;
 
         const forwarded: { to: string; headers?: [string, string][] }[] = [];
@@ -419,6 +426,12 @@ function testHooks(workspace: Handlers, options: TestHookOptions) {
           rawSize: bytes.byteLength,
           setReject: (reason) => void (rejection = reason),
           forward: (address, extra) => {
+            if (unverified.includes(address)) {
+              return Promise.reject(
+                new Error(`destination address not verified: ${address}`)
+              );
+            }
+
             forwarded.push({
               to: address,
               headers: extra ? [...extra] : undefined,
@@ -429,9 +442,20 @@ function testHooks(workspace: Handlers, options: TestHookOptions) {
           reply: () => Promise.resolve({ messageId: "" }),
         };
 
-        await workspace.email(message, env, context);
+        let error: string | undefined;
 
-        return reply({ rejection, forwarded, background: await settle() });
+        try {
+          await workspace.email(message, env, context);
+        } catch (thrown) {
+          error = thrown instanceof Error ? thrown.message : String(thrown);
+        }
+
+        return reply({
+          rejection,
+          forwarded,
+          error,
+          background: await settle(),
+        });
       }
 
       case "scheduled": {
