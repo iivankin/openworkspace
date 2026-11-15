@@ -65,6 +65,16 @@ function forbidden(c: Context<AppEnv>) {
   );
 }
 
+async function personExists(db: Database, userId: string) {
+  const [person] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  return Boolean(person);
+}
+
 async function teamExists(db: Database, teamId: string) {
   const [team] = await db
     .select({ id: teams.id })
@@ -298,6 +308,11 @@ export async function createMailboxAddress(
 
   if (input.teamId && !(await teamExists(db, input.teamId))) {
     return { status: 400, refusal: "Unknown team" };
+  }
+
+  // The admin route checks the person first; a module's call may not have.
+  if (input.ownerUserId && !(await personExists(db, input.ownerUserId))) {
+    return { status: 400, refusal: "Unknown person" };
   }
 
   const id = createId("mbx");
@@ -554,8 +569,13 @@ export const mailboxAdminRoutes = new Hono<AppEnv>()
 
       await announceMailboxSaved(c.env, mailboxId);
 
-      // Moving a team address moves who may open it.
-      if (input.teamId && input.teamId !== mailbox.teamId) {
+      // Moving a team address moves who may open it, and an address that
+      // stops being a mailbox (now a list, an alias or a forward) has no one
+      // left who may (the mailbox_access view lists only mailboxes).
+      if (
+        (input.teamId && input.teamId !== mailbox.teamId) ||
+        (mailbox.delivery === "inbox" && delivery.delivery !== "inbox")
+      ) {
         await announceMailboxAccessChanged(c.env, (task) =>
           c.executionCtx.waitUntil(task)
         );

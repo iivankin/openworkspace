@@ -174,6 +174,37 @@ describe("a module's addresses", () => {
     expect(await row(aliasId)).toBeNull();
   });
 
+  it("go away when the mailbox they deliver into stops being one", async () => {
+    const desk = await call("/api/admin/mailboxes", {
+      method: "POST",
+      json: {
+        address: "desk@example.test",
+        displayName: "Desk",
+        ownerUserId: null,
+        teamId,
+        delivery: "inbox",
+        listPosting: "workspace",
+      },
+    });
+
+    const deskId = z
+      .object({ mailboxId: z.string() })
+      .parse(desk.body).mailboxId;
+
+    const alias = createdId(
+      await createAlias(deskId, "desk-help@example.test")
+    );
+
+    // A mailing list now: no one opens it, so the module hears of it.
+    const toList = await call(`/api/admin/mailboxes/${deskId}`, {
+      method: "PATCH",
+      json: { displayName: "Desk", delivery: "list" },
+    });
+
+    expect(toList.status).toBe(200);
+    expect(await hooks.call("modules.lostAliases")).toEqual([alias]);
+  });
+
   it("go away when their person loses send access", async () => {
     const teamAlias = createdId(
       await createAlias(teamInboxId, "desk-sam@example.test")

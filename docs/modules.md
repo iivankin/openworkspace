@@ -154,11 +154,15 @@ const ownNotes = new Hono<AppEnv>()
   made for.
 - `hooks.mailboxAccessChanged` runs after someone may have lost access to a
   mailbox: a person was disabled or taken off a team, a team's members or
-  send rights changed, or a team address moved to another team. If the module
-  keeps something per person and mailbox, such as an alias made for them,
-  check it against `mailboxAccess` (`canSend`) and `users.status` (a disabled
-  person keeps their rows in `mailboxAccess`) and remove what no longer holds.
-  Pass the hook's `defer` to `deleteMailboxAddress`.
+  send rights changed, a team address moved to another team, or an address
+  stopped being a mailbox (became a list, an alias or a forward). If the
+  module keeps something per person and mailbox, such as an alias made for
+  them, check it against `mailboxAccess` (`canSend`) and `users.status` (a
+  disabled person keeps their rows in `mailboxAccess`) and remove what no
+  longer holds. `mailboxAccess` lists only mailboxes: for an alias into a
+  team's mailing list, check the person's `teamMembership` of its team
+  instead, or only make aliases into mailboxes. Pass the hook's `defer` to
+  `deleteMailboxAddress`.
 - Register MCP tools through `tool(scope)`, and implement them by calling your
   own routes through `api`, so a token only sees what its scopes allow.
 - Declare webhook events once in `shared/`, on both the server and client
