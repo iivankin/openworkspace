@@ -272,7 +272,11 @@ async function exportMail(env: Env, snapshot: BackupSnapshot) {
     const last = rows.at(-1);
 
     if (more && last) {
-      return JSON.stringify({ ...mailbox, after: last.id });
+      return JSON.stringify({
+        mailbox: mailbox.id,
+        address: mailbox.address,
+        after: last.id,
+      });
     }
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- see above
