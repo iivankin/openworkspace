@@ -26,6 +26,11 @@ type ComposeSubmissionInput = {
   recipients: ValidatedComposerRecipients;
   subject: string;
   content: ComposerContent;
+  /**
+   * Whether the person changed the body: one that still holds only the
+   * prefilled signature has nothing written in it.
+   */
+  edited: boolean;
   editor: RefObject<ComposerEditorHandle | null>;
   activeAssets: readonly ComposerAsset[];
   uploadLimitError: string | null;
@@ -62,7 +67,10 @@ async function prepareComposeSubmission(
 ): Promise<PreparedComposerSubmission> {
   let content = input.editor.current?.content() ?? input.content;
 
-  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+  if (
+    !input.forwardedMessage &&
+    !(input.edited && hasAuthoredContent(content))
+  ) {
     throw new Error("Add text to the message before sending");
   }
 
@@ -87,7 +95,10 @@ async function prepareComposeSubmission(
     content = input.editor.current?.content() ?? content;
   }
 
-  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+  if (
+    !input.forwardedMessage &&
+    !(input.edited && hasAuthoredContent(content))
+  ) {
     throw new Error("Add text to the message before sending");
   }
 
@@ -174,7 +185,10 @@ function submissionValidationError(input: ComposeSubmissionInput) {
   if (!input.mailbox.canSend) return "This mailbox is read-only";
   const content = input.editor.current?.content() ?? input.content;
 
-  if (!input.forwardedMessage && !hasAuthoredContent(content)) {
+  if (
+    !input.forwardedMessage &&
+    !(input.edited && hasAuthoredContent(content))
+  ) {
     return "Add text to the message before sending";
   }
 

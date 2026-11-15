@@ -274,6 +274,8 @@ export function ComposeWindow({
     recipients,
     subject,
     content,
+    // `content` changes only as the person edits.
+    edited: content !== EMPTY_CONTENT,
     editor,
     activeAssets,
     uploadLimitError: attachmentError,

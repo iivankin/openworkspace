@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 
-import { referencedStoredImages } from "../../worker/mail/rich-content";
+import {
+  referencedStoredImages,
+  withoutCidImages,
+} from "../../worker/mail/rich-content";
 import {
   appendSignature,
   signatureOwner,
@@ -114,29 +117,40 @@ describe("referencedStoredImages", () => {
     { ownerId: "usr_a", prefix: "signatures/usr_a/", images: [logo] },
   ];
 
-  it("sends a saved image the body refers to from its stored object", () => {
-    expect(
-      referencedStoredImages(
-        [{ ownerId: "usr_a", contentId: logo.contentId }],
-        sources
-      )
-    ).toEqual([
-      { ...logo, r2Key: "signatures/usr_a/inline-logo@openworkspace.local" },
-    ]);
+  it("sends a saved image the body refers to from its stored object, once", () => {
+    const ref = { ownerId: "usr_a", contentId: logo.contentId };
+
+    expect(referencedStoredImages([ref, ref], sources)).toEqual({
+      images: [
+        { ...logo, r2Key: "signatures/usr_a/inline-logo@openworkspace.local" },
+      ],
+      missing: new Set(),
+    });
   });
 
-  it("refuses an image of content the sender may not use", () => {
-    expect(() =>
+  it("leaves out an image of content the sender may not use, or that is gone", () => {
+    expect(
       referencedStoredImages(
-        [{ ownerId: "usr_b", contentId: logo.contentId }],
+        [
+          { ownerId: "usr_b", contentId: logo.contentId },
+          { ownerId: "usr_a", contentId: "other@openworkspace.local" },
+        ],
         sources
       )
-    ).toThrow("Inline image was not found");
-    expect(() =>
-      referencedStoredImages(
-        [{ ownerId: "usr_a", contentId: "other@openworkspace.local" }],
-        sources
+    ).toEqual({
+      images: [],
+      missing: new Set([logo.contentId, "other@openworkspace.local"]),
+    });
+  });
+});
+
+describe("withoutCidImages", () => {
+  it("removes only the images it names", () => {
+    expect(
+      withoutCidImages(
+        '<p>Hi <img src="cid:gone@x" alt="a"><img alt="b" src="cid:kept@x"></p>',
+        new Set(["gone@x"])
       )
-    ).toThrow("Inline image was not found");
+    ).toBe('<p>Hi <img alt="b" src="cid:kept@x"></p>');
   });
 });

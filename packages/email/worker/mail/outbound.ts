@@ -288,7 +288,13 @@ function planOutgoingAttachments(input: {
   });
 
   const attachments = [...input.uploaded, ...forwardedAttachments];
-  const limitError = composerAttachmentLimitError(attachments);
+
+  // The composer's limits are on what the person attached: saved images
+  // (a signature's), which follow the uploads in `uploaded`, don't count.
+  const limitError = composerAttachmentLimitError([
+    ...input.uploaded.slice(0, input.compose.attachments.length),
+    ...forwardedAttachments,
+  ]);
 
   if (limitError) throw new ComposerAttachmentLimitError(limitError);
 

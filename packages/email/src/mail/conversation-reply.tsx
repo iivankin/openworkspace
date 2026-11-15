@@ -174,6 +174,8 @@ export function ConversationReply({
     action,
     recipients,
     editor,
+    // `content` changes only as the person edits.
+    edited: content !== EMPTY_CONTENT,
     activeAssets,
     uploadLimitError,
     uploadsPending,

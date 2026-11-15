@@ -157,7 +157,9 @@ export function appendRichContent<
 /**
  * The saved images a composed message refers to (its editor inserted them
  * without uploading them again), each from one of `sources`, the content the
- * sender may use; throws for any other.
+ * sender may use, once per image. A reference to an image that isn't there
+ * (the signature changed since the editor opened, or it is someone else's)
+ * is left out, and its content id returned in `missing`.
  */
 export function referencedStoredImages(
   refs: readonly StoredImageRef[],
@@ -166,8 +168,11 @@ export function referencedStoredImages(
     prefix: string;
     images: readonly RichImage[];
   }[]
-): InlineImage[] {
-  return refs.map((ref) => {
+) {
+  const images = new Map<string, InlineImage>();
+  const missing = new Set<string>();
+
+  for (const ref of refs) {
     const source = sources.find(
       (candidate) => candidate.ownerId === ref.ownerId
     );
@@ -176,10 +181,29 @@ export function referencedStoredImages(
       (candidate) => candidate.contentId === ref.contentId
     );
 
-    if (!source || !image) {
-      throw new UploadValidationError("Inline image was not found");
+    if (source && image) {
+      images.set(image.contentId, {
+        ...image,
+        r2Key: `${source.prefix}${image.contentId}`,
+      });
+    } else {
+      missing.add(ref.contentId);
     }
+  }
 
-    return { ...image, r2Key: `${source.prefix}${image.contentId}` };
+  return { images: [...images.values()], missing };
+}
+
+/** `html` without the `img` elements showing these `cid:` images. */
+export function withoutCidImages(
+  html: string,
+  contentIds: ReadonlySet<string>
+) {
+  if (!contentIds.size) return html;
+
+  return html.replaceAll(/<img\b[^>]*>/giu, (tag) => {
+    const source = /\ssrc\s*=\s*["']cid:([^"']+)["']/iu.exec(tag)?.[1];
+
+    return source && contentIds.has(source) ? "" : tag;
   });
 }

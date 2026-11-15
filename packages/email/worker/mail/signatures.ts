@@ -4,7 +4,11 @@ import { eq } from "drizzle-orm";
 import type { RichImage, StoredImageRef } from "../../shared/rich-content";
 import { signatureHtmlWithName } from "../../shared/signature";
 import { signatures } from "../db/schema";
-import { appendRichContent, referencedStoredImages } from "./rich-content";
+import {
+  appendRichContent,
+  referencedStoredImages,
+  withoutCidImages,
+} from "./rich-content";
 import type { InlineImage } from "./rich-content";
 
 export type Signature = {
@@ -158,19 +162,34 @@ export async function withSignature<
 
   const referenced = referencedStoredImages(message.storedImages, sources);
 
+  // An image the signature no longer has is dropped, not a broken image.
+  const shown = referenced.missing.size
+    ? {
+        ...message,
+        bodyHtml:
+          message.bodyHtml &&
+          withoutCidImages(message.bodyHtml, referenced.missing),
+      }
+    : message;
+
   const appended =
     message.includeSignature && owner
       ? appendSignature(
-          message,
+          shown,
           loaded.find((signature) => signature?.ownerId === ownerId(owner)) ??
             null,
           input.kind,
           sender.name
         )
-      : { ...message, inlineImages: [] };
+      : { ...shown, inlineImages: [] };
 
-  return {
-    ...appended,
-    inlineImages: [...referenced, ...appended.inlineImages],
-  };
+  // Each image once, even when the body and an appended signature share it.
+  const inlineImages = new Map(
+    [...referenced.images, ...appended.inlineImages].map((image) => [
+      image.contentId,
+      image,
+    ])
+  );
+
+  return { ...appended, inlineImages: [...inlineImages.values()] };
 }

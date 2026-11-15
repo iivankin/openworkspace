@@ -25,6 +25,11 @@ type ReplySubmissionInput = {
   action?: ReplyAction;
   recipients: ValidatedComposerRecipients;
   editor: RefObject<ComposerEditorHandle | null>;
+  /**
+   * Whether the person changed the reply: one that still holds only the
+   * prefilled signature has nothing written in it.
+   */
+  edited: boolean;
   /** Attachments, and the inline images still in the editor. */
   activeAssets: readonly ComposerAsset[];
   uploadLimitError: string | null;
@@ -67,7 +72,7 @@ function replySubmissionValidationError(input: ReplySubmissionInput) {
 
   const content = input.editor.current?.content();
 
-  if (!content || !hasAuthoredContent(content)) {
+  if (!content || !input.edited || !hasAuthoredContent(content)) {
     return "Add text to the reply before sending";
   }
 
@@ -84,7 +89,7 @@ async function prepareReplySubmission(
 
   let content = input.editor.current?.content();
 
-  if (!content || !hasAuthoredContent(content)) {
+  if (!content || !input.edited || !hasAuthoredContent(content)) {
     throw new Error("Add text to the reply before sending");
   }
 

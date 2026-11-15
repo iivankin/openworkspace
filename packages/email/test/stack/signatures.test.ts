@@ -273,7 +273,8 @@ describe("signatures", () => {
       `<img src="cid:${teamLogo}"`
     );
 
-    // Only the sender's own and the sending address's images can be used.
+    // Only the sender's own and the sending address's images can be used:
+    // another one (or one a signature no longer has) is left out, never sent.
     const borrowed = await call(cookie, "/api/mail/messages", {
       method: "POST",
       json: {
@@ -287,8 +288,15 @@ describe("signatures", () => {
       },
     });
 
-    expect(borrowed.status).toBe(400);
-    await borrowed.json();
+    const borrowedMail = required(
+      await mailbox(personalId).getEmail(
+        (await readJson(borrowed, sent)).messageId
+      ),
+      "the message is stored"
+    );
+
+    expect(borrowedMail.attachmentsJson).toEqual([]);
+    expect(await storedHtml(borrowedMail.bodyHtmlR2Key)).not.toContain("cid:");
 
     // Saving again keeps a stored image by its content id, without an upload.
     const kept = await call(cookie, `/api/mail/team-signatures/${teamId}`, {
