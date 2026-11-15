@@ -118,20 +118,28 @@ const message = (text: string, enabled = true) => ({
   text,
 });
 
-/** Mail as Email Routing hands it over, through the real inbound route. */
+/**
+ * Mail as Email Routing hands it over, through the real inbound route,
+ * DMARC-verified, from `envelopeFrom` (the bounce address; `from` unless set).
+ */
 async function deliver(input: {
   from: string;
   to: string;
   id: string;
   headers?: string[];
+  envelopeFrom?: string;
 }) {
   const domain = input.from.split("@")[1];
+  const envelopeFrom = input.envelopeFrom ?? input.from;
 
   const { rejection } = await hooks.email({
-    from: input.from,
+    from: envelopeFrom,
     to: input.to,
     raw: [
-      `Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=${domain}; spf=pass smtp.mailfrom=${input.from}`,
+      `Received: from mail.${domain} (192.0.2.10)`,
+      `        by cloudflare-email.net (cloudflare) id ${crypto.randomUUID().slice(0, 12)}`,
+      `        for <${input.to}>; Sat, 31 Oct 2026 10:00:00 +0000`,
+      `Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=${domain} policy.dmarc=reject; spf=pass smtp.mailfrom=${envelopeFrom}`,
       `From: <${input.from}>`,
       `To: ${input.to}`,
       "Subject: Are you around?",
@@ -589,5 +597,54 @@ describe("auto-replies", () => {
       status: "off",
       settings: { outside: { html: expect.stringContaining("Away") } },
     });
+  });
+
+  it("answer only people the mailbox wrote to by their From address, at their envelope address", async () => {
+    const sent = await call(adminCookie, "/api/mail/messages", {
+      method: "POST",
+      json: {
+        requestId: crypto.randomUUID(),
+        mailboxId: primaryId,
+        to: ["known@partner.test"],
+        subject: "Hello",
+        bodyText: "Hi",
+      },
+    });
+
+    expect(sent.status).toBe(201);
+    await sent.json();
+
+    const saved = await call(
+      adminCookie,
+      `/api/mail/mailboxes/${primaryId}/auto-reply`,
+      {
+        method: "PUT",
+        json: {
+          enabled: true,
+          inside: message("Back soon", false),
+          outside: { ...message("Away"), audience: "knownSenders" },
+        },
+      }
+    );
+
+    expect(saved.status).toBe(200);
+    await saved.json();
+
+    // Forwarded on the way: a rewritten (SRS) envelope sender, the person in From.
+    await deliver({
+      from: "known@partner.test",
+      envelopeFrom: "srs0=k1=pt=partner.test=known@relay.test",
+      to: "admin@example.test",
+      id: "known-1@partner.test",
+    });
+    await deliver({
+      from: "stranger@partner.test",
+      to: "admin@example.test",
+      id: "stranger-1@partner.test",
+    });
+
+    expect(
+      await answeredSenders(["srs0=k1=pt=partner.test=known@relay.test"])
+    ).toEqual(["srs0=k1=pt=partner.test=known@relay.test"]);
   });
 });

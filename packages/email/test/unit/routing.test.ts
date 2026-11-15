@@ -84,6 +84,19 @@ describe("replyAlias", () => {
     ).toEqual(aliases[0]);
   });
 
+  it("answers mail to a plus address of an alias from the alias", () => {
+    expect(
+      replyAlias(
+        {
+          direction: "incoming",
+          envelopeTo: "billing+promo@example.test",
+          fromJson: [{ address: "client@outside.test", name: null }],
+        },
+        aliases
+      )
+    ).toEqual(aliases[0]);
+  });
+
   it("uses the mailbox's own address otherwise", () => {
     expect(
       replyAlias(

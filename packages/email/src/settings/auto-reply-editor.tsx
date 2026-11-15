@@ -1,4 +1,5 @@
 import {
+  ApiError,
   Badge,
   Button,
   DateTimePicker,
@@ -271,6 +272,8 @@ function AutoReplyForm({
             id={`${id}-end`}
             value={form.endsAt === null ? null : new Date(form.endsAt)}
             placeholder="Until turned off"
+            // A day picked as the last one away ends with it, not at 9 AM.
+            defaultTime="23:59"
             onChange={(value) => update({ endsAt: value?.getTime() ?? null })}
           />
         </div>
@@ -373,6 +376,20 @@ export function MailboxAutoReply({
       <div className="text-muted-foreground flex items-center gap-2 py-2 text-sm">
         <LoaderCircle className="size-4 animate-spin" /> Loading auto-reply…
       </div>
+    );
+  }
+
+  // In an address editor whose delivery was just switched to a mailbox:
+  // the address keeps no mail yet, so it has no auto-reply until saved.
+  if (
+    section &&
+    query.error instanceof ApiError &&
+    query.error.status === 404
+  ) {
+    return (
+      <p className="text-muted-foreground py-2 text-sm">
+        Save the address first, then set its auto-reply.
+      </p>
     );
   }
 

@@ -147,7 +147,8 @@ export const autoReplyRoutes = new Hono<AppEnv>()
         [input.inside, "inside"],
         [input.outside, "outside"],
       ] as const) {
-        if (message.enabled && isEmptyRichContent(message)) {
+        // Switched off, it can be saved half written (just its dates, say).
+        if (input.enabled && message.enabled && isEmptyRichContent(message)) {
           return apiError(
             c,
             400,

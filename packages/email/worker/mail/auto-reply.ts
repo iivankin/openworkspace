@@ -99,7 +99,11 @@ export function messageSkipReason(input: {
 
   const precedence = headers.get("precedence")?.trim().toLowerCase();
 
-  if (precedence && ["bulk", "list", "junk"].includes(precedence)) {
+  // `auto_reply` is what older auto-responders send instead of Auto-Submitted.
+  if (
+    precedence &&
+    ["bulk", "list", "junk", "auto_reply"].includes(precedence)
+  ) {
     return "precedence";
   }
 

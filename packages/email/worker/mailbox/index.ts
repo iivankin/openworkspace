@@ -4723,23 +4723,22 @@ export class MailboxDO extends DurableObject<Env> {
     return this.getAutoReply();
   }
 
-  /** Whether this mailbox has written to `address` (To, Cc or Bcc). */
-  private hasSentTo(address: string) {
-    const needle = `"address":${JSON.stringify(address.toLowerCase())}`;
+  /**
+   * Whether this mailbox has written to any of `addresses` (To, Cc or Bcc),
+   * as its correspondents record keeps it, even after that mail is deleted.
+   */
+  private hasWrittenTo(addresses: readonly string[]) {
+    const unique = [
+      ...new Set(addresses.map((address) => address.trim().toLowerCase())),
+    ].filter(Boolean);
 
     return (
+      unique.length > 0 &&
       this.db
-        .select({ id: emails.id })
-        .from(emails)
+        .select({ address: senders.address })
+        .from(senders)
         .where(
-          and(
-            eq(emails.direction, "outgoing"),
-            or(
-              sql`instr(lower(${emails.toJson}), ${needle}) > 0`,
-              sql`instr(lower(${emails.ccJson}), ${needle}) > 0`,
-              sql`instr(lower(${emails.bccJson}), ${needle}) > 0`
-            )
-          )
+          and(inArray(senders.address, unique), gt(senders.outboundCount, 0))
         )
         .limit(1)
         .all().length > 0
@@ -4810,10 +4809,21 @@ export class MailboxDO extends DurableObject<Env> {
       return;
     }
 
+    // The reply goes to the envelope sender (RFC 3834), but who wrote is the
+    // From address: the envelope sender of forwarded mail, newsletters and
+    // many companies is a rewritten bounce address. From counts as inside
+    // the workspace only when DMARC verified it, so it can't be forged.
     const recipient = autoReplyRecipient(job.envelopeFrom);
     // One reply per sender, however they spell their address's case.
     const sender = recipient.toLowerCase();
-    const inside = mailDomainAllowed(recipient);
+    const author = email.fromJson[0]?.address ?? null;
+
+    const inside = Boolean(
+      author &&
+      email.authenticationResultsJson?.verdict === "verified" &&
+      mailDomainAllowed(author)
+    );
+
     const message = inside ? settings.inside : settings.outside;
 
     if (!message.enabled) return;
@@ -4821,7 +4831,7 @@ export class MailboxDO extends DurableObject<Env> {
     if (
       !inside &&
       settings.outside.audience === "knownSenders" &&
-      !this.hasSentTo(recipient)
+      !this.hasWrittenTo(author ? [author, recipient] : [recipient])
     ) {
       return;
     }

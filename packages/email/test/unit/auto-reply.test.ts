@@ -89,6 +89,7 @@ describe("messageSkipReason", () => {
     expect(skip("Auto-Submitted: auto-replied")).toBe("auto-submitted");
     expect(skip("Precedence: bulk")).toBe("precedence");
     expect(skip("Precedence: list")).toBe("precedence");
+    expect(skip("Precedence: auto_reply")).toBe("precedence");
     expect(skip("List-Id: <team.example.net>")).toBe("mailing list");
     expect(skip("List-Unsubscribe: <mailto:x@example.net>")).toBe(
       "mailing list"

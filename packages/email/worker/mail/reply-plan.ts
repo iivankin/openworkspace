@@ -212,6 +212,18 @@ export function replyAlias<Alias extends { address: string }>(
 
   if (!address) return null;
   const normalized = normalizeMailboxAddress(address);
+  const at = normalized.lastIndexOf("@");
+  const plus = normalized.indexOf("+");
 
-  return aliases.find((alias) => alias.address === normalized) ?? null;
+  // `sales+promo@` reached the alias `sales@`, and is answered from it.
+  const base =
+    plus > 0 && plus < at
+      ? `${normalized.slice(0, plus)}${normalized.slice(at)}`
+      : normalized;
+
+  return (
+    aliases.find(
+      (alias) => alias.address === normalized || alias.address === base
+    ) ?? null
+  );
 }
