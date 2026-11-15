@@ -13,6 +13,7 @@ import { MAIL_ROUTE } from "../shared/mail-path";
 import { EMAIL_MODULE } from "../shared/module";
 import { MANAGE_BLOCKED_SENDERS } from "../shared/permissions";
 import { emailWebhookEvents } from "../shared/webhooks";
+import { ForwardDestinations } from "./admin/forward-destinations";
 import { prefetchMail } from "./mail/mail-prefetch";
 import { loadSanitizer } from "./mail/mail-queries";
 import { seedMail } from "./mail/mail-seed";
@@ -86,7 +87,6 @@ const mail: ClientModule = {
       ),
     },
   ],
-  teamAddress: [{ id: "signature", Component: TeamSignatureSection }],
   admin: [
     {
       id: "blocked-senders",
@@ -103,6 +103,12 @@ const mail: ClientModule = {
       ),
     },
   ],
+  // A forward's destinations, Confirmed or Waiting, show in both address editors.
+  teamAddress: [
+    { id: "signature", Component: TeamSignatureSection },
+    { id: "forward-destinations", Component: ForwardDestinations },
+  ],
+  userAddress: [{ id: "forward-destinations", Component: ForwardDestinations }],
   webhookEvents: emailWebhookEvents,
   background: mailBackground.Component,
   preload: async () => {
