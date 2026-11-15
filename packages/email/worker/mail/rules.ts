@@ -26,11 +26,14 @@ export const ruleConditionSchema = z.discriminatedUnion("type", [
     op: z.enum(["contains", "equals"]),
     value: text,
   }),
-  z.object({
-    type: z.literal("listId"),
-    op: z.enum(["exists", "contains"]),
-    value: text.optional(),
-  }),
+  z.discriminatedUnion("op", [
+    z.object({ type: z.literal("listId"), op: z.literal("exists") }),
+    z.object({
+      type: z.literal("listId"),
+      op: z.literal("contains"),
+      value: text,
+    }),
+  ]),
   z.object({ type: z.literal("hasAttachment") }),
 ]);
 

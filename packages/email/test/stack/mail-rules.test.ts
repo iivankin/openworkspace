@@ -2,10 +2,8 @@ import { beforeAll, describe, expect, it } from "bun:test";
 
 import { required } from "@open-workspace/core/shared";
 import { inboundMessageId } from "@open-workspace/email/worker/mail/inbound.ts";
-import type {
-  ruleInputSchema,
-  ruleTestSchema,
-} from "@open-workspace/email/worker/mail/rules.ts";
+import { ruleInputSchema } from "@open-workspace/email/worker/mail/rules.ts";
+import type { ruleTestSchema } from "@open-workspace/email/worker/mail/rules.ts";
 import { z } from "zod";
 
 import { readJson } from "./json.ts";
@@ -311,6 +309,46 @@ describe("mailbox rules", () => {
         .filter((rule) => rule.folderDeleted)
         .map((rule) => rule.name)
     ).toEqual(["Receipts"]);
+
+    // It can still be switched off as it is.
+    const stored = await readJson(
+      await api(cookie, `/mailboxes/${mailboxId}/rules`),
+      z.object({
+        rules: z.array(ruleInputSchema.extend({ id: z.string() })),
+      })
+    );
+
+    const { id: brokenId, ...broken } = required(
+      stored.rules.find((rule) => rule.name === "Receipts"),
+      "the Receipts rule is listed"
+    );
+
+    const switchedOff = await api(
+      cookie,
+      `/mailboxes/${mailboxId}/rules/${brokenId}`,
+      "PUT",
+      { ...broken, enabled: false }
+    );
+
+    expect(switchedOff.status).toBe(200);
+    await switchedOff.body?.cancel();
+  });
+
+  it("refuse a mailing list condition that looks for nothing", async () => {
+    const response = await worker.fetch(
+      new Request(`http://example.test/api/mail/mailboxes/${mailboxId}/rules`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Lists",
+          conditions: [{ type: "listId", op: "contains" }],
+          actions: [{ type: "archive" }],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await response.body?.cancel();
   });
 
   it("run in the mailbox an alias delivers into, matching the alias", async () => {

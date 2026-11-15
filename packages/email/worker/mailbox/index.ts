@@ -908,8 +908,16 @@ export class MailboxDO extends DurableObject<Env> {
         .all()[0];
 
       // Only Inbox and custom folders notify: at delivery a conversation is
-      // elsewhere only because spam screening or a rule put it there.
-      if (conversation?.mailboxState === "active") {
+      // elsewhere only because spam screening or a rule put it there. Mail a
+      // rule marked read for everyone doesn't notify either.
+      const markedRead = this.db
+        .select({ emailId: emailReadStates.emailId })
+        .from(emailReadStates)
+        .where(eq(emailReadStates.emailId, email.id))
+        .limit(1)
+        .all()[0];
+
+      if (conversation?.mailboxState === "active" && !markedRead) {
         await this.queueIncomingNotification(email);
       }
 
@@ -1266,10 +1274,16 @@ export class MailboxDO extends DurableObject<Env> {
       }));
   }
 
-  private ruleFolderError(input: RuleInput) {
+  /**
+   * A "Move to folder" action needs a custom folder that exists, unless the
+   * rule already had it: a rule whose folder was deleted can still be
+   * renamed or switched off.
+   */
+  private ruleFolderError(input: RuleInput, kept: readonly string[] = []) {
     return input.actions.some(
       (action) =>
         action.type === "moveToFolder" &&
+        !kept.includes(action.folderId) &&
         this.getFolder(action.folderId)?.kind !== "custom"
     )
       ? "Move to folder needs an existing custom folder"
@@ -1306,7 +1320,20 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   updateRule(id: string, input: RuleInput) {
-    const error = this.ruleFolderError(input);
+    const stored = this.db
+      .select({ actions: mailRules.actionsJson })
+      .from(mailRules)
+      .where(eq(mailRules.id, id))
+      .all()[0];
+
+    if (!stored) return { status: "not_found" as const };
+
+    const error = this.ruleFolderError(
+      input,
+      stored.actions.flatMap((action) =>
+        action.type === "moveToFolder" ? [action.folderId] : []
+      )
+    );
 
     if (error) return { status: "invalid" as const, error };
 
