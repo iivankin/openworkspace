@@ -34,6 +34,8 @@ import {
   holdsOnlyInitialContent,
   openingText,
   restoredComposerAssets,
+  restoredDraftContent,
+  restoredInlineAssetIds,
   restoredDraftHtml,
 } from "./draft-attachments";
 import { ReplyToWarning } from "./reply-to-warning";
@@ -225,18 +227,15 @@ export function ComposeWindow({
       (forwardedMessage ? forwardSubject(forwardedMessage.subject) : "")
   );
 
+  // Changes only as the person edits; a reopened draft starts as it opens.
   const [content, setContent] = useState<ComposerContent>(() =>
-    draft
-      ? {
-          ...EMPTY_CONTENT,
-          bodyHtml: draft.bodyHtml ?? "",
-          editorHtml: draft.editorHtml ?? draft.bodyHtml ?? "",
-          bodyText: draft.bodyText,
-        }
-      : EMPTY_CONTENT
+    draft ? restoredDraftContent(draft) : EMPTY_CONTENT
   );
 
-  const [documentAssetIds, setDocumentAssetIds] = useState<string[]>([]);
+  const [documentAssetIds, setDocumentAssetIds] = useState(() =>
+    restoredInlineAssetIds(draft)
+  );
+
   const [minimized, setMinimized] = useState(false);
   const [dragging, setDragging] = useState(false);
   const section = useRef<HTMLElement>(null);

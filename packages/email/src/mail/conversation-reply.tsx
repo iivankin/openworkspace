@@ -42,7 +42,9 @@ import {
   holdsOnlyInitialContent,
   openingText,
   restoredComposerAssets,
+  restoredDraftContent,
   restoredDraftHtml,
+  restoredInlineAssetIds,
 } from "./draft-attachments";
 import { RecipientCombobox } from "./recipient-combobox";
 import { ReplyToWarning } from "./reply-to-warning";
@@ -127,9 +129,15 @@ export function ConversationReply({
         : ""
   );
 
-  // Updated as the person edits; untouched until then.
-  const [content, setContent] = useState<ComposerContent>(EMPTY_CONTENT);
-  const [documentAssetIds, setDocumentAssetIds] = useState<string[]>([]);
+  // Changes only as the person edits; a reopened draft starts as it opens.
+  const [content, setContent] = useState<ComposerContent>(() =>
+    draft ? restoredDraftContent(draft) : EMPTY_CONTENT
+  );
+
+  const [documentAssetIds, setDocumentAssetIds] = useState(() =>
+    restoredInlineAssetIds(draft)
+  );
+
   const initialCc = draft?.cc ?? initialAction?.cc ?? [];
   const [cc, setCc] = useState(() => recipientField(initialCc));
 

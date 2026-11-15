@@ -1,5 +1,5 @@
 import { useDebouncedValue } from "@open-workspace/core/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
@@ -159,6 +159,8 @@ export function useMailController(
       ? composeParam
       : null;
 
+  // Drafts this tab's composer closed (sent or discarded).
+  const closedDraftIds = useRef(new Set<string>());
   const pendingDrafts = useDrafts(pendingDraftId ? mailbox?.id : undefined);
   const pendingDraftList = pendingDrafts.data;
 
@@ -172,7 +174,11 @@ export function useMailController(
       navigateRoute({ search: "" }, { replace: true });
     };
 
-    if (!draft) drop("That draft was sent or discarded");
+    // One this tab just sent or discarded can come back in the URL while
+    // the page settles (the list navigates with ?compose= kept): just drop it.
+    if (!draft && closedDraftIds.current.has(pendingDraftId)) {
+      navigateRoute({ search: "" }, { replace: true });
+    } else if (!draft) drop("That draft was sent or discarded");
     else if (draft.kind === "reply") {
       // Its reply box reopens in the conversation.
       navigateRoute(
@@ -349,6 +355,7 @@ export function useMailController(
   }
 
   function closeComposer() {
+    if (composer?.draftId) closedDraftIds.current.add(composer.draftId);
     setComposer(null);
 
     if (new URLSearchParams(window.location.search).has(COMPOSE_PARAM)) {

@@ -1646,6 +1646,16 @@ async function emailImport(state: RequestState, args: EmailImportArguments) {
       continue;
     }
 
+    // Imported mail is stored as received or sent; drafts are Email/set's.
+    if (target.role === "drafts") {
+      notCreated.set(creationId, {
+        type: "invalidProperties",
+        properties: ["mailboxIds"],
+        description: "Save drafts with Email/set, not Email/import",
+      });
+      continue;
+    }
+
     // oxlint-disable-next-line eslint/no-await-in-loop -- one at a time, so a message given twice is stored once
     const upload = await uploadedBlob(state, owner, blobId);
 

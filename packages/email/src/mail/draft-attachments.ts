@@ -86,6 +86,37 @@ export function restoredDraftHtml(
   return document.body.innerHTML;
 }
 
+/**
+ * A reopened draft as the composer's content, the way its editor opens it:
+ * the restored HTML (signature images as the draft's own files) and the
+ * inline files in it. Starting from this, opening a draft changes nothing,
+ * so it doesn't save; and it counts as written, so it can be sent as is.
+ */
+export function restoredDraftContent(
+  draft: Pick<
+    SavedDraft,
+    "bodyHtml" | "editorHtml" | "bodyText" | "attachments"
+  >
+): ComposerContent {
+  return {
+    bodyHtml: draft.bodyHtml ?? "",
+    editorHtml: restoredDraftHtml(draft),
+    bodyText: draft.bodyText,
+    inlineAssetIds: restoredInlineAssetIds(draft),
+    storedImages: [],
+    linkedAssetIds: [],
+  };
+}
+
+/** The ids of a reopened draft's inline files, which its editor shows. */
+export function restoredInlineAssetIds(
+  draft: Pick<SavedDraft, "attachments"> | undefined
+) {
+  return (draft?.attachments ?? []).flatMap((file) =>
+    file.disposition === "inline" ? [file.assetId] : []
+  );
+}
+
 /** The text of HTML the editor opens with, images as their alt text, as the editor reads it. */
 export function openingText(html: string) {
   const document = new DOMParser().parseFromString(html, "text/html");

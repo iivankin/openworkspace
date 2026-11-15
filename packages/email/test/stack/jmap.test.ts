@@ -820,6 +820,25 @@ describe("JMAP", () => {
       created: null,
       notCreated: { again: { type: "alreadyExists", existingId: receiptId } },
     });
+
+    // Drafts are saved with Email/set; an import there would land in Inbox.
+    const [intoDrafts] = await jmap(accessToken, [
+      [
+        "Email/import",
+        {
+          accountId,
+          emails: { draft: { blobId: receipt, mailboxIds: { drafts: true } } },
+        },
+        "a",
+      ],
+    ]);
+
+    expect(result(intoDrafts, setResult)).toMatchObject({
+      created: null,
+      notCreated: {
+        draft: { type: "invalidProperties", properties: ["mailboxIds"] },
+      },
+    });
   });
 
   it("imports with mail.organize and refuses tokens without it", async () => {
