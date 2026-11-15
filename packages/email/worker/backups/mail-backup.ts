@@ -22,6 +22,7 @@ import { serializeEml } from "./eml";
 import {
   mailboxAt,
   mailboxPieces,
+  userRefs,
   restorePiece,
   WORKSPACE_FOLDER,
   workspacePieces,
@@ -43,10 +44,12 @@ const BATCH_ROWS = 5000;
 const BATCH_NEW = 100;
 
 /**
- * Addresses a batch goes through at most, about 2 subrequests each, so a
- * workspace with many small or empty mailboxes still takes few batches.
+ * Addresses a batch goes through at most, about 7 subrequests each (its
+ * mail, settings and drafts), so a workspace with many small or empty
+ * mailboxes still takes few batches, and a batch stays near the ~300
+ * subrequests core's job allows one (MAX_BATCHES).
  */
-const BATCH_MAILBOXES = 20;
+const BATCH_MAILBOXES = 10;
 
 const EML = { extension: "eml", contentType: "message/rfc822" };
 
@@ -211,6 +214,7 @@ const cursorSchema = z.union([
  */
 async function exportMail(env: Env, snapshot: BackupSnapshot) {
   const db = createDb(env.DB);
+  let refs: ReturnType<typeof userRefs> | undefined;
 
   const position = snapshot.cursor
     ? cursorSchema.parse(JSON.parse(snapshot.cursor))
@@ -266,7 +270,11 @@ async function exportMail(env: Env, snapshot: BackupSnapshot) {
     }
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-    const pieces = await mailboxPieces(env, mailbox.id);
+    const pieces = await mailboxPieces(
+      env,
+      mailbox.id,
+      (refs ??= userRefs(db))
+    );
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- see above
     const written = await writePieces(

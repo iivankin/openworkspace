@@ -206,8 +206,7 @@ It puts back what the workspace is missing and leaves what exists alone:
    domains) and signatures that aren't there, and
    an auto-reply, AI instructions or notification choice only where none is
    set. People are matched by their primary address. A reply or forward draft
-   whose message isn't restored comes back as a new message. Snapshots from
-   before settings were kept restore their mail as before.
+   whose message isn't restored comes back as a new message.
 
 Run it again to retry what failed; what is there already is skipped.
 Cloudflare also keeps 30 days of the database's history

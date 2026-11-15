@@ -132,11 +132,38 @@ beforeAll(async () => {
     })
   ).mailboxId;
 
+  // Zinc comes first; Receipts, after it, holds mail, so on restore it is
+  // created by its message before the settings line puts it back in place.
+  await call(`/api/mail/mailboxes/${kilnId}/folders`, "POST", { name: "Zinc" });
+
   const folder = z.object({ folder: z.object({ id: z.string() }) }).parse(
     await call(`/api/mail/mailboxes/${kilnId}/folders`, "POST", {
       name: "Receipts",
     })
   );
+
+  const filed = await worker.fetch(
+    new Request(
+      `${origin}/api/mail/import/mailboxes/${kilnId}/messages?${new URLSearchParams({ sourceId: "receipt-1", placement: "inbox", folder: "Receipts" })}`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "message/rfc822" },
+        body: [
+          "From: Rosa Quill <rosa@fernhollow.example>",
+          "To: kiln@example.test",
+          "Subject: Your receipt",
+          "Date: Tue, 03 Mar 2026 10:00:00 +0000",
+          "Message-ID: <receipt-1@fernhollow.example>",
+          "",
+          "Thanks.",
+          "",
+        ].join("\r\n"),
+      }
+    )
+  );
+
+  expect(filed.status).toBe(201);
+  await filed.json();
 
   await call(`/api/mail/mailboxes/${kilnId}/rules`, "POST", {
     name: "Receipts",
@@ -274,10 +301,10 @@ describe("backups of mail settings", () => {
       return log.join("\n");
     };
 
-    // Settings, the draft, its image, the auto-reply's, the signature's;
+    // The receipt, settings, the draft, its image, the auto-reply's, the signature's;
     // the workspace's settings and Ana's signature image.
     expect(await restore("state")).toContain(
-      "7 restored, 0 already there, 0 skipped, 0 failed"
+      "8 restored, 0 already there, 0 skipped, 0 failed"
     );
 
     const restoredId = idRow.parse(
@@ -289,6 +316,14 @@ describe("backups of mail settings", () => {
     ).id;
 
     expect(restoredId).not.toBe(kilnId);
+
+    // Folders keep their order, the one its mail created included.
+    expect(
+      await hooks.mailboxSql(
+        restoredId,
+        "SELECT name FROM folders ORDER BY sort_order, name"
+      )
+    ).toEqual([{ name: "Zinc" }, { name: "Receipts" }]);
 
     // The rule follows its folder to the new copy, and still files mail.
     const { rules } = z
@@ -409,7 +444,7 @@ describe("backups of mail settings", () => {
 
     // Again: everything is there already.
     expect(await restore("state-again")).toContain(
-      "0 restored, 7 already there, 0 skipped"
+      "0 restored, 8 already there, 0 skipped"
     );
   });
 });

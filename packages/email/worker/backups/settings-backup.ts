@@ -87,7 +87,7 @@ function filePiece(env: Env, line: PieceLine, key: string): Piece {
 }
 
 /** Each person's id with their primary address, which finds them again after a restore. */
-async function userRefs(db: Database) {
+export async function userRefs(db: Database) {
   const rows = await db
     .select({ id: mailboxes.ownerUserId, address: mailboxAddressSql })
     .from(mailboxes)
@@ -99,7 +99,12 @@ async function userRefs(db: Database) {
 }
 
 /** What a mailbox keeps beside its mail, as pieces of the snapshot. */
-export async function mailboxPieces(env: Env, mailboxId: string) {
+export async function mailboxPieces(
+  env: Env,
+  mailboxId: string,
+  /** People by id, read once a batch rather than once an address. */
+  refs: ReturnType<typeof userRefs>
+) {
   const db = createDb(env.DB);
 
   const [{ drafts, ...settings }, [signature], notifications, ref] =
@@ -123,7 +128,7 @@ export async function mailboxPieces(env: Env, mailboxId: string) {
         })
         .from(mailboxNotificationPreferences)
         .where(eq(mailboxNotificationPreferences.mailboxId, mailboxId)),
-      userRefs(db),
+      refs,
     ]);
 
   const kept = {

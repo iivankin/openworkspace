@@ -201,8 +201,9 @@ const SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60;
  * deploying changes the rule, and with it the lock on objects already
  * written. Dropping `archive` leaves the bucket, its objects and its rule
  * as they are (retained): Alchemy stops tracking it, and nothing is deleted.
+ * Under `alchemy dev` (and the stack tests) the local bucket goes as usual.
  */
-function archiveEnv(archive: EmailInfraProps["archive"]) {
+function archiveEnv(archive: EmailInfraProps["archive"], dev: boolean) {
   const env: ArchiveEnv = {};
 
   if (!archive) return env;
@@ -225,7 +226,7 @@ function archiveEnv(archive: EmailInfraProps["archive"]) {
         },
       },
     ],
-  }).pipe(RemovalPolicy.retain());
+  }).pipe(RemovalPolicy.retain(!dev));
   env.MAIL_ARCHIVE_YEARS = String(archive.years);
 
   return env;
@@ -267,7 +268,7 @@ const emailEnv = (
       ...pushSubject,
       ...retentionEnv(props.retention),
       ...emailRouting,
-      ...archiveEnv(props.archive),
+      ...archiveEnv(props.archive, dev),
       MAIL_STORAGE: bucket,
       /** Signs the remote image proxy's tokens (mail/remote-token.ts). */
       MAIL_REMOTE_KEY: remoteKey.text,

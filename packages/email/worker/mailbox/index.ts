@@ -239,6 +239,9 @@ const MAX_DRAFTS_PER_USER = 200;
 /** Set while imported mail has not been announced (counts, realtime, JMAP state). */
 const IMPORT_PENDING_KEY = "import:pending";
 
+/** Custom folders imports created, until a restored settings line orders them. */
+const IMPORTED_FOLDERS_KEY = "imported-folders";
+
 /** How long imported mail may wait to be announced when the importer does not finish. */
 const IMPORT_ANNOUNCE_DELAY_MS = 15_000;
 
@@ -1968,12 +1971,19 @@ export class MailboxDO extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       const folderIds = new Map<string, string>();
 
+      // Folders a person placed keep their place; new ones, and those the
+      // restore's own message lines just created, take the saved one.
+      const imported = new Set(
+        this.state.storage.kv.get<string[]>(IMPORTED_FOLDERS_KEY)
+      );
+
       const before = new Set(
         this.db
           .select({ id: folders.id })
           .from(folders)
           .all()
           .map((row) => row.id)
+          .filter((id) => !imported.has(id))
       );
 
       for (const folder of settings.folders) {
@@ -1991,6 +2001,8 @@ export class MailboxDO extends DurableObject<Env> {
           added += 1;
         }
       }
+
+      this.state.storage.kv.delete(IMPORTED_FOLDERS_KEY);
 
       for (const row of settings.systemFolderOrder) {
         added += this.db
@@ -3016,7 +3028,16 @@ export class MailboxDO extends DurableObject<Env> {
     if (existing) return { id: existing.id };
     const created = this.insertFolder(createId("fld"), name);
 
-    if (created.status === "ok") return { id: created.folder.id };
+    if (created.status === "ok") {
+      // Placed by an import, not by a person: a restored settings line may
+      // still put it where it was (restoreSettings).
+      this.state.storage.kv.put(IMPORTED_FOLDERS_KEY, [
+        ...(this.state.storage.kv.get<string[]>(IMPORTED_FOLDERS_KEY) ?? []),
+        created.folder.id,
+      ]);
+
+      return { id: created.folder.id };
+    }
 
     // A system folder's name ("Sent", "Archive") is no custom folder.
     return { skipped: created.status === "limit" ? "limit" : "invalid" };
