@@ -215,7 +215,9 @@ whoever asks, the Worker and API tokens included.
   archived as sent mail once it is sent.
 - **Sent mail** is copied right after Email Sending accepts it, as
   `<year>/<month>/outgoing/<id>.eml`. Every message the workspace sends goes
-  through the same step.
+  through the same step, auto-replies included: they aren't stored in the
+  mailbox, so their copy is named `ar_<uuid>.eml` and keeps their
+  `Auto-Submitted` header.
 - An object is never overwritten, and carries its SHA-256 and the address's
   id in its metadata. Each message has a row in the `mail_archive_entries`
   table.

@@ -5001,7 +5001,10 @@ export class MailboxDO extends DurableObject<Env> {
         })
       );
 
-      const result = await this.bindings.EMAIL.send(
+      // Sent mail, so the archive keeps it; it's never stored, so its own id.
+      const result = await sendArchived(
+        this.bindings,
+        { id: `ar_${crypto.randomUUID()}`, mailboxId, date: now },
         buildAutoReply({
           from: {
             address: normalizeMailboxAddress(from.address),

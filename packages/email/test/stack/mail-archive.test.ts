@@ -502,4 +502,82 @@ describe("mail archive", () => {
       await (await env.MAIL_ARCHIVE.get(unenforcedEntry.archive_key))?.text()
     ).toBe(unenforcedMessage);
   });
+
+  it("archives an auto-reply as sent mail, RFC 3834 headers included", async () => {
+    // Earlier tests' mail is stored first, so only the new message is answered.
+    await drainInbound(mailboxId);
+
+    const saved = await worker.fetch(
+      new Request(`${origin}/api/mail/mailboxes/${mailboxId}/auto-reply`, {
+        method: "PUT",
+        headers: { cookie, origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          inside: { enabled: false, html: "<p>Away</p>", text: "Away" },
+          outside: { enabled: true, html: "<p>Away</p>", text: "Away" },
+        }),
+      })
+    );
+
+    expect(saved.status).toBe(200);
+    await saved.json();
+
+    const { rejection } = await hooks.email({
+      from: "otto@quayside.example",
+      to: "ada@example.test",
+      raw: [
+        "Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=quayside.example; spf=pass smtp.mailfrom=otto@quayside.example",
+        raw("ooo1", "Are you around?").replace(
+          "From: Rosa Quill <rosa@fernhollow.example>",
+          "From: Otto Vane <otto@quayside.example>"
+        ),
+      ].join("\r\n"),
+    });
+
+    expect(rejection).toBeUndefined();
+    await drainInbound(mailboxId);
+
+    const entry = required(
+      await pollUntil(
+        async () =>
+          (await entries()).find(
+            (row) => row.id.startsWith("ar_") && row.status === "archived"
+          ) ?? null,
+        { failure: "the auto-reply was not archived" }
+      ),
+      "the auto-reply's entry"
+    );
+
+    expect(entry.direction).toBe("outgoing");
+    expect(entry.archive_key).toMatch(/^\d{4}\/\d{2}\/outgoing\/ar_.+\.eml$/u);
+
+    const object = required(
+      await env.MAIL_ARCHIVE.get(entry.archive_key),
+      "the archived auto-reply"
+    );
+
+    const parsed = await PostalMime.parse(await object.arrayBuffer());
+    expect(parsed.subject).toBe("Auto: Are you around?");
+    expect(parsed.text?.trim()).toBe("Away");
+    expect(parsed.to).toEqual([{ address: "otto@quayside.example", name: "" }]);
+    expect(parsed.inReplyTo).toBe("<ooo1@fernhollow.example>");
+
+    const header = (name: string) =>
+      parsed.headers.find((row) => row.key === name)?.value;
+
+    expect(header("auto-submitted")).toBe("auto-replied");
+    expect(header("x-auto-response-suppress")).toBe("All");
+
+    // The reply's Message-ID is the one Email Sending returned.
+    const [logged] = await hooks.mailboxRows(
+      mailboxId,
+      z.object({ last_outbound_message_id: z.string().nullable() }),
+      "SELECT last_outbound_message_id FROM auto_reply_log WHERE sender_address = ?",
+      "otto@quayside.example"
+    );
+
+    expect(parsed.messageId).toBe(
+      required(logged?.last_outbound_message_id, "the logged Message-ID")
+    );
+  });
 });
