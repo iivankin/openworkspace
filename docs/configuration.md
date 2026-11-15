@@ -103,11 +103,23 @@ up where an interrupted run stopped. Each snapshot holds:
   signing secrets are never in it, nor apps and webhooks declared in code.
 - `backups/<id>/email/<address>/*.jsonl`: one line per message with its place
   (Inbox, Archive, Spam, Trash or Sent), custom folder, read state and
-  conversation. Drafts aren't in it. Other modules add folders of their own.
-- `backups/objects/<sha256>.eml`: each message, stored once however many
-  snapshots list it. Sent mail is written as MIME from what was sent.
+  conversation; then a line for the address's settings (folders and their
+  order, rules, the auto-reply and whom it answered, AI sorting
+  instructions, blocked and trusted senders, the address's signature, and
+  each person's notification choice), one per draft, and one per image or
+  file a draft, the auto-reply or the signature holds.
+- `backups/<id>/email/workspace/*.jsonl`: the workspace's blocked senders and
+  each person's own signature, with its images. Other modules add folders of
+  their own.
+- `backups/objects/<sha256>.<extension>`: each message (`.eml`), settings
+  (`.json`) and file (`.bin`), stored once however many snapshots list it.
+  Sent mail is written as MIME from what was sent.
 - `backups/<id>/complete.json`: written last. A snapshot without it was still
   being written, or failed, and may lack part of the data.
+
+Sessions, push subscriptions, delivery logs, unsubscribe attempts, spam
+reports and other state the workspace rebuilds or a device registers again
+aren't kept.
 
 A mailbox remembers which messages are stored, so a snapshot reads and uploads
 only new mail: about 2,500 new messages an hour, and over 100,000 already
@@ -189,7 +201,13 @@ It puts back what the workspace is missing and leaves what exists alone:
    editor; **Save address** adds it again.
 2. Each module's data. Mail adds each message an address is missing, in its
    place, folder, read state and conversation; it never removes or rolls back
-   mail.
+   mail. It adds the folders, rules (moving to the restored folders of the
+   same name), drafts, blocked senders (never the workspace's own mail
+   domains) and signatures that aren't there, and
+   an auto-reply, AI instructions or notification choice only where none is
+   set. People are matched by their primary address. A reply or forward draft
+   whose message isn't restored comes back as a new message. Snapshots from
+   before settings were kept restore their mail as before.
 
 Run it again to retry what failed; what is there already is skipped.
 Cloudflare also keeps 30 days of the database's history

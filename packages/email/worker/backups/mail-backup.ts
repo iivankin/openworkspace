@@ -1,9 +1,7 @@
 import {
   createDb,
-  mailboxAddressPredicate,
   mailboxAddressSql,
   mailboxes,
-  normalizeMailboxAddress,
 } from "@open-workspace/core/module";
 import type {
   BackupSnapshot,
@@ -21,10 +19,19 @@ import { prepareOutboundDelivery } from "../mail/outbound-delivery";
 import { mailboxStub } from "../mailbox";
 import type { Email } from "../mailbox/schema";
 import { serializeEml } from "./eml";
+import {
+  mailboxAt,
+  mailboxPieces,
+  restorePiece,
+  WORKSPACE_FOLDER,
+  workspacePieces,
+  writePieces,
+} from "./settings-backup";
 
 /**
  * Mail's part of a backup snapshot: a folder per address that keeps mail,
- * with one line per message, and each message's `.eml` object stored once.
+ * with one line per message, and each message's `.eml` object stored once,
+ * then the address's settings and drafts (settings-backup.ts).
  * The mailbox keeps each stored message's hash, so later snapshots write
  * its line from the mailbox's rows alone, and read and store only new mail.
  */
@@ -184,16 +191,23 @@ async function nextMailbox(db: Database, afterId: string | null) {
   return row ?? null;
 }
 
-const cursorSchema = z.object({
-  mailbox: z.string(),
-  address: z.string(),
-  after: z.string().nullable(),
-});
+const cursorSchema = z.union([
+  z.object({ workspace: z.literal(true), skip: z.number() }),
+  z.object({
+    mailbox: z.string(),
+    address: z.string(),
+    after: z.string().nullable(),
+    /** Set once its mail is written: the next of its settings pieces. */
+    settings: z.number().optional(),
+  }),
+]);
 
 /**
- * One batch: pages of mailboxes' messages, from the cursor's mailbox on,
- * until it has listed BATCH_ROWS rows, stored BATCH_NEW new messages or
- * gone through BATCH_MAILBOXES addresses.
+ * One batch: pages of mailboxes' messages, each followed by its settings
+ * and drafts (settings-backup.ts), from the cursor's mailbox on, until it
+ * has listed BATCH_ROWS rows, stored BATCH_NEW new objects or gone through
+ * BATCH_MAILBOXES addresses; after the last address, the workspace's
+ * settings.
  */
 async function exportMail(env: Env, snapshot: BackupSnapshot) {
   const db = createDb(env.DB);
@@ -202,11 +216,26 @@ async function exportMail(env: Env, snapshot: BackupSnapshot) {
     ? cursorSchema.parse(JSON.parse(snapshot.cursor))
     : null;
 
+  if (position && "workspace" in position) {
+    const { next } = await writePieces(
+      snapshot,
+      WORKSPACE_FOLDER,
+      await workspacePieces(env),
+      position.skip,
+      BATCH_NEW
+    );
+
+    return next === null
+      ? null
+      : JSON.stringify({ workspace: true, skip: next });
+  }
+
   let mailbox = position
     ? { id: position.mailbox, address: position.address }
     : await nextMailbox(db, null);
 
   let after = position?.after ?? null;
+  let settings = position?.settings;
   let rowsLeft = BATCH_ROWS;
   let newLeft = BATCH_NEW;
 
@@ -215,78 +244,133 @@ async function exportMail(env: Env, snapshot: BackupSnapshot) {
     mailbox && visited < BATCH_MAILBOXES && rowsLeft > 0 && newLeft > 0;
     visited += 1
   ) {
-    const stub = mailboxStub(env, mailbox.id);
+    if (settings === undefined) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- one mailbox after another, within the batch's budget
+      const page = await messagePage(env, snapshot, mailbox, after, {
+        rows: rowsLeft,
+        new: newLeft,
+      });
 
-    // oxlint-disable-next-line eslint/no-await-in-loop -- one mailbox after another, within the batch's budget
-    const { rows, full, more } = await stub.listBackupEmails(
-      after,
-      rowsLeft,
+      rowsLeft -= page.rows;
+      newLeft -= page.new;
+
+      if (page.last) {
+        return JSON.stringify({
+          mailbox: mailbox.id,
+          address: mailbox.address,
+          after: page.last,
+        });
+      }
+
+      settings = 0;
+    }
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+    const pieces = await mailboxPieces(env, mailbox.id);
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+    const written = await writePieces(
+      snapshot,
+      mailbox.address,
+      pieces,
+      settings,
       newLeft
     );
 
-    const stored: { id: string; sha256: string }[] = [];
-    const lines: MailBackupLine[] = [];
+    newLeft -= written.stored;
 
-    for (const row of rows) {
-      let sha256 = row.backupSha256;
-
-      if (!sha256) {
-        const email = full.find((candidate) => candidate.id === row.id);
-
-        if (!email) continue;
-
-        try {
-          // oxlint-disable-next-line eslint/no-await-in-loop -- one message in memory at a time; a message may be 25 MiB
-          const message = await messageBytes(env, email, snapshot.error);
-          // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-          sha256 = await snapshot.putObject(message.bytes, EML);
-
-          if (message.final) stored.push({ id: row.id, sha256 });
-        } catch (cause) {
-          // Left out of this snapshot; the next one tries again.
-          snapshot.error(
-            `${mailbox.address} ${row.id}: ${cause instanceof Error ? cause.message : String(cause)}`
-          );
-          continue;
-        }
-      }
-
-      lines.push({
-        id: row.id,
-        object: `${sha256}.${EML.extension}`,
-        ...backupPlacement(row),
-        seen: row.direction === "outgoing" || row.seen,
-        thread: row.conversationId,
-        direction: row.direction,
-        received_at: row.timelineAt.toISOString(),
-        subject: row.subject,
-      });
-    }
-
-    // After the objects, so a hash the mailbox holds always names one.
-    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-    if (stored.length) await stub.setBackupHashes(stored);
-    snapshot.writeLines(mailbox.address, lines);
-    rowsLeft -= rows.length;
-    newLeft -= full.length;
-    const last = rows.at(-1);
-
-    if (more && last) {
+    if (written.next !== null) {
       return JSON.stringify({
         mailbox: mailbox.id,
         address: mailbox.address,
-        after: last.id,
+        after: null,
+        settings: written.next,
       });
     }
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- see above
     mailbox = await nextMailbox(db, mailbox.id);
     after = null;
+    settings = undefined;
   }
 
-  return mailbox
-    ? JSON.stringify({ mailbox: mailbox.id, address: mailbox.address, after })
-    : null;
+  if (!mailbox) return JSON.stringify({ workspace: true, skip: 0 });
+
+  return JSON.stringify({
+    mailbox: mailbox.id,
+    address: mailbox.address,
+    after,
+    settings,
+  });
+}
+
+/**
+ * One page of a mailbox's messages from `after`, within the batch's budget:
+ * what it listed and stored, and the last message when more follow.
+ */
+async function messagePage(
+  env: Env,
+  snapshot: BackupSnapshot,
+  mailbox: { id: string; address: string },
+  after: string | null,
+  budget: { rows: number; new: number }
+) {
+  const stub = mailboxStub(env, mailbox.id);
+
+  const { rows, full, more } = await stub.listBackupEmails(
+    after,
+    budget.rows,
+    budget.new
+  );
+
+  const stored: { id: string; sha256: string }[] = [];
+  const lines: MailBackupLine[] = [];
+
+  for (const row of rows) {
+    let sha256 = row.backupSha256;
+
+    if (!sha256) {
+      const email = full.find((candidate) => candidate.id === row.id);
+
+      if (!email) continue;
+
+      try {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- one message in memory at a time; a message may be 25 MiB
+        const message = await messageBytes(env, email, snapshot.error);
+        // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+        sha256 = await snapshot.putObject(message.bytes, EML);
+
+        if (message.final) stored.push({ id: row.id, sha256 });
+      } catch (cause) {
+        // Left out of this snapshot; the next one tries again.
+        snapshot.error(
+          `${mailbox.address} ${row.id}: ${cause instanceof Error ? cause.message : String(cause)}`
+        );
+        continue;
+      }
+    }
+
+    lines.push({
+      id: row.id,
+      object: `${sha256}.${EML.extension}`,
+      ...backupPlacement(row),
+      seen: row.direction === "outgoing" || row.seen,
+      thread: row.conversationId,
+      direction: row.direction,
+      received_at: row.timelineAt.toISOString(),
+      subject: row.subject,
+    });
+  }
+
+  // After the objects, so a hash the mailbox holds always names one.
+  if (stored.length) await stub.setBackupHashes(stored);
+  snapshot.writeLines(mailbox.address, lines);
+
+  return {
+    rows: rows.length,
+    new: full.length,
+    last: more ? (rows.at(-1)?.id ?? null) : null,
+  };
 }
 
 /**
@@ -320,7 +404,11 @@ const restoreLineSchema = z.object({
 export const mailBackup: ModuleBackup = {
   export: exportMail,
   /** Adds a message to the mailbox at its folder's address, unless it is there. */
-  async restore(c, { folder, line, object }) {
+  async restore(c, item) {
+    const piece = await restorePiece(c, item);
+
+    if (piece) return piece;
+    const { folder, line, object } = item;
     const parsed = restoreLineSchema.safeParse(line);
 
     if (!parsed.success || !object) {
@@ -328,19 +416,9 @@ export const mailBackup: ModuleBackup = {
     }
 
     const message = parsed.data;
-    const address = normalizeMailboxAddress(folder);
+    const mailbox = await mailboxAt(c.env, folder);
 
-    const [mailbox] = await createDb(c.env.DB)
-      .select({ id: mailboxes.id, address: mailboxAddressSql })
-      .from(mailboxes)
-      .where(
-        and(mailboxAddressPredicate(address), eq(mailboxes.delivery, "inbox"))
-      )
-      .limit(1);
-
-    if (!mailbox) {
-      return { status: "skipped", reason: `no mailbox ${address}` };
-    }
+    if (!mailbox) return { status: "skipped", reason: `no mailbox ${folder}` };
 
     const result = await importRawMessage({
       env: c.env,

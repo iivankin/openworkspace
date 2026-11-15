@@ -309,6 +309,12 @@ function stringListJson(values: string[]) {
 
 export type DraftInput = Omit<Draft, "userId" | "version" | "updatedAt">;
 
+/** A mailbox's settings in a backup: `backupSettings()` less its drafts. */
+export type MailboxBackupSettings = Omit<
+  ReturnType<MailboxDO["backupSettings"]>,
+  "drafts"
+>;
+
 export type SaveDraftResult =
   | { status: "saved"; draft: Draft }
   | { status: "conflict"; draft: Draft | null }
@@ -1919,6 +1925,203 @@ export class MailboxDO extends DurableObject<Env> {
     }
 
     return { rows, full, more };
+  }
+
+  /** What a backup keeps of the mailbox beside its mail (worker/backups/mail-backup.ts). */
+  backupSettings() {
+    return {
+      folders: this.db.select().from(folders).all(),
+      systemFolderOrder: this.db.select().from(systemFolderOrder).all(),
+      rules: this.db
+        .select()
+        .from(mailRules)
+        .orderBy(asc(mailRules.position))
+        .all(),
+      autoReply: this.getAutoReply(),
+      autoReplyLog: this.db.select().from(autoReplyLog).all(),
+      ai: this.db.select().from(mailboxAiConfiguration).get() ?? null,
+      // Blocks and "Not spam"; the counters come back with the mail.
+      senders: this.db
+        .select({
+          address: senders.address,
+          domain: senders.domain,
+          blockedAt: senders.blockedAt,
+          trustedAt: senders.trustedAt,
+        })
+        .from(senders)
+        .where(or(isNotNull(senders.blockedAt), isNotNull(senders.trustedAt)))
+        .all(),
+      drafts: this.db.select().from(drafts).all(),
+    };
+  }
+
+  /**
+   * Adds what `settings` holds that the mailbox lacks; nothing here is
+   * changed. Folders match by name, rules by id (their folders follow the
+   * names), a sender's block or trust only where the sender has neither, and
+   * the auto-reply, its log and the AI instructions only if none is set.
+   * Whether anything was added.
+   */
+  restoreSettings(settings: MailboxBackupSettings) {
+    let added = 0;
+
+    this.ctx.storage.transactionSync(() => {
+      const folderIds = new Map<string, string>();
+
+      const before = new Set(
+        this.db
+          .select({ id: folders.id })
+          .from(folders)
+          .all()
+          .map((row) => row.id)
+      );
+
+      for (const folder of settings.folders) {
+        const placed = this.importFolder(folder.name);
+
+        if (!("id" in placed)) continue;
+        folderIds.set(folder.id, placed.id);
+
+        if (!before.has(placed.id)) {
+          this.db
+            .update(folders)
+            .set({ sortOrder: folder.sortOrder })
+            .where(eq(folders.id, placed.id))
+            .run();
+          added += 1;
+        }
+      }
+
+      for (const row of settings.systemFolderOrder) {
+        added += this.db
+          .insert(systemFolderOrder)
+          .values(row)
+          .onConflictDoNothing()
+          .returning()
+          .all().length;
+      }
+
+      const rules = this.db
+        .select({ id: mailRules.id, position: mailRules.position })
+        .from(mailRules)
+        .all();
+
+      const ruleIds = new Set(rules.map((rule) => rule.id));
+      let position = Math.max(0, ...rules.map((rule) => rule.position));
+
+      for (const rule of settings.rules) {
+        if (ruleIds.has(rule.id) || ruleIds.size >= MAX_RULES) continue;
+        ruleIds.add(rule.id);
+        position += 1;
+        this.db
+          .insert(mailRules)
+          .values({
+            ...rule,
+            position,
+            // A folder deleted before the backup keeps its old id: still "deleted".
+            actionsJson: rule.actionsJson.map((action) =>
+              action.type === "moveToFolder"
+                ? {
+                    ...action,
+                    folderId: folderIds.get(action.folderId) ?? action.folderId,
+                  }
+                : action
+            ),
+          })
+          .run();
+        added += 1;
+      }
+
+      const autoReply = settings.autoReply
+        ? this.db
+            .insert(autoReplySettings)
+            .values({ ...settings.autoReply, id: 1 })
+            .onConflictDoNothing()
+            .returning()
+            .all()
+        : [];
+
+      if (autoReply.length) {
+        added += 1;
+
+        for (const row of settings.autoReplyLog) {
+          this.db.insert(autoReplyLog).values(row).onConflictDoNothing().run();
+        }
+      }
+
+      if (settings.ai) {
+        added += this.db
+          .insert(mailboxAiConfiguration)
+          .values(settings.ai)
+          .onConflictDoNothing()
+          .returning()
+          .all().length;
+      }
+
+      for (const sender of settings.senders) {
+        added += this.db
+          .insert(senders)
+          .values(sender)
+          .onConflictDoUpdate({
+            target: senders.address,
+            set: {
+              blockedAt: sql`excluded.blocked_at`,
+              trustedAt: sql`excluded.trusted_at`,
+            },
+            setWhere: and(isNull(senders.blockedAt), isNull(senders.trustedAt)),
+          })
+          .returning()
+          .all().length;
+      }
+    });
+
+    if (added) {
+      this.recentParticipantSources = null;
+      this.publishUpdate();
+    }
+
+    return added > 0;
+  }
+
+  /**
+   * Adds a person's draft unless they have one with its id. A reply or
+   * forward whose message isn't here (by its id, or `importedSourceId`, the
+   * id the restored copy got) becomes a new message with the same contents.
+   */
+  restoreDraft(
+    userId: string,
+    input: DraftInput,
+    importedSourceId: string | null
+  ) {
+    const source = input.sourceEmailId
+      ? (this.getEmail(input.sourceEmailId) ??
+        (importedSourceId ? this.getEmail(importedSourceId) : null))
+      : null;
+
+    const draft: DraftInput = source
+      ? {
+          ...input,
+          sourceEmailId: source.id,
+          conversationId: source.conversationId,
+        }
+      : {
+          ...input,
+          kind: "compose",
+          sourceEmailId: null,
+          conversationId: null,
+          replyMode: null,
+        };
+
+    const result = this.writeDraft(
+      userId,
+      draft,
+      0,
+      this.getDraft(userId, input.id)
+    );
+
+    if (result.status === "saved") this.announceDrafts(true);
+
+    return result.status;
   }
 
   /** Records the hashes of messages a backup stored. */

@@ -1,4 +1,4 @@
-import { createDb } from "@open-workspace/core/module";
+import { configuredMailDomains, createDb } from "@open-workspace/core/module";
 import { and, desc, eq, ne } from "drizzle-orm";
 
 import type { FeedbackLabel } from "../../shared/mail-feedback";
@@ -34,6 +34,18 @@ const blockPatternCache = isolateCache(
  */
 export function cachedWorkspaceBlockPatterns(binding: D1Database) {
   return blockPatternCache.get(binding);
+}
+
+/** Whether a block pattern's domain is one of the workspace's own mail domains, or overlaps one. */
+export function blocksOwnMailDomain(pattern: string) {
+  const domain = pattern.slice(pattern.lastIndexOf("@") + 1);
+
+  return configuredMailDomains().some(
+    (name) =>
+      domain === name ||
+      domain.endsWith(`.${name}`) ||
+      name.endsWith(`.${domain}`)
+  );
 }
 
 export function forgetWorkspaceBlockPatterns() {

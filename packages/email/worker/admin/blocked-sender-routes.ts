@@ -2,7 +2,6 @@ import {
   zValidator,
   oauthScope,
   createDb,
-  configuredMailDomains,
   mailboxes,
   users,
   apiError,
@@ -19,7 +18,10 @@ import {
   MANAGE_BLOCKED_SENDERS,
 } from "../../shared/permissions";
 import { blockedSenders } from "../db/schema";
-import { forgetWorkspaceBlockPatterns } from "../mail/workspace-safety";
+import {
+  blocksOwnMailDomain,
+  forgetWorkspaceBlockPatterns,
+} from "../mail/workspace-safety";
 import { mailboxStub } from "../mailbox";
 import { workspaceBlockQuerySchema, workspaceBlockSchema } from "./schemas";
 
@@ -108,17 +110,8 @@ export const blockedSenderAdminRoutes = new Hono<AppEnv>()
       }
 
       const db = createDb(c.env.DB);
-      const own = configuredMailDomains();
-      const domain = pattern.slice(pattern.lastIndexOf("@") + 1);
 
-      if (
-        own.some(
-          (name) =>
-            domain === name ||
-            domain.endsWith(`.${name}`) ||
-            name.endsWith(`.${domain}`)
-        )
-      ) {
+      if (blocksOwnMailDomain(pattern)) {
         return apiError(
           c,
           400,
