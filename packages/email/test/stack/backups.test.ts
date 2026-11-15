@@ -351,6 +351,12 @@ describe("backups", () => {
     // Retention dropped the old snapshot, and the weekly sweep the stray object.
     expect(await keys(`backups/${oldSnapshot}/`)).toEqual([]);
     expect(await env.BACKUP_STORAGE.head(orphan)).toBeNull();
+    expect(await keys("backups/sweep/")).toEqual([]);
+
+    // Written last: only a snapshot with it is whole.
+    expect(
+      await env.BACKUP_STORAGE.head(`backups/${id}/complete.json`)
+    ).not.toBeNull();
 
     // The next tick finds today's snapshot done.
     await hooks.scheduled({ scheduledTime: Date.now() });
@@ -389,6 +395,42 @@ describe("backups", () => {
       newObjectCount: 1,
       errors: [],
     });
+  });
+
+  it("fails a run stuck for a day and a half, so the next one can start", async () => {
+    const stuck = "2026-01-01T000000.000Z";
+
+    await env.BACKUP_STORAGE.put(`backups/${stuck}/core.json`, "{}");
+    await env.DB.prepare(
+      `INSERT INTO backup_runs (id, status, module, started_at)
+       VALUES (?, 'running', 'email', ?)`
+    )
+      .bind(stuck, Date.now() - 37 * 60 * 60 * 1000)
+      .run();
+
+    await hooks.scheduled({ scheduledTime: Date.now() });
+
+    const run = await hooks.fetchAndWait(
+      new Request(`${origin}/api/admin/backups/run`, {
+        method: "POST",
+        headers: { cookie, origin },
+      })
+    );
+
+    expect(run.status).toBe(202);
+    await run.json();
+    await hooks.scheduled({ scheduledTime: Date.now() });
+
+    expect((await backupStatus()).latest).toMatchObject({
+      status: "completed",
+    });
+    // The failed snapshot went the way of an expired one.
+    expect(await keys(`backups/${stuck}/`)).toEqual([]);
+    expect(
+      await env.DB.prepare("SELECT id FROM backup_runs WHERE id = ?")
+        .bind(stuck)
+        .first()
+    ).toBeNull();
   });
 
   it("restores a deleted team, its address and mail, a person, branding and a webhook", async () => {

@@ -1918,6 +1918,19 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   /** Records the hashes of messages a backup stored. */
+  /**
+   * Forgets every backup hash: the address stopped keeping mail, so its
+   * objects may be swept once no kept snapshot names them, and the hashes
+   * would then name objects that are gone.
+   */
+  clearBackupHashes() {
+    this.db
+      .update(emails)
+      .set({ backupSha256: null })
+      .where(isNotNull(emails.backupSha256))
+      .run();
+  }
+
   setBackupHashes(hashes: { id: string; sha256: string }[]) {
     this.ctx.storage.transactionSync(() => {
       for (const { id, sha256 } of hashes) {

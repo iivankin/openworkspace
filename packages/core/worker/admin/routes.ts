@@ -254,7 +254,6 @@ async function prepareAccessLink(input: {
 
 /** Admin sections whose changes can alter what SSO applications are provisioned with. */
 const provisionedSections = new Set([
-  "backups",
   "users",
   "invitations",
   "teams",
@@ -296,14 +295,19 @@ export const adminRoutes = new Hono<AppEnv>()
   .use("*", async (c, next) => {
     await next();
 
-    const section = new URL(c.req.url).pathname
-      .replace(/^(?:\/api)?\/admin\//u, "")
-      .split("/")[0];
+    const path = new URL(c.req.url).pathname.replace(
+      /^(?:\/api)?\/admin\//u,
+      ""
+    );
 
+    const section = path.split("/")[0];
+
+    // Restoring a backup's core data recreates people and teams; its
+    // modules' lines (a request per message) and Run now don't.
     if (
       c.req.method === "GET" ||
       c.res.status >= 400 ||
-      !provisionedSections.has(section ?? "")
+      !(provisionedSections.has(section ?? "") || path === "backups/restore")
     ) {
       return;
     }

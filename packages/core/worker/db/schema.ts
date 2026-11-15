@@ -899,7 +899,10 @@ export type Mailbox = typeof mailboxes.$inferSelect;
 export const backupRuns = sqliteTable("backup_runs", {
   /** When it started, e.g. 2026-03-10T041700.000Z: its folder in the bucket. */
   id: text("id").primaryKey(),
-  status: text("status", { enum: ["running", "completed"] }).notNull(),
+  /** A run still running this long after it started failed (job.ts). */
+  status: text("status", {
+    enum: ["running", "completed", "failed"],
+  }).notNull(),
   module: text("module"),
   cursor: text("cursor"),
   /** Numbers each batch's files, so a repeated batch overwrites its own. */

@@ -103,13 +103,16 @@ up where an interrupted run stopped. Each snapshot holds:
   conversation. Drafts aren't in it. Other modules add folders of their own.
 - `backups/objects/<sha256>.eml`: each message, stored once however many
   snapshots list it. Sent mail is written as MIME from what was sent.
+- `backups/<id>/complete.json`: written last. A snapshot without it was still
+  being written, or failed, and may lack part of the data.
 
 A mailbox remembers which messages are stored, so a snapshot reads and uploads
 only new mail: about 2,500 new messages an hour, and over 100,000 already
 stored ones. The first snapshot of a large workspace takes a while; later ones
 take minutes. The newest snapshot of each of the last `keepDays` days and of
 the last `keepWeeks` weeks is kept, and once a week objects no kept snapshot
-lists are deleted.
+lists are deleted. A snapshot that hasn't finished a day and a half after it
+started is marked failed and deleted, so the next day's can start.
 
 **Administration → Backups** shows the latest snapshot, any problems, and
 **Run now**. Only administrators see it.
@@ -140,12 +143,23 @@ key = …
 
 ```sh
 # crontab: every night at 03:30, after the day's snapshot
-30 3 * * * rclone sync r2:<backup-bucket>/backups offsite:acme-workspace-backups/backups --fast-list
+30 3 * * * rclone sync r2:<backup-bucket>/backups offsite:acme-workspace-backups/backups \
+  --backup-dir offsite:acme-workspace-backups/deleted/$(date +\%F) \
+  --max-delete 5000 --fast-list
 ```
 
-`sync` makes the copy match, deletions included, so the copy keeps what
-retention keeps. Objects never change once written, so each night copies
-only what is new. Use `rclone copy` instead to keep everything there.
+`sync` keeps the copy matching what retention keeps, and copies only what is
+new: objects never change once written. Whatever it would delete goes to
+`deleted/<date>` instead, so if the account is taken over and the bucket
+emptied, the copy still has it; `--max-delete` stops a run that would delete
+far more than retention ever does. Let the other side delete `deleted/` after
+a while (a lifecycle rule of, say, 30 days), so mail deleted from the
+workspace leaves the backups too, as data protection rules expect. Don't set
+such a rule on the rest: an object written years ago is still in today's
+snapshot.
+
+A copy made while a snapshot is being written holds part of it; the next
+night completes it. Restore only snapshots with `complete.json`.
 
 ### Restore
 

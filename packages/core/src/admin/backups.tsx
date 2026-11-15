@@ -28,6 +28,13 @@ function formatBytes(bytes: number) {
 }
 
 /** Administration → Backups: the latest daily snapshot, and Run now. */
+/** A run that kept failing for a day and a half is failed; the next day's starts. */
+const statusBadge = {
+  running: { label: "Running", variant: "secondary" },
+  completed: { label: "Completed", variant: "outline" },
+  failed: { label: "Failed", variant: "destructive" },
+} as const;
+
 export function Backups() {
   const client = useQueryClient();
 
@@ -70,12 +77,8 @@ export function Backups() {
                   <dt className="text-muted-foreground">Snapshot</dt>
                   <dd className="flex min-w-0 items-center gap-2">
                     <span className="truncate">{latest.id}</span>
-                    <Badge
-                      variant={
-                        latest.status === "running" ? "secondary" : "outline"
-                      }
-                    >
-                      {latest.status === "running" ? "Running" : "Completed"}
+                    <Badge variant={statusBadge[latest.status].variant}>
+                      {statusBadge[latest.status].label}
                     </Badge>
                   </dd>
                   <dt className="text-muted-foreground">Started</dt>

@@ -519,9 +519,15 @@ export async function restoreCoreBackup(
       db.insert(webhookEndpoints).values({
         ...webhook,
         events: webhook.events.filter((event) => events.has(event)),
-        mailboxIds: webhook.mailboxIds.map(
-          (mailboxId) => mailboxIds.get(mailboxId) ?? mailboxId
-        ),
+        // A restored address's new id, or the one already here at that
+        // address; an address that is in neither is left out.
+        mailboxIds: webhook.mailboxIds.flatMap((mailboxId) => {
+          const target =
+            mailboxIds.get(mailboxId) ??
+            existingByAddress.get(backupAddress.get(mailboxId) ?? "")?.id;
+
+          return target ? [target] : [];
+        }),
         // Off until an administrator rotates the secret and turns it on.
         enabled: false,
         signingSecret: randomToken(),

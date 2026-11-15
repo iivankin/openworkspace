@@ -10,7 +10,7 @@ import type { EmailQueueRole } from "../shared/module";
 import { emailPermissions, mailOauthScopes } from "../shared/permissions";
 import { EMAIL_WEBHOOK_SOURCE, emailWebhookEvents } from "../shared/webhooks";
 import { blockedSenderAdminRoutes } from "./admin/blocked-sender-routes";
-import { mailBackup } from "./backups/mail-backup";
+import { forgetBackupHashes, mailBackup } from "./backups/mail-backup";
 import { jmapRoutes } from "./jmap/routes";
 import { mailBootstrap } from "./mail/bootstrap";
 import { consumeDeliveryEvents } from "./mail/delivery-events";
@@ -86,7 +86,12 @@ export function email(): WorkspaceModule {
     webhookSources: { [EMAIL_WEBHOOK_SOURCE]: emailWebhookData },
     backup: mailBackup,
     hooks: {
-      mailboxSaved: addForwardDestinations,
+      mailboxSaved: async (env, mailboxId) => {
+        await Promise.all([
+          addForwardDestinations(env, mailboxId),
+          forgetBackupHashes(env, mailboxId),
+        ]);
+      },
       mailboxDeleted: deleteMailboxStorage,
       sessionRevoked: deleteSessionPushSubscriptions,
       sessionsRevoked: deleteUserPushSubscriptions,

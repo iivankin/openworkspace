@@ -218,7 +218,7 @@ export async function backupCommand(args: string[], deps: CliDeps) {
   const { values, positionals } = parseCliArgs({
     args,
     allowPositionals: true,
-    options: commonOptions,
+    options: { ...commonOptions, partial: { type: "boolean" } },
   });
 
   if (values.help) {
@@ -227,6 +227,8 @@ export async function backupCommand(args: string[], deps: CliDeps) {
   Restores a snapshot of the workspace's backups: people (invited again),
   teams, addresses, SSO apps, webhooks and branding that are missing, then
   each module's data, such as mail each address is missing.
+  --partial     restore a snapshot without complete.json (unfinished or
+                failed), which may lack some of the data
   --concurrency, --state-dir, --dry-run as for mbox`);
 
     return 0;
@@ -236,6 +238,14 @@ export async function backupCommand(args: string[], deps: CliDeps) {
 
   if (!snapshot || !existsSync(join(snapshot, "core.json"))) {
     throw new UsageError("Name a snapshot folder, the one with core.json");
+  }
+
+  // complete.json is written last: without it the snapshot was still being
+  // written (or failed) when it was copied, and may lack part of the data.
+  if (!existsSync(join(snapshot, "complete.json")) && !values.partial) {
+    throw new UsageError(
+      "This snapshot is incomplete (no complete.json): pick an earlier one, or pass --partial to restore what it has"
+    );
   }
 
   const log = deps.log ?? ((message: string) => console.error(message));

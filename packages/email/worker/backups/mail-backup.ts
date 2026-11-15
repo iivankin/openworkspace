@@ -35,6 +35,12 @@ const BATCH_ROWS = 5000;
 /** New messages a batch reads and stores, about 3 subrequests each. */
 const BATCH_NEW = 100;
 
+/**
+ * Addresses a batch goes through at most, about 2 subrequests each, so a
+ * workspace with many small or empty mailboxes still takes few batches.
+ */
+const BATCH_MAILBOXES = 20;
+
 const EML = { extension: "eml", contentType: "message/rfc822" };
 
 /** One message in a snapshot: what `import backup` sends back with it. */
@@ -80,13 +86,22 @@ function backupPlacement(input: {
   return { placement: "inbox", folder: input.folderName };
 }
 
+/**
+ * A message's `.eml`, and whether it is final: its hash may then stand for
+ * it in every later snapshot. One rebuilt without its attachments, or sent
+ * mail before Email Sending gave it its Message-ID, isn't: the next
+ * snapshot builds it again.
+ */
+type MessageBytes = { bytes: Uint8Array<ArrayBuffer>; final: boolean };
+
 /** Outgoing mail as Email Sending got it (same body and attachments), as MIME. */
 async function sentMessageBytes(
   env: Env,
   email: Email,
   error: (message: string) => void
-) {
+): Promise<MessageBytes> {
   let delivery: Awaited<ReturnType<typeof prepareOutboundDelivery>>;
+  let complete = true;
 
   try {
     delivery = await prepareOutboundDelivery(env, email);
@@ -95,13 +110,14 @@ async function sentMessageBytes(
     error(
       `${email.id}: ${cause instanceof Error ? cause.message : String(cause)}; kept without attachments`
     );
+    complete = false;
     delivery = await prepareOutboundDelivery(env, {
       ...email,
       attachmentsJson: [],
     });
   }
 
-  return serializeEml({
+  const bytes = serializeEml({
     id: email.id,
     from: email.fromJson,
     to: email.toJson,
@@ -122,18 +138,30 @@ async function sentMessageBytes(
       content: attachment.content as ArrayBuffer,
     })),
   });
+
+  return {
+    bytes,
+    final:
+      complete && (email.direction !== "outgoing" || !!email.messageIdHeader),
+  };
 }
 
 async function messageBytes(
   env: Env,
   email: Email,
   error: (message: string) => void
-) {
+): Promise<MessageBytes> {
   if (email.rawMimeR2Key) {
     const object = await env.MAIL_STORAGE.get(email.rawMimeR2Key);
 
-    if (object) return new Uint8Array(await object.arrayBuffer());
+    if (object) {
+      return { bytes: new Uint8Array(await object.arrayBuffer()), final: true };
+    }
+
     error(`${email.id}: raw message is missing, rebuilt from its fields`);
+
+    // Rebuilt only for now: the next snapshot looks for the original again.
+    return { ...(await sentMessageBytes(env, email, error)), final: false };
   }
 
   return sentMessageBytes(env, email, error);
@@ -162,7 +190,11 @@ const cursorSchema = z.object({
   after: z.string().nullable(),
 });
 
-/** One batch: a page of one mailbox's messages. */
+/**
+ * One batch: pages of mailboxes' messages, from the cursor's mailbox on,
+ * until it has listed BATCH_ROWS rows, stored BATCH_NEW new messages or
+ * gone through BATCH_MAILBOXES addresses.
+ */
 async function exportMail(env: Env, snapshot: BackupSnapshot) {
   const db = createDb(env.DB);
 
@@ -170,72 +202,105 @@ async function exportMail(env: Env, snapshot: BackupSnapshot) {
     ? cursorSchema.parse(JSON.parse(snapshot.cursor))
     : null;
 
-  const mailbox = position
+  let mailbox = position
     ? { id: position.mailbox, address: position.address }
     : await nextMailbox(db, null);
 
-  if (!mailbox) return null;
-  const stub = mailboxStub(env, mailbox.id);
+  let after = position?.after ?? null;
+  let rowsLeft = BATCH_ROWS;
+  let newLeft = BATCH_NEW;
 
-  const { rows, full, more } = await stub.listBackupEmails(
-    position?.after ?? null,
-    BATCH_ROWS,
-    BATCH_NEW
-  );
+  for (
+    let visited = 0;
+    mailbox && visited < BATCH_MAILBOXES && rowsLeft > 0 && newLeft > 0;
+    visited += 1
+  ) {
+    const stub = mailboxStub(env, mailbox.id);
 
-  const stored: { id: string; sha256: string }[] = [];
-  const lines: MailBackupLine[] = [];
+    // oxlint-disable-next-line eslint/no-await-in-loop -- one mailbox after another, within the batch's budget
+    const { rows, full, more } = await stub.listBackupEmails(
+      after,
+      rowsLeft,
+      newLeft
+    );
 
-  for (const row of rows) {
-    let sha256 = row.backupSha256;
+    const stored: { id: string; sha256: string }[] = [];
+    const lines: MailBackupLine[] = [];
 
-    if (!sha256) {
-      const email = full.find((candidate) => candidate.id === row.id);
+    for (const row of rows) {
+      let sha256 = row.backupSha256;
 
-      if (!email) continue;
+      if (!sha256) {
+        const email = full.find((candidate) => candidate.id === row.id);
 
-      try {
-        // oxlint-disable-next-line eslint/no-await-in-loop -- one message in memory at a time; a message may be 25 MiB
-        const bytes = await messageBytes(env, email, snapshot.error);
-        // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-        sha256 = await snapshot.putObject(bytes, EML);
-      } catch (cause) {
-        // Left out of this snapshot; the next one tries again.
-        snapshot.error(
-          `${mailbox.address} ${row.id}: ${cause instanceof Error ? cause.message : String(cause)}`
-        );
-        continue;
+        if (!email) continue;
+
+        try {
+          // oxlint-disable-next-line eslint/no-await-in-loop -- one message in memory at a time; a message may be 25 MiB
+          const message = await messageBytes(env, email, snapshot.error);
+          // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+          sha256 = await snapshot.putObject(message.bytes, EML);
+
+          if (message.final) stored.push({ id: row.id, sha256 });
+        } catch (cause) {
+          // Left out of this snapshot; the next one tries again.
+          snapshot.error(
+            `${mailbox.address} ${row.id}: ${cause instanceof Error ? cause.message : String(cause)}`
+          );
+          continue;
+        }
       }
 
-      stored.push({ id: row.id, sha256 });
+      lines.push({
+        id: row.id,
+        object: `${sha256}.${EML.extension}`,
+        ...backupPlacement(row),
+        seen: row.direction === "outgoing" || row.seen,
+        thread: row.conversationId,
+        direction: row.direction,
+        received_at: row.timelineAt.toISOString(),
+        subject: row.subject,
+      });
     }
 
-    lines.push({
-      id: row.id,
-      object: `${sha256}.${EML.extension}`,
-      ...backupPlacement(row),
-      seen: row.direction === "outgoing" || row.seen,
-      thread: row.conversationId,
-      direction: row.direction,
-      received_at: row.timelineAt.toISOString(),
-      subject: row.subject,
-    });
+    // After the objects, so a hash the mailbox holds always names one.
+    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+    if (stored.length) await stub.setBackupHashes(stored);
+    snapshot.writeLines(mailbox.address, lines);
+    rowsLeft -= rows.length;
+    newLeft -= full.length;
+    const last = rows.at(-1);
+
+    if (more && last) {
+      return JSON.stringify({ ...mailbox, after: last.id });
+    }
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+    mailbox = await nextMailbox(db, mailbox.id);
+    after = null;
   }
 
-  // After the objects, so a hash the mailbox holds always names one.
-  if (stored.length) await stub.setBackupHashes(stored);
-  snapshot.writeLines(mailbox.address, lines);
-  const last = rows.at(-1);
-
-  if (more && last) {
-    return JSON.stringify({ ...mailbox, after: last.id });
-  }
-
-  const next = await nextMailbox(db, mailbox.id);
-
-  return next
-    ? JSON.stringify({ mailbox: next.id, address: next.address, after: null })
+  return mailbox
+    ? JSON.stringify({ mailbox: mailbox.id, address: mailbox.address, after })
     : null;
+}
+
+/**
+ * Core's `mailboxSaved` hook: an address that no longer keeps mail (now an
+ * alias, a forward or a list) is left out of snapshots, so the hashes its
+ * mailbox holds are forgotten; if it keeps mail again, its messages are
+ * stored again instead of naming objects the sweep may have deleted.
+ */
+export async function forgetBackupHashes(env: Env, mailboxId: string) {
+  const [row] = await createDb(env.DB)
+    .select({ delivery: mailboxes.delivery })
+    .from(mailboxes)
+    .where(eq(mailboxes.id, mailboxId))
+    .limit(1);
+
+  if (row && row.delivery !== "inbox") {
+    await mailboxStub(env, mailboxId).clearBackupHashes();
+  }
 }
 
 const restoreLineSchema = z.object({

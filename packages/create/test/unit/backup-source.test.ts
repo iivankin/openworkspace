@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { backupItems } from "../../import/backup-source.ts";
+import { backupCommand, backupItems } from "../../import/backup-source.ts";
 
 const sha256 = (value: string) =>
   new Bun.CryptoHasher("sha256").update(value).digest("hex");
@@ -38,6 +38,21 @@ function snapshot() {
 }
 
 describe("import backup", () => {
+  it("refuses a snapshot without complete.json unless asked for what it has", async () => {
+    const { dir } = snapshot();
+    const logged: string[] = [];
+    const log = (line: string) => void logged.push(line);
+
+    await expect(backupCommand([dir, "--dry-run"], { log })).rejects.toThrow(
+      "This snapshot is incomplete"
+    );
+
+    expect(await backupCommand([dir, "--dry-run", "--partial"], { log })).toBe(
+      0
+    );
+    expect(logged.length).toBeGreaterThan(0);
+  });
+
   it("sends each line with its object, and skips damaged or missing objects", () => {
     const { dir, message, good } = snapshot();
     const items = [...backupItems(dir)];

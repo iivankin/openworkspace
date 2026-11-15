@@ -1,4 +1,5 @@
 import { and, desc, eq, isNull, like, lt, or } from "drizzle-orm";
+import { z } from "zod";
 
 import { workspaceConfig } from "../config";
 import { createDb } from "../db/client";
@@ -16,6 +17,8 @@ import { coreBackup } from "./core-data";
  *   and branding, never secrets (core-data.ts).
  * - `backups/<id>/<module>/<folder>/<part>.jsonl`: each module's lines.
  * - `backups/objects/<sha256>.<extension>`: what lines name, stored once.
+ * - `backups/<id>/complete.json`: written last; a snapshot without it is
+ *   incomplete (still running, or failed) and isn't restored.
  *
  * `bunx @open-workspace/create import backup <folder>` restores one.
  */
@@ -34,6 +37,19 @@ const MAX_BATCHES = 25;
 const LEASE_MS = 15 * 60 * 1000;
 const MAX_RECORDED_ERRORS = 20;
 const SWEEP_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * A run still running this long after it started has failed: it stops,
+ * its incomplete snapshot is deleted like an expired one, and the next
+ * day's snapshot can start. A day's snapshot normally takes hours.
+ */
+const MAX_RUN_MS = 36 * 60 * 60 * 1000;
+
+/** Snapshot files the sweep reads a step, about one subrequest each. */
+const SWEEP_FILES_PER_STEP = 200;
+
+/** The sweep's hash shards, one a step: the first hex digit. */
+const SWEEP_SHARDS = "0123456789abcdef";
 
 type BackupRun = typeof backupRuns.$inferSelect;
 
@@ -188,6 +204,8 @@ async function moduleStep(
         throw new Error(`Backup folder ${folder} is not a relative path`);
       }
 
+      // A folder with nothing in it gets no file: the sweep reads them all.
+      if (!lines.length) return;
       const text = lines.map((line) => `${JSON.stringify(line)}\n`).join("");
       files.set(folder, (files.get(folder) ?? "") + text);
       items += lines.length;
@@ -257,43 +275,146 @@ async function deleteKeys(bucket: R2Bucket, keys: string[]) {
   await Promise.all(deletes);
 }
 
+const sweepCursorSchema = z.discriminatedUnion("stage", [
+  /** Reading kept snapshots' files after `after`, into `backups/sweep/<run>/<seq>.txt`. */
+  z.object({
+    stage: z.literal("read"),
+    after: z.string().nullable(),
+    seq: z.number(),
+  }),
+  /** Deleting unnamed objects whose hash starts with SWEEP_SHARDS[shard]. */
+  z.object({ stage: z.literal("delete"), shard: z.number() }),
+  z.object({ stage: z.literal("done") }),
+]);
+
+type SweepCursor = z.infer<typeof sweepCursorSchema>;
+
+const sweepPrefix = (runId: string) => `${BACKUP_PREFIX}/sweep/${runId}/`;
+
 /**
- * Deletes the objects no kept snapshot names. Only objects that existed
- * before this sweep listed the snapshots are considered, and no snapshot
- * runs meanwhile, so none is deleted that a line about to be written names.
+ * Up to `limit` snapshot files (`.jsonl`) of the `kept` snapshots after the
+ * key `after`, in key order, and whether there are more.
  */
-async function sweepObjects(bucket: R2Bucket, kept: string[]) {
-  const objects = await listKeys(bucket, `${BACKUP_PREFIX}/objects/`);
-  const named = new Set<string>();
+async function nextSnapshotFiles(
+  bucket: R2Bucket,
+  kept: string[],
+  after: string | null,
+  limit: number
+) {
+  const afterId = after?.split("/")[1] ?? null;
+  const keys: string[] = [];
 
-  // ponytail: every named object's key is held in memory (~150 B each), so
-  // about half a million distinct objects fit a Worker's 128 MB; past that,
-  // sweep one hash prefix at a time.
-  for (const id of kept) {
-    // oxlint-disable-next-line eslint/no-await-in-loop -- one snapshot at a time
-    const files = (await listKeys(bucket, `${BACKUP_PREFIX}/${id}/`)).filter(
-      (key) => key.endsWith(".jsonl")
-    );
+  for (const id of kept.toSorted()) {
+    if (afterId && id < afterId) continue;
+    let cursor: string | undefined;
 
-    for (const key of files) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- one file in memory at a time
-      const text = (await (await bucket.get(key))?.text()) ?? "";
+    do {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- R2 lists one page at a time
+      const page = await bucket.list({
+        prefix: `${BACKUP_PREFIX}/${id}/`,
+        cursor,
+        startAfter:
+          !cursor && id === afterId ? (after ?? undefined) : undefined,
+      });
 
-      for (const match of text.matchAll(/"object":"([^"]+)"/gu)) {
-        if (match[1]) named.add(backupObjectKey(match[1]));
+      for (const object of page.objects) {
+        if (!object.key.endsWith(".jsonl")) continue;
+        keys.push(object.key);
+
+        if (keys.length === limit) return { keys, more: true };
       }
-    }
+
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
   }
 
-  await deleteKeys(
-    bucket,
-    objects.filter((key) => !named.has(key))
-  );
+  return { keys, more: false };
 }
 
 /**
- * After every module: deletes one snapshot outside retention a step, then
- * sweeps objects once a week, then completes the run.
+ * One step of the weekly sweep, which deletes the objects no kept snapshot
+ * names. It runs in steps, so it fits an invocation whatever the size:
+ * first it reads the kept snapshots' files a few hundred at a time and
+ * writes the object names they hold to `backups/sweep/<run>/`, then it
+ * deletes unnamed objects one hash shard at a time. Nothing else writes
+ * meanwhile (only one run runs, and this is its last part), so no object
+ * a line names is deleted.
+ */
+async function sweepStep(
+  bucket: R2Bucket,
+  run: BackupRun,
+  kept: string[],
+  cursor: SweepCursor
+): Promise<SweepCursor> {
+  if (cursor.stage === "read") {
+    const { keys, more } = await nextSnapshotFiles(
+      bucket,
+      kept,
+      cursor.after,
+      SWEEP_FILES_PER_STEP
+    );
+
+    const named = new Set<string>();
+
+    await Promise.all(
+      keys.map(async (key) => {
+        const text = (await (await bucket.get(key))?.text()) ?? "";
+
+        for (const match of text.matchAll(/"object":"([^"]+)"/gu)) {
+          if (match[1]) named.add(match[1]);
+        }
+      })
+    );
+
+    if (named.size) {
+      await bucket.put(
+        `${sweepPrefix(run.id)}${String(cursor.seq).padStart(6, "0")}.txt`,
+        [...named].join("\n")
+      );
+    }
+
+    return more
+      ? { stage: "read", after: keys.at(-1) ?? null, seq: cursor.seq + 1 }
+      : { stage: "delete", shard: 0 };
+  }
+
+  if (cursor.stage === "delete") {
+    const shard = SWEEP_SHARDS[cursor.shard] ?? "";
+    const lists = await listKeys(bucket, sweepPrefix(run.id));
+    const named = new Set<string>();
+
+    // ponytail: a shard's names are held in memory (~80 B each), so about
+    // a million objects a shard fit a Worker; past that, shard by two digits.
+    for (const key of lists) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- one list in memory at a time
+      const text = (await (await bucket.get(key))?.text()) ?? "";
+
+      for (const name of text.split("\n")) {
+        if (name.startsWith(shard)) named.add(backupObjectKey(name));
+      }
+    }
+
+    const objects = await listKeys(bucket, backupObjectKey(shard));
+
+    await deleteKeys(
+      bucket,
+      objects.filter((key) => !named.has(key))
+    );
+
+    if (cursor.shard + 1 < SWEEP_SHARDS.length) {
+      return { stage: "delete", shard: cursor.shard + 1 };
+    }
+
+    await deleteKeys(bucket, lists);
+  }
+
+  return { stage: "done" };
+}
+
+/**
+ * After every module, a step at a time: deletes one snapshot outside
+ * retention (and any failed one), then once a week sweeps objects, then
+ * marks the snapshot complete in the bucket and completes the run.
  */
 async function finishStep(
   bucket: R2Bucket,
@@ -304,19 +425,23 @@ async function finishStep(
   const runs = await db
     .select({
       id: backupRuns.id,
+      status: backupRuns.status,
       swept: backupRuns.swept,
       startedAt: backupRuns.startedAt,
     })
     .from(backupRuns);
 
+  // Completed snapshots, and this one about to be: a failed one is kept by none.
   const keep = retainedBackupIds(
-    runs.map((row) => row.id),
+    runs.flatMap((row) =>
+      row.status === "completed" || row.id === run.id ? [row.id] : []
+    ),
     retention
   );
 
   const [expired] = runs
+    .filter((row) => !keep.has(row.id) && row.status !== "running")
     .map((row) => row.id)
-    .filter((id) => !keep.has(id))
     .toSorted();
 
   if (expired) {
@@ -324,30 +449,84 @@ async function finishStep(
       bucket,
       await listKeys(bucket, `${BACKUP_PREFIX}/${expired}/`)
     );
+    await deleteKeys(bucket, await listKeys(bucket, sweepPrefix(expired)));
     await db.delete(backupRuns).where(eq(backupRuns.id, expired));
 
     return run;
   }
 
-  const sweptRecently = runs.some(
+  const sweepDue = !runs.some(
     (row) =>
+      row.id !== run.id &&
       row.swept &&
       run.startedAt.getTime() - row.startedAt.getTime() < SWEEP_EVERY_MS
   );
 
-  if (!sweptRecently) await sweepObjects(bucket, [...keep]);
+  const sweep: SweepCursor = run.cursor
+    ? sweepCursorSchema.parse(JSON.parse(run.cursor))
+    : { stage: "read", after: null, seq: 0 };
+
+  if (sweepDue && sweep.stage !== "done") {
+    const next = await sweepStep(bucket, run, [...keep], sweep);
+
+    const [updated] = await db
+      .update(backupRuns)
+      .set({ cursor: JSON.stringify(next) })
+      .where(eq(backupRuns.id, run.id))
+      .returning();
+
+    return updated ?? run;
+  }
+
+  const finishedAt = new Date();
+
+  // Last: only a snapshot with this file is whole, for `import backup` and
+  // for a copy made with rclone while a run was going.
+  await bucket.put(
+    `${BACKUP_PREFIX}/${run.id}/complete.json`,
+    JSON.stringify(
+      {
+        id: run.id,
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        items: run.itemCount,
+        errors: run.errors.length,
+      },
+      null,
+      2
+    ),
+    { httpMetadata: { contentType: "application/json" } }
+  );
 
   const [completed] = await db
     .update(backupRuns)
     .set({
       status: "completed",
-      finishedAt: new Date(),
-      swept: !sweptRecently,
+      cursor: null,
+      finishedAt,
+      swept: sweepDue,
     })
     .where(eq(backupRuns.id, run.id))
     .returning();
 
   return completed ?? run;
+}
+
+/**
+ * Fails runs still running `MAX_RUN_MS` after they started: a step that
+ * fails every time (a bug, a limit) would otherwise hold every later
+ * snapshot back. Their incomplete snapshots go with the next expiry.
+ */
+async function failStaleRuns(db: Database, now: Date) {
+  await db
+    .update(backupRuns)
+    .set({ status: "failed", leaseUntil: null, finishedAt: now })
+    .where(
+      and(
+        eq(backupRuns.status, "running"),
+        lt(backupRuns.startedAt, new Date(now.getTime() - MAX_RUN_MS))
+      )
+    );
 }
 
 /**
@@ -366,6 +545,7 @@ export async function runBackupTick(
   if (!bucket || !retention) return;
   const started = Date.now();
   const db = createDb(env.DB);
+  await failStaleRuns(db, now);
   await startBackupRun(env, now, { daily: true });
 
   const [leased] = await db
