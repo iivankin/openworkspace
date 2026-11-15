@@ -12,6 +12,8 @@ import { EMAIL_WEBHOOK_SOURCE, emailWebhookEvents } from "../shared/webhooks";
 import { blockedSenderAdminRoutes } from "./admin/blocked-sender-routes";
 import { forgetBackupHashes, mailBackup } from "./backups/mail-backup";
 import { jmapRoutes } from "./jmap/routes";
+import { runArchiveTick } from "./mail/archive";
+import { mailArchiveRoutes } from "./mail/archive-routes";
 import { mailBootstrap } from "./mail/bootstrap";
 import { consumeDeliveryEvents } from "./mail/delivery-events";
 import { demoRoutes } from "./mail/demo-routes";
@@ -42,6 +44,7 @@ export const mailAccountApi = new Hono<AppEnv>()
   .route("/mail/remote", mailRemoteRoutes)
   .route("/mail/import", mailImportRoutes)
   .route("/mail/forward-destinations", forwardDestinationRoutes)
+  .route("/mail/archive", mailArchiveRoutes)
   .route("/mail", mailRoutes)
   .route("/admin", blockedSenderAdminRoutes);
 
@@ -80,6 +83,9 @@ export function email(): WorkspaceModule {
       [emailQueueRoles.deliveryEvents]: (batch, env) =>
         consumeDeliveryEvents(batch, env),
     } satisfies Record<EmailQueueRole, QueueConsumer>,
+    // Hourly: the mail archive's retries (a no-op without its bucket).
+    scheduled: (controller, env) =>
+      runArchiveTick(env, new Date(controller.scheduledTime)),
     mcpTools: () =>
       import("./mcp/tools").then((tools) => tools.registerMailTools),
     webhookEvents: emailWebhookEvents,

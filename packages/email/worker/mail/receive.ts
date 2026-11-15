@@ -1,6 +1,7 @@
 import { normalizeMailboxAddress } from "@open-workspace/core/module";
 
 import { mailboxStub } from "../mailbox";
+import { receiveArchived } from "./archive";
 import { inboundDeliveryId } from "./inbound-delivery";
 import { deliverToList } from "./mailing-list";
 import { forwardInbound, resolveInboundRoute } from "./routing";
@@ -24,7 +25,30 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const raw = await new Response(message.raw).arrayBuffer();
 
   if (route.kind === "forward") {
-    await forwardInbound({ env, message, raw, forwardTo: route.forwardTo });
+    // Archived as the forward address's only once forwarded: nothing else
+    // keeps a copy, and archiving never throws.
+    await forwardInbound({
+      env,
+      message,
+      raw,
+      forwardTo: route.forwardTo,
+      archive: async () =>
+        receiveArchived(
+          env,
+          {
+            id: await inboundDeliveryId({
+              mailboxId: route.id,
+              envelopeFrom: message.from,
+              envelopeTo: message.to,
+              raw,
+            }),
+            mailboxId: route.id,
+            sourceKey: null,
+            receivedAt,
+          },
+          raw
+        ),
+    });
 
     return;
   }
@@ -55,15 +79,23 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   });
 
   const objectKey = `mailboxes/${mailbox.id}/raw/${deliveryId}.eml`;
-  await mailboxStub(env, mailbox.id).enqueueInbound({
-    id: deliveryId,
-    mailboxId: mailbox.id,
-    rawObjectKey: objectKey,
-    envelopeFrom: message.from,
-    envelopeTo: message.to,
-    receivedAt,
-  });
-  await env.MAIL_STORAGE.put(objectKey, raw, {
-    httpMetadata: { contentType: "message/rfc822" },
-  });
+
+  await receiveArchived(
+    env,
+    { id: deliveryId, mailboxId: mailbox.id, sourceKey: objectKey, receivedAt },
+    raw,
+    async () => {
+      await mailboxStub(env, mailbox.id).enqueueInbound({
+        id: deliveryId,
+        mailboxId: mailbox.id,
+        rawObjectKey: objectKey,
+        envelopeFrom: message.from,
+        envelopeTo: message.to,
+        receivedAt,
+      });
+      await env.MAIL_STORAGE.put(objectKey, raw, {
+        httpMetadata: { contentType: "message/rfc822" },
+      });
+    }
+  );
 }

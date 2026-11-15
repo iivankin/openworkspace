@@ -57,7 +57,7 @@ export default Alchemy.Stack(
 | `mockAuth`    | Local development and tests only: a demo sign-in that works only on `localhost`.                                                                                 |
 | `seed`, `dev` | Local development only: SQL files to load into the database, and the host and port for `alchemy dev`.                                                            |
 
-`Email()` takes two options:
+`Email()` takes three options:
 
 - `pushContact`: the `mailto:` or `https:` contact push services see, instead
   of the app's URL.
@@ -66,6 +66,9 @@ export default Alchemy.Stack(
   or a folder set to `null`, keeps mail until someone empties it. For example,
   `Email({ retention: { trash: 30, spam: 14 } })`. Conversations already in
   Trash or Spam when this ships count from the upgrade.
+- `archive`: a write-once copy of every message the workspace receives and
+  sends, locked for `{ years }` in a bucket of its own. Off by default. See
+  [Mail archive](#mail-archive).
 
 ### Removing a mail domain
 
@@ -192,6 +195,92 @@ Run it again to retry what failed; what is there already is skipped.
 Cloudflare also keeps 30 days of the database's history
 ([D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/))
 on the Workers Paid plan.
+
+## Mail archive
+
+Some businesses must keep their mail unaltered for years (in Germany, for
+example, § 257 HGB, § 147 AO and the GoBD). Backups don't cover that: they
+can be deleted, and they miss mail deleted on the day it arrived. The mail
+archive does:
+
+```ts
+modules: [Email({ archive: { years: 10 } })],
+```
+
+The deploy creates an R2 bucket, `MailArchive`, with a
+[bucket lock](https://developers.cloudflare.com/r2/buckets/bucket-locks/)
+rule: R2 refuses to delete or overwrite an object until it is `years` old,
+whoever asks, the Worker and API tokens included.
+
+- **Received mail** is copied byte for byte once it's accepted, as
+  `<year>/<month>/incoming/<id>.eml`, including mail that lands in Spam.
+  Mail to a mailing list is archived once, as the list's. Its raw copy in the
+  mail bucket isn't deleted, even by **Delete forever** or by deleting the
+  address, until it's archived. Mail to a forward address is archived as the
+  forward's once it has been forwarded; the workspace keeps no other copy of
+  it, so a copy that fails waits under `archive-staging/` in the mail bucket.
+- **Refused mail isn't archived**: mail to an unknown address, a list post
+  from someone not allowed to post, and a forward that isn't sent (over the
+  hop limit, a workspace-blocked sender, a DMARC failure where the sender's
+  policy is quarantine or reject, the sender being the only destination, or
+  every destination refusing it). A DMARC failure under `p=none` is
+  forwarded, so it is archived.
+- **Drafts aren't archived**: they are neither sent nor received. A draft is
+  archived as sent mail once it is sent.
+- **Sent mail** is copied right after Email Sending accepts it, as
+  `<year>/<month>/outgoing/<id>.eml`. Every message the workspace sends goes
+  through the same step, auto-replies included: they aren't stored in the
+  mailbox, so their copy is named `ar_<uuid>.eml` and keeps their
+  `Auto-Submitted` header.
+- An object is never overwritten, and carries its SHA-256 and the address's
+  id in its metadata. Each message has a row in the `mail_archive_entries`
+  table.
+- Archiving never holds up or bounces mail. A copy that fails is retried
+  every hour, after 5 minutes and then doubling up to 6 hours. If the
+  database can't record a message, it is accepted anyway, and the copy waits
+  under `archive-staging/` in the mail bucket for the hourly pass. Under
+  **Administration → Mail archive** you see the counts, the messages not
+  archived yet with their errors, and **Archive now**. Administrators can
+  give the "Mail archive" permission to members.
+- The archive starts with the deploy that turns it on; older mail isn't
+  copied.
+
+Archived copies can't be erased before `archive.years` runs out, not even
+for an erasure request. Set `years` to the retention period you're legally
+obliged to keep, and list the archive in your records of processing. The
+retention exemption for erasure requests covers only mail you're obliged to
+keep.
+
+### How sent mail is kept
+
+Email Sending takes a structured message, not MIME, so there are no bytes of
+a sent message to keep as they were sent. The archive's copy is MIME rebuilt
+from exactly what the workspace handed Email Sending: the text, HTML,
+attachments, sender, recipients and headers, with the Message-ID Email
+Sending returned and the time it was sent. Cloudflare adds its own headers
+and DKIM signature on the way out; those aren't in the copy. Describe it that
+way in your GoBD procedure documentation (Verfahrensdokumentation). Received
+mail is kept as the bytes that arrived, signatures included.
+
+### What the lock does and doesn't guarantee
+
+- It stops deletion and overwriting of an object while the rule holds,
+  through the Worker, the dashboard and the S3 API alike.
+- The rule itself is a bucket setting. Anyone who can edit the bucket's
+  settings in the Cloudflare account can change or remove it, including by
+  changing or removing `archive` and deploying. Removing or shortening the
+  rule unlocks objects already written, so they can be deleted.
+- Cloudflare's [audit log](https://developers.cloudflare.com/fundamentals/account/account-security/review-audit-logs/)
+  records changes to the bucket's settings. Keep the people who can make them
+  few, and check the log.
+- Pick the period the law requires, not "forever". The GDPR asks for
+  personal data to be deleted once it's no longer needed, and the legal duty
+  to keep mail (Art. 17(3)(b)) covers only that period. German retention
+  periods run from the end of the calendar year the message is from, while
+  the lock counts from the day each copy is written: lock for a year more
+  than the period (`years: 11` for 10 years).
+- Once its lock ends an object stays until someone deletes it; nothing
+  deletes it for you.
 
 ## AI
 
