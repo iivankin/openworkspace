@@ -85,7 +85,7 @@ type RouteRow = AddressRow & {
 
 export type InboundRoute =
   | { kind: "mailbox"; mailbox: RouteRow }
-  | { kind: "forward"; forwardTo: string[] };
+  | { kind: "forward"; id: string; forwardTo: string[] };
 
 /**
  * Where mail for a workspace address goes: the address itself, its plus
@@ -121,7 +121,7 @@ export async function resolveInboundRoute(
   if (!row) return null;
 
   if (row.delivery === "forward") {
-    return { kind: "forward", forwardTo: row.forwardTo ?? [] };
+    return { kind: "forward", id: row.id, forwardTo: row.forwardTo ?? [] };
   }
 
   if (row.delivery !== "alias") return { kind: "mailbox", mailbox: row };
@@ -208,6 +208,8 @@ export async function forwardInbound(input: {
   message: ForwardableEmailMessage;
   raw: ArrayBuffer;
   forwardTo: string[];
+  /** Archives the mail once at least one forward went out; never throws. */
+  archive: () => Promise<void>;
 }) {
   const { env, message, raw } = input;
   const recipient = normalizeMailboxAddress(message.to);
@@ -254,6 +256,12 @@ export async function forwardInbound(input: {
         result.reason
       );
     }
+  }
+
+  // Only mail that went out is archived: refused mail, and mail whose every
+  // forward failed (the sender gets a bounce), isn't kept.
+  if (results.some((result) => result.status === "fulfilled")) {
+    await input.archive();
   }
 
   // When every forward failed (none confirmed, say), throwing doesn't make

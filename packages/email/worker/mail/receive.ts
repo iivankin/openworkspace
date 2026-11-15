@@ -25,7 +25,30 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const raw = await new Response(message.raw).arrayBuffer();
 
   if (route.kind === "forward") {
-    await forwardInbound({ env, message, raw, forwardTo: route.forwardTo });
+    // Archived as the forward address's only once forwarded: nothing else
+    // keeps a copy, and archiving never throws.
+    await forwardInbound({
+      env,
+      message,
+      raw,
+      forwardTo: route.forwardTo,
+      archive: async () =>
+        receiveArchived(
+          env,
+          {
+            id: await inboundDeliveryId({
+              mailboxId: route.id,
+              envelopeFrom: message.from,
+              envelopeTo: message.to,
+              raw,
+            }),
+            mailboxId: route.id,
+            sourceKey: null,
+            receivedAt,
+          },
+          raw
+        ),
+    });
 
     return;
   }

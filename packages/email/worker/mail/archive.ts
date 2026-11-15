@@ -304,18 +304,20 @@ async function archiveNow(
 /**
  * Received mail: recorded before the delivery is stored, so a retry finds
  * its raw copy and the purge keeps that copy until it's archived, then
- * copied. `store` stores it; only its errors reach the caller.
+ * copied. `store` stores it; only its errors reach the caller. Mail that
+ * isn't stored (a forward's) has no `sourceKey` and no `store`: a copy
+ * that fails is staged like sent mail.
  */
 export async function receiveArchived(
   env: Env,
   delivery: {
     id: string;
     mailboxId: string;
-    sourceKey: string;
+    sourceKey: string | null;
     receivedAt: number;
   },
   raw: ArrayBuffer,
-  store: () => Promise<void>
+  store?: () => Promise<void>
 ) {
   const entry: NewEntry = {
     id: delivery.id,
@@ -326,7 +328,7 @@ export async function receiveArchived(
   };
 
   const recorded = await recordEntry(env, entry);
-  await store();
+  await store?.();
   await archiveNow(env, entry, new Uint8Array(raw), recorded);
 }
 

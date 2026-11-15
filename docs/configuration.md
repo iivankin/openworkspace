@@ -198,10 +198,21 @@ The deploy creates an R2 bucket, `MailArchive`, with a
 rule: R2 refuses to delete or overwrite an object until it is `years` old,
 whoever asks, the Worker and API tokens included.
 
-- **Received mail** is copied byte for byte as it arrives, as
-  `<year>/<month>/incoming/<id>.eml`. Mail to a mailing list is archived once,
-  as the list's. Its raw copy in the mail bucket isn't deleted, even by
-  **Delete forever** or by deleting the address, until it's archived.
+- **Received mail** is copied byte for byte once it's accepted, as
+  `<year>/<month>/incoming/<id>.eml`, including mail that lands in Spam.
+  Mail to a mailing list is archived once, as the list's. Its raw copy in the
+  mail bucket isn't deleted, even by **Delete forever** or by deleting the
+  address, until it's archived. Mail to a forward address is archived as the
+  forward's once it has been forwarded; the workspace keeps no other copy of
+  it, so a copy that fails waits under `archive-staging/` in the mail bucket.
+- **Refused mail isn't archived**: mail to an unknown address, a list post
+  from someone not allowed to post, and a forward that isn't sent (over the
+  hop limit, a workspace-blocked sender, a DMARC failure where the sender's
+  policy is quarantine or reject, the sender being the only destination, or
+  every destination refusing it). A DMARC failure under `p=none` is
+  forwarded, so it is archived.
+- **Drafts aren't archived**: they are neither sent nor received. A draft is
+  archived as sent mail once it is sent.
 - **Sent mail** is copied right after Email Sending accepts it, as
   `<year>/<month>/outgoing/<id>.eml`. Every message the workspace sends goes
   through the same step.
@@ -217,6 +228,12 @@ whoever asks, the Worker and API tokens included.
   give the "Mail archive" permission to members.
 - The archive starts with the deploy that turns it on; older mail isn't
   copied.
+
+Archived copies can't be erased before `archive.years` runs out, not even
+for an erasure request. Set `years` to the retention period you're legally
+obliged to keep, and list the archive in your records of processing. The
+retention exemption for erasure requests covers only mail you're obliged to
+keep.
 
 ### How sent mail is kept
 

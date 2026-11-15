@@ -4,6 +4,7 @@ import { required } from "@open-workspace/core/shared";
 import PostalMime from "postal-mime";
 import { z } from "zod";
 
+import { fakeEmailRouting } from "./fake-email-routing.ts";
 import { readJson } from "./json.ts";
 import { bootstrapAdmin, drainInbound } from "./mail-flow-helpers.ts";
 import { runAlarmUntil } from "./mailbox-helpers.ts";
@@ -60,6 +61,20 @@ function raw(id: string, subject: string) {
     "",
     `Body of ${id}.`,
     "",
+  ].join("\r\n");
+}
+
+/** `raw` for press@, failing DMARC on a domain that publishes `policy`. */
+function failingDmarc(id: string, policy: "none" | "reject") {
+  return [
+    "Received: from mail.fernhollow.example (192.0.2.10)",
+    "        by cloudflare-email.net (cloudflare) id 0123456789ab",
+    "        for <press@example.test>; Tue, 03 Mar 2026 10:00:00 +0000",
+    `Authentication-Results: mx.cloudflare.net; dmarc=fail header.from=fernhollow.example policy.dmarc=${policy}; spf=fail smtp.mailfrom=rosa@fernhollow.example`,
+    raw(id, `Unauthenticated ${policy}`).replace(
+      "To: ada@example.test",
+      "To: press@example.test"
+    ),
   ].join("\r\n");
 }
 
@@ -327,5 +342,164 @@ describe("mail archive", () => {
       message
     );
     expect(await env.MAIL_STORAGE.head(stagingKey)).toBeNull();
+  });
+
+  it("archives mail to a forward address once forwarded, not refused mail, and retries a failed copy", async () => {
+    fakeEmailRouting();
+
+    const ownerUserId = z
+      .object({ id: z.string() })
+      .parse(
+        await env.DB.prepare(
+          "SELECT id FROM users WHERE role = 'admin'"
+        ).first()
+      ).id;
+
+    const created = await worker.fetch(
+      new Request(`${origin}/api/admin/mailboxes`, {
+        method: "POST",
+        headers: { cookie, origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          address: "press@example.test",
+          displayName: "Press",
+          ownerUserId,
+          teamId: null,
+          delivery: "forward",
+          forwardTo: ["desk@agency.test"],
+          listPosting: "workspace",
+        }),
+      })
+    );
+
+    expect(created.status).toBe(201);
+
+    const forwardId = (
+      await readJson(created, z.looseObject({ mailboxId: z.string() }))
+    ).mailboxId;
+
+    const message = raw("fw1", "Press inquiry").replace(
+      "To: ada@example.test",
+      "To: press@example.test"
+    );
+
+    // Refused mail isn't archived: over the hop limit, or every forward
+    // refused (the sender gets a bounce).
+    const looped = await hooks.email({
+      from: "rosa@fernhollow.example",
+      to: "press@example.test",
+      raw: `X-OpenWorkspace-Forwarded: 3\r\n${raw("fw0", "Looped")}`,
+    });
+
+    expect(looped.forwarded).toEqual([]);
+
+    const bounced = await hooks.email({
+      from: "rosa@fernhollow.example",
+      to: "press@example.test",
+      raw: raw("fw00", "Bounced"),
+      unverified: ["desk@agency.test"],
+    });
+
+    expect(bounced.forwarded).toEqual([]);
+
+    // Failing DMARC where the sender's domain asks to reject it bounces.
+    const unauthenticated = await hooks.email({
+      from: "rosa@fernhollow.example",
+      to: "press@example.test",
+      raw: failingDmarc("fw000", "reject"),
+    });
+
+    expect(unauthenticated.forwarded).toEqual([]);
+    expect(unauthenticated.rejection).toStartWith("Not forwarded");
+
+    expect(
+      await env.DB.prepare(
+        "SELECT count(*) AS n FROM mail_archive_entries WHERE mailbox_id = ?"
+      )
+        .bind(forwardId)
+        .first("n")
+    ).toBe(0);
+
+    const forward = () =>
+      hooks.email({
+        from: "rosa@fernhollow.example",
+        to: "press@example.test",
+        raw: message,
+      });
+
+    const first = await forward();
+    expect(first.error).toBeUndefined();
+    expect(first.forwarded.map((sent) => sent.to)).toEqual([
+      "desk@agency.test",
+    ]);
+
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM mail_archive_entries WHERE mailbox_id = ?"
+    )
+      .bind(forwardId)
+      .all();
+
+    const [entry, ...rest] = z.array(entryRow).parse(results);
+    expect(rest).toEqual([]);
+    expect(entry).toMatchObject({
+      direction: "incoming",
+      status: "archived",
+      source_key: null,
+    });
+
+    const archived = required(entry, "the forward's entry");
+    expect(
+      await (await env.MAIL_ARCHIVE.get(archived.archive_key))?.text()
+    ).toBe(message);
+
+    // The archive refuses a redelivery's copy: it still goes out, and the
+    // copy is staged for the hourly retry.
+    await env.DB.prepare("DELETE FROM mail_archive_entries WHERE id = ?")
+      .bind(archived.id)
+      .run();
+    await env.MAIL_ARCHIVE.delete(archived.archive_key);
+    await env.MAIL_ARCHIVE.put(archived.archive_key, "something else");
+
+    const again = await forward();
+    expect(again.error).toBeUndefined();
+    expect(again.forwarded).toHaveLength(1);
+
+    const stagingKey = `archive-staging/${archived.id}.eml`;
+    expect(await (await env.MAIL_STORAGE.get(stagingKey))?.text()).toBe(
+      message
+    );
+
+    await env.MAIL_ARCHIVE.delete(archived.archive_key);
+    await retryNow();
+
+    const retried = await env.DB.prepare(
+      "SELECT status FROM mail_archive_entries WHERE id = ?"
+    )
+      .bind(archived.id)
+      .first<{ status: string }>();
+
+    expect(retried?.status).toBe("archived");
+    expect(
+      await (await env.MAIL_ARCHIVE.get(archived.archive_key))?.text()
+    ).toBe(message);
+    expect(await env.MAIL_STORAGE.head(stagingKey)).toBeNull();
+
+    // Under p=none the domain asks for nothing: the mail is forwarded, so
+    // it is archived like any other.
+    const unenforcedMessage = failingDmarc("fw2", "none");
+
+    const unenforced = await hooks.email({
+      from: "rosa@fernhollow.example",
+      to: "press@example.test",
+      raw: unenforcedMessage,
+    });
+
+    expect(unenforced.rejection).toBeUndefined();
+    expect(unenforced.forwarded).toHaveLength(1);
+
+    const unenforcedEntry = await entryFor("incoming");
+    expect(unenforcedEntry.status).toBe("archived");
+    expect(
+      await (await env.MAIL_ARCHIVE.get(unenforcedEntry.archive_key))?.text()
+    ).toBe(unenforcedMessage);
   });
 });
