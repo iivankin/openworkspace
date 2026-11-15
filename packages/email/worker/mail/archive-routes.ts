@@ -1,23 +1,20 @@
 import {
   apiError,
   oauthScope,
+  requireAdmin,
   requireAuth,
-  requirePermission,
 } from "@open-workspace/core/module";
 import type { AppEnv } from "@open-workspace/core/module";
+import { WORKSPACE_SCOPE } from "@open-workspace/core/shared";
 import { Hono } from "hono";
 
-import {
-  MAIL_ARCHIVE_SCOPE,
-  MANAGE_MAIL_ARCHIVE,
-} from "../../shared/permissions";
 import { archiveStatus, runArchiveTick } from "./archive";
 
-/** Administration → Mail archive, at /api/mail/archive. */
+/** Administration → Mail archive, at /api/mail/archive: administrators only, like backups. */
 export const mailArchiveRoutes = new Hono<AppEnv>()
   .use("*", requireAuth)
-  .use("*", oauthScope(MAIL_ARCHIVE_SCOPE))
-  .use("*", requirePermission(MANAGE_MAIL_ARCHIVE))
+  .use("*", oauthScope(WORKSPACE_SCOPE))
+  .use("*", requireAdmin)
   .get("/", async (c) =>
     c.json({ ok: true as const, ...(await archiveStatus(c.env)) })
   )

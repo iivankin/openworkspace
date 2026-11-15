@@ -26,3 +26,6 @@ export { D1_BOOKMARK_HEADER } from "./d1-bookmark";
 export { coreQueueRoles } from "./queues";
 
 export { InvariantError, invariant, required } from "./invariant";
+
+/** The OAuth scope of administrator-only settings (branding, backups, a module's own). */
+export { WORKSPACE_SCOPE } from "./oidc";

@@ -40,8 +40,11 @@ export type ClientModule = {
     id: string;
     label: string;
     Icon: LucideIcon;
-    /** Who may open the section; administrators always can. */
-    permission: WorkspacePermission;
+    /**
+     * Who may open the section; administrators always can. Without one, only
+     * administrators: guard its routes with `requireAdmin`.
+     */
+    permission?: WorkspacePermission;
     title: string;
     description: string;
     Component: ComponentType;

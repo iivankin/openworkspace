@@ -70,10 +70,12 @@ export function MailArchive() {
                 <dd>{data.pending}</dd>
                 <dt className="text-muted-foreground">Failed</dt>
                 <dd>{data.failed}</dd>
+                <dt className="text-muted-foreground">Not archived</dt>
+                <dd>{data.abandoned}</dd>
               </dl>
               {data.open.length ? (
                 <ul
-                  aria-label="Messages not archived yet"
+                  aria-label="Messages not archived"
                   className="divide-border/70 border-border divide-y rounded-lg border"
                 >
                   {data.open.map((entry) => (
@@ -82,6 +84,9 @@ export function MailArchive() {
                         {entry.mailbox ?? "Deleted address"} ·{" "}
                         {entry.direction === "incoming" ? "received" : "sent"}{" "}
                         {formatTime(entry.createdAt)}
+                        {entry.status === "abandoned"
+                          ? " · not archived, no longer retried"
+                          : ""}
                       </span>
                       <span className="text-muted-foreground block text-xs break-all">
                         {entry.lastError ?? "Waiting for its first copy"}

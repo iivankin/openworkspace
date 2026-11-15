@@ -43,6 +43,27 @@ const OPEN = ["pending", "failed"] as const;
 /** Copies per cron run; about 4 subrequests each. */
 const RETRY_BATCH = 100;
 
+/**
+ * A copy still failing this long after the message came or went is given
+ * up (`abandoned`), so it can't hold the retries of newer ones back; it
+ * stays listed under Administration → Mail archive with its error.
+ */
+const ABANDON_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Staging listings an hourly pass goes through, 1,000 copies each. */
+const STAGING_PAGES = 5;
+
+/** The message is gone for good: retrying can't archive it. */
+class ArchiveSourceGone extends Error {}
+
+/**
+ * The stored message an entry archives: a resent message's entry is
+ * `<id>~<suffix>`, so each send has a copy of its own.
+ */
+function emailIdOf(entryId: string) {
+  return entryId.split("~")[0] ?? entryId;
+}
+
 /** D1 binds at most 100 parameters a statement. */
 const SQL_CHUNK = 50;
 
@@ -137,14 +158,27 @@ async function writeArchive(
 
 /** Sent mail without a staged copy, rebuilt from the mailbox as it was sent. */
 async function rebuiltSent(env: Env, entry: Entry): Promise<Bytes> {
-  const email = await mailboxStub(env, entry.mailboxId).getEmail(entry.id);
+  const email = await mailboxStub(env, entry.mailboxId).getEmail(
+    emailIdOf(entry.id)
+  );
 
-  if (!email?.messageIdHeader || email.transportState !== "submitted") {
-    throw new Error("The sent message is gone and no copy was staged");
+  if (!email) {
+    throw new ArchiveSourceGone(
+      "The sent message is gone and no copy was staged"
+    );
+  }
+
+  if (email.transportState === "failed") {
+    throw new ArchiveSourceGone("The message was not sent");
+  }
+
+  // Unconfirmed: Email Sending may still have taken it; asked again later.
+  if (!email.messageIdHeader || email.transportState !== "submitted") {
+    throw new Error("The message isn't confirmed as sent yet");
   }
 
   return sentEml(
-    { id: email.id, date: email.timelineAt, messageId: email.messageIdHeader },
+    { id: email.id, date: entry.createdAt, messageId: email.messageIdHeader },
     await prepareOutboundDelivery(env, email)
   );
 }
@@ -153,13 +187,15 @@ async function storedBytes(env: Env, entry: Entry): Promise<Bytes> {
   if (entry.sourceKey) {
     const object = await env.MAIL_STORAGE.get(entry.sourceKey);
 
-    if (!object) throw new Error("The message is missing from mail storage");
+    if (!object) {
+      throw new ArchiveSourceGone("The message is missing from mail storage");
+    }
 
     return new Uint8Array(await object.arrayBuffer());
   }
 
   if (entry.direction === "outgoing") return rebuiltSent(env, entry);
-  throw new Error("The received message has no stored copy");
+  throw new ArchiveSourceGone("The received message has no stored copy");
 }
 
 /**
@@ -172,6 +208,7 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
 
   if (!bucket) return false;
   const db = createDb(env.DB);
+  let createdAt: Date | null = null;
 
   try {
     const [entry] = await db
@@ -183,6 +220,7 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
     if (!entry) throw new Error("The message is not recorded for archiving");
 
     if (entry.status === "archived") return true;
+    createdAt = entry.createdAt;
     const bytes = await (load ? load() : storedBytes(env, entry));
     const sha256 = await writeArchive(bucket, entry, bytes);
     const now = new Date();
@@ -211,10 +249,15 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
 
     console.error("Mail archive copy failed", id, message);
 
+    const abandoned =
+      error instanceof ArchiveSourceGone ||
+      (createdAt !== null &&
+        Date.now() - createdAt.getTime() >= ABANDON_AFTER_MS);
+
     await db
       .update(mailArchiveEntries)
       .set({
-        status: "failed",
+        status: abandoned ? "abandoned" : "failed",
         attempts: sql`${mailArchiveEntries.attempts} + 1`,
         lastError: message,
         updatedAt: new Date(),
@@ -262,6 +305,8 @@ async function archiveNow(
 
     if (entry.sourceKey) return;
   } else {
+    // No row: archive it now, and stage it all the same, so the hourly pass
+    // gives it its row (or retries the copy).
     try {
       const archiveKey = archiveObjectKey(
         entry.direction,
@@ -270,8 +315,6 @@ async function archiveNow(
       );
 
       await writeArchive(bucket, { ...entry, archiveKey }, bytes);
-
-      return;
     } catch (error) {
       console.error(`Mail archive copy of ${entry.id} failed`, error);
     }
@@ -333,32 +376,57 @@ export async function receiveArchived(
 }
 
 /**
+ * The entry id of a send: the message's id, or for a resend (an entry for
+ * it exists already) `<id>~<suffix>`, so every send keeps its own copy.
+ */
+async function sendEntryId(env: Env, id: string) {
+  try {
+    const [existing] = await createDb(env.DB)
+      .select({ id: mailArchiveEntries.id })
+      .from(mailArchiveEntries)
+      .where(eq(mailArchiveEntries.id, id))
+      .limit(1);
+
+    return existing ? `${id}~${Date.now().toString(36)}` : id;
+  } catch {
+    return id;
+  }
+}
+
+/**
  * Every message the workspace sends goes through here: it hands `message`
  * to Email Sending and archives exactly that, with the Message-ID it got
- * back (`sentEml`). Archiving never fails the send. `sent.id` names the
- * copy: the stored message's id, or any unique id for mail that isn't
- * stored (e.g. an auto-reply).
+ * back (`sentEml`) and the time it was sent. The entry is recorded before
+ * sending, so a send whose Worker dies before the copy is still retried
+ * (rebuilt from the mailbox). Archiving never fails the send. `sent.id`
+ * names the copy: the stored message's id, or any unique id for mail that
+ * isn't stored (e.g. an auto-reply).
  */
 export async function sendArchived(
   env: Env,
-  sent: { id: string; mailboxId: string; date: Date },
+  sent: { id: string; mailboxId: string },
   message: SentMessage
 ) {
-  const result = await env.EMAIL.send(message);
-
-  if (!env.MAIL_ARCHIVE) return result;
+  if (!env.MAIL_ARCHIVE) return env.EMAIL.send(message);
 
   const entry: NewEntry = {
-    id: sent.id,
+    id: await sendEntryId(env, sent.id),
     mailboxId: sent.mailboxId,
     direction: "outgoing",
     sourceKey: null,
-    createdAt: sent.date,
+    createdAt: new Date(),
   };
 
+  const recorded = await recordEntry(env, entry);
+  const result = await env.EMAIL.send(message);
+
   try {
-    const bytes = sentEml({ ...sent, messageId: result.messageId }, message);
-    await archiveNow(env, entry, bytes, await recordEntry(env, entry));
+    const bytes = sentEml(
+      { id: sent.id, date: entry.createdAt, messageId: result.messageId },
+      message
+    );
+
+    await archiveNow(env, entry, bytes, recorded);
   } catch (error) {
     console.error(`Could not archive sent message ${sent.id}`, error);
   }
@@ -421,53 +489,94 @@ export async function archiveMailboxNow(env: Env, mailboxId: string) {
   return new Set(left.flatMap((row) => (row.key ? [row.key] : [])));
 }
 
-/** Staged copies D1 has no row for, or a row that doesn't point at them yet. */
+/**
+ * Staged copies D1 has no row for, or a row that doesn't point at them yet:
+ * a few listings of 1,000 a pass, looked up in D1 together.
+ */
 async function adoptStaged(env: Env) {
   const db = createDb(env.DB);
+  let cursor: string | undefined;
 
-  const page = await env.MAIL_STORAGE.list({
-    prefix: ARCHIVE_STAGING_PREFIX,
-    limit: RETRY_BATCH,
-    include: ["customMetadata"],
-  });
+  for (let page = 0; page < STAGING_PAGES; page += 1) {
+    // oxlint-disable-next-line eslint/no-await-in-loop -- R2 lists one page at a time
+    const listing = await env.MAIL_STORAGE.list({
+      prefix: ARCHIVE_STAGING_PREFIX,
+      cursor,
+      include: ["customMetadata"],
+    });
 
-  for (const object of page.objects) {
-    const metadata = stagedMetadata.safeParse(object.customMetadata);
+    const staged = listing.objects.flatMap((object) => {
+      const metadata = stagedMetadata.safeParse(object.customMetadata);
 
-    if (!metadata.success) continue;
-    const id = object.key.slice(ARCHIVE_STAGING_PREFIX.length, -".eml".length);
-
-    // oxlint-disable-next-line eslint/no-await-in-loop -- a few staged copies, rarely any
-    await registerArchiveEntries(env, [
-      {
-        id,
-        mailboxId: metadata.data.mailboxId,
-        direction: metadata.data.direction,
-        sourceKey: object.key,
-        createdAt: new Date(metadata.data.createdAt),
-      },
-    ]);
+      return metadata.success
+        ? [
+            {
+              key: object.key,
+              id: object.key.slice(
+                ARCHIVE_STAGING_PREFIX.length,
+                -".eml".length
+              ),
+              ...metadata.data,
+            },
+          ]
+        : [];
+    });
 
     // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-    const [row] = await db
-      .select({
-        status: mailArchiveEntries.status,
-        sourceKey: mailArchiveEntries.sourceKey,
-      })
-      .from(mailArchiveEntries)
-      .where(eq(mailArchiveEntries.id, id));
+    const found = await Promise.all(
+      chunks(staged.map((item) => item.id)).map((ids) =>
+        db
+          .select({
+            id: mailArchiveEntries.id,
+            status: mailArchiveEntries.status,
+            sourceKey: mailArchiveEntries.sourceKey,
+          })
+          .from(mailArchiveEntries)
+          .where(inArray(mailArchiveEntries.id, ids))
+      )
+    );
+
+    const rows = found.flat();
+
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const missing = staged.filter((item) => !byId.has(item.id));
+
+    // oxlint-disable-next-line eslint/no-await-in-loop -- see above
+    await registerArchiveEntries(
+      env,
+      missing.map((item) => ({
+        id: item.id,
+        mailboxId: item.mailboxId,
+        direction: item.direction,
+        sourceKey: item.key,
+        createdAt: new Date(item.createdAt),
+      }))
+    );
 
     // Archived some other way (e.g. the copy landed but D1 didn't hear of it).
-    if (row?.status === "archived") {
+    const done = staged.filter(
+      (item) => byId.get(item.id)?.status === "archived"
+    );
+
+    if (done.length) {
       // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-      await env.MAIL_STORAGE.delete(object.key);
-    } else if (row && !row.sourceKey) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- see above
-      await db
-        .update(mailArchiveEntries)
-        .set({ sourceKey: object.key })
-        .where(eq(mailArchiveEntries.id, id));
+      await env.MAIL_STORAGE.delete(done.map((item) => item.key));
     }
+
+    for (const item of staged) {
+      const row = byId.get(item.id);
+
+      if (row && row.status !== "archived" && !row.sourceKey) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- rare: a row recorded before its copy was staged
+        await db
+          .update(mailArchiveEntries)
+          .set({ sourceKey: item.key })
+          .where(eq(mailArchiveEntries.id, item.id));
+      }
+    }
+
+    if (!listing.truncated) return;
+    cursor = listing.cursor;
   }
 }
 
@@ -490,7 +599,8 @@ export async function runArchiveTick(
     .select()
     .from(mailArchiveEntries)
     .where(inArray(mailArchiveEntries.status, OPEN))
-    .orderBy(asc(mailArchiveEntries.createdAt))
+    // Least recently tried first, so failing copies take turns with the rest.
+    .orderBy(asc(mailArchiveEntries.updatedAt))
     .limit(RETRY_BATCH * 3);
 
   const due = open
@@ -527,7 +637,7 @@ export async function archiveStatus(env: Env) {
       })
       .from(mailArchiveEntries)
       .leftJoin(mailboxes, eq(mailboxes.id, mailArchiveEntries.mailboxId))
-      .where(inArray(mailArchiveEntries.status, OPEN))
+      .where(inArray(mailArchiveEntries.status, [...OPEN, "abandoned"]))
       .orderBy(desc(mailArchiveEntries.createdAt))
       .limit(20),
   ]);
@@ -541,6 +651,7 @@ export async function archiveStatus(env: Env) {
     archived: count("archived"),
     pending: count("pending"),
     failed: count("failed"),
+    abandoned: count("abandoned"),
     open: open.map((entry) => ({
       ...entry,
       createdAt: entry.createdAt.getTime(),

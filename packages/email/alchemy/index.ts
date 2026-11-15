@@ -7,6 +7,7 @@ import { VapidKeys } from "@open-workspace/core/alchemy";
 import type { WorkspaceModuleInfra } from "@open-workspace/core/alchemy";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import { Random } from "alchemy/Random";
+import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { z } from "zod";
@@ -196,9 +197,10 @@ const SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60;
 
 /**
  * The archive bucket, declared with its lock rule: R2 refuses to delete or
- * overwrite an object until it is `years` old. Changing `years` (or
- * dropping `archive`) and deploying changes or removes the rule, and with
- * it the lock on objects already written.
+ * overwrite an object until it is `years` old. Changing `years` and
+ * deploying changes the rule, and with it the lock on objects already
+ * written. Dropping `archive` leaves the bucket, its objects and its rule
+ * as they are (retained): Alchemy stops tracking it, and nothing is deleted.
  */
 function archiveEnv(archive: EmailInfraProps["archive"]) {
   const env: ArchiveEnv = {};
@@ -223,7 +225,7 @@ function archiveEnv(archive: EmailInfraProps["archive"]) {
         },
       },
     ],
-  });
+  }).pipe(RemovalPolicy.retain());
   env.MAIL_ARCHIVE_YEARS = String(archive.years);
 
   return env;

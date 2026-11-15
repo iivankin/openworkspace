@@ -25,7 +25,7 @@ let mailboxId = "";
 const entryRow = z.object({
   id: z.string(),
   direction: z.enum(["incoming", "outgoing"]),
-  status: z.enum(["pending", "archived", "failed"]),
+  status: z.enum(["pending", "archived", "failed", "abandoned"]),
   source_key: z.string().nullable(),
   archive_key: z.string(),
   sha256: z.string().nullable(),
@@ -579,5 +579,36 @@ describe("mail archive", () => {
     expect(parsed.messageId).toBe(
       required(logged?.last_outbound_message_id, "the logged Message-ID")
     );
+  });
+
+  it("gives up on a copy whose message is gone, so it can't hold the rest back", async () => {
+    const created = Date.UTC(2026, 2, 3, 9);
+
+    await env.DB.prepare(
+      `INSERT INTO mail_archive_entries (id, mailbox_id, direction, source_key, status, archive_key, created_at, updated_at)
+       VALUES ('dlv_gone', ?, 'incoming', 'mailboxes/gone/raw.eml', 'pending', '2026/03/incoming/dlv_gone.eml', ?, 0)`
+    )
+      .bind(mailboxId, created)
+      .run();
+
+    await retryNow();
+
+    expect(
+      (await entries()).find((entry) => entry.id === "dlv_gone")
+    ).toMatchObject({
+      status: "abandoned",
+      last_error: "The message is missing from mail storage",
+    });
+
+    const status = await worker.fetch(
+      new Request(`${origin}/api/mail/archive`, { headers: { cookie } })
+    );
+
+    expect(await status.json()).toMatchObject({
+      abandoned: 1,
+      open: expect.arrayContaining([
+        expect.objectContaining({ id: "dlv_gone", status: "abandoned" }),
+      ]),
+    });
   });
 });

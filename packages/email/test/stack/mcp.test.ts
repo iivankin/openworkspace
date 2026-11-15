@@ -165,7 +165,6 @@ describe("account MCP", () => {
         "admin.apps",
         "admin.blocked_senders",
         "admin.import_mail",
-        "admin.mail_archive",
         "admin.workspace",
         "admin.access",
         "offline_access",

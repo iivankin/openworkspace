@@ -17,10 +17,7 @@ import { lazy, Suspense } from "react";
 
 import { MAIL_ROUTE } from "../shared/mail-path";
 import { EMAIL_MODULE } from "../shared/module";
-import {
-  MANAGE_BLOCKED_SENDERS,
-  MANAGE_MAIL_ARCHIVE,
-} from "../shared/permissions";
+import { MANAGE_BLOCKED_SENDERS } from "../shared/permissions";
 import { emailWebhookEvents } from "../shared/webhooks";
 import { ForwardDestinations } from "./admin/forward-destinations";
 import { prefetchMail } from "./mail/mail-prefetch";
@@ -144,7 +141,7 @@ const mail: ClientModule = {
       id: "mail-archive",
       label: "Mail archive",
       Icon: Archive,
-      permission: MANAGE_MAIL_ARCHIVE,
+      // Administrators only, like Backups.
       title: "Mail archive",
       description:
         "A write-once copy of every message the workspace receives and sends.",

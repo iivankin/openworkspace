@@ -26,6 +26,7 @@ export type { AppEnv, SessionUser } from "./env";
 // Signed-in requests: sessions, OAuth scopes, and permissions.
 export {
   bearerToken,
+  requireAdmin,
   requireAuth,
   requireAuthWith,
   requireSessionAuth,

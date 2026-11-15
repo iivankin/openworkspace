@@ -226,7 +226,10 @@ export const mailArchiveEntries = sqliteTable(
      * `archive-staging/`. Null for sent mail, rebuilt from the mailbox.
      */
     sourceKey: text("source_key"),
-    status: text("status", { enum: ["pending", "archived", "failed"] })
+    /** `abandoned`: given up (archive.ts), no longer retried. */
+    status: text("status", {
+      enum: ["pending", "archived", "failed", "abandoned"],
+    })
       .notNull()
       .default("pending"),
     attempts: integer("attempts").notNull().default(0),

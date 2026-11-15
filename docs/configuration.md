@@ -239,9 +239,11 @@ whoever asks, the Worker and API tokens included.
   every hour, after 5 minutes and then doubling up to 6 hours. If the
   database can't record a message, it is accepted anyway, and the copy waits
   under `archive-staging/` in the mail bucket for the hourly pass. Under
-  **Administration → Mail archive** you see the counts, the messages not
-  archived yet with their errors, and **Archive now**. Administrators can
-  give the "Mail archive" permission to members.
+  **Administration → Mail archive**, for administrators, you see the counts,
+  the messages not archived yet with their errors, and **Archive now**. A
+  message whose source is gone (a delivery that bounced before it was
+  stored, say) or that still fails after a week is marked **not archived**
+  and no longer retried, so it can't hold up the rest.
 - The archive starts with the deploy that turns it on; older mail isn't
   copied.
 
@@ -268,8 +270,10 @@ mail is kept as the bytes that arrived, signatures included.
   through the Worker, the dashboard and the S3 API alike.
 - The rule itself is a bucket setting. Anyone who can edit the bucket's
   settings in the Cloudflare account can change or remove it, including by
-  changing or removing `archive` and deploying. Removing or shortening the
-  rule unlocks objects already written, so they can be deleted.
+  changing `archive.years` and deploying. Removing or shortening the rule
+  unlocks objects already written, so they can be deleted. Dropping
+  `archive` stops archiving new mail but leaves the bucket, its objects and
+  its rule in place: the deploy doesn't delete them.
 - Cloudflare's [audit log](https://developers.cloudflare.com/fundamentals/account/account-security/review-audit-logs/)
   records changes to the bucket's settings. Keep the people who can make them
   few, and check the log.
