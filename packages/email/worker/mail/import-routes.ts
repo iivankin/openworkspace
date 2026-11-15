@@ -31,7 +31,7 @@ import {
 import { mailboxStub } from "../mailbox";
 import type { ImportMessageResult } from "../mailbox";
 import { readCappedBody } from "./capped-body";
-import { rawMessageId } from "./inbound";
+import { inboundMessageId, rawMessageId } from "./inbound";
 
 /**
  * Importing existing mail (the `open-workspace import` CLI).
@@ -80,6 +80,15 @@ const importQuerySchema = z.object({
   direction: z.enum(["incoming", "outgoing"]).optional(),
 });
 
+async function importIdOf(importKey: string | Uint8Array<ArrayBuffer>) {
+  return `imp_${(await sha256Hex(importKey)).slice(0, 32)}`;
+}
+
+/** The id a message imported under `importKey` has in its mailbox. */
+export async function importedEmailId(importKey: string) {
+  return inboundMessageId(await importIdOf(importKey));
+}
+
 async function sha256Hex(value: string | Uint8Array<ArrayBuffer>) {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -111,7 +120,7 @@ export async function importRawMessage(input: {
 }): Promise<ImportMessageResult> {
   const { env, mailbox: target, raw } = input;
   const mailbox = mailboxStub(env, target.id);
-  const importId = `imp_${(await sha256Hex(input.importKey)).slice(0, 32)}`;
+  const importId = await importIdOf(input.importKey);
   const known = await mailbox.findImported(importId, rawMessageId(raw));
 
   if (known) return { status: "duplicate", ...known };

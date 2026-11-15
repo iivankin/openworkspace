@@ -284,6 +284,10 @@ describe("backups", () => {
       .join("")
       .trim()
       .split("\n")
+      .map((line) => z.looseObject({}).parse(JSON.parse(line)))
+      // Message lines; the settings line (the Clients folder) is
+      // backup-settings.test.ts's.
+      .filter((line) => !("kind" in line))
       .map((line) =>
         z
           .looseObject({
@@ -291,7 +295,7 @@ describe("backups", () => {
             placement: z.string(),
             object: z.string(),
           })
-          .parse(JSON.parse(line))
+          .parse(line)
       );
 
     expect(
@@ -391,7 +395,8 @@ describe("backups", () => {
 
     expect((await backupStatus()).latest).toMatchObject({
       status: "completed",
-      itemCount: 7,
+      // Seven messages and kiln@'s settings line.
+      itemCount: 8,
       newObjectCount: 1,
       errors: [],
     });
@@ -490,7 +495,11 @@ describe("backups", () => {
 
     const log = await restore("state");
     expect(log).toContain("people 1, teams 1, addresses 4");
-    expect(log).toContain("7 restored");
+    // Seven messages; the settings line finds the Clients folder there or
+    // makes it, whichever of it and the first message in Clients runs first.
+    expect(log).toMatch(
+      /Lines: (7 restored, 1|8 restored, 0) already there, 0 skipped/u
+    );
 
     const restoredId = idRow.parse(
       await env.DB.prepare(
@@ -555,7 +564,7 @@ describe("backups", () => {
     // Again: everything is there already.
     const again = await restore("state-again");
     expect(again).toContain("people 0, teams 0, addresses 0");
-    expect(again).toContain("0 restored, 7 already there");
+    expect(again).toContain("0 restored, 8 already there");
   });
 
   it("is for administrators only", async () => {
