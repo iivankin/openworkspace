@@ -8,6 +8,7 @@ import { mcpAccessToken } from "@open-workspace/core/testing";
 import { main } from "@open-workspace/create/import/cli.ts";
 import { z } from "zod";
 
+import { fakeEmailRouting } from "./fake-email-routing.ts";
 import { readJson } from "./json.ts";
 import { bootstrapAdmin } from "./mail-flow-helpers.ts";
 import { env, hooks, useFreshWorkspace, worker } from "./workspace.ts";
@@ -179,9 +180,30 @@ beforeAll(async () => {
         displayName: "Kiln",
         ownerUserId: null,
         teamId,
+        catchAll: true,
       })
     )
   ).mailboxId;
+
+  // An alias of kiln@, and a forward (inserted: no Email Routing here).
+  await call(
+    "/api/admin/mailboxes",
+    "POST",
+    JSON.stringify({
+      address: "glaze@example.test",
+      displayName: "Glaze",
+      ownerUserId: null,
+      teamId,
+      delivery: "alias",
+      aliasOf: kilnId,
+    })
+  );
+  await env.DB.prepare(
+    `INSERT INTO mailboxes (id, local_part, domain, display_name, team_id, delivery, forward_to, created_by_user_id)
+     VALUES ('mbx_backup_fwd', 'orders', 'example.test', 'Orders', ?, 'forward', '["orders@fernhollow.example"]', ?)`
+  )
+    .bind(teamId, adaId)
+    .run();
 
   await importMessage("m1", "Kiln schedule", {
     placement: "inbox",
@@ -370,6 +392,7 @@ describe("backups", () => {
   });
 
   it("restores a deleted team, its address and mail, a person, branding and a webhook", async () => {
+    const routing = fakeEmailRouting();
     const before = await messages(kilnId);
     const dir = mkdtempSync(join(tmpdir(), "ow-backup-"));
     await downloadBucket(dir);
@@ -377,6 +400,7 @@ describe("backups", () => {
 
     // What a bad day takes: the team, its address and mail, a person, the name, a webhook.
     await call(`/api/admin/mailboxes/${kilnId}`, "DELETE");
+    await call("/api/admin/mailboxes/mbx_backup_fwd", "DELETE");
     await call("/api/admin/branding/name", "PUT", JSON.stringify({ name: "" }));
 
     for (const statement of [
@@ -423,7 +447,7 @@ describe("backups", () => {
     };
 
     const log = await restore("state");
-    expect(log).toContain("people 1, teams 1, addresses 2");
+    expect(log).toContain("people 1, teams 1, addresses 4");
     expect(log).toContain("7 restored");
 
     const restoredId = idRow.parse(
@@ -435,6 +459,28 @@ describe("backups", () => {
     ).id;
 
     expect(await messages(restoredId)).toEqual(before);
+
+    // Delivery comes back: the catch-all, the alias of the new kiln@, the forward.
+    expect(
+      await env.DB.prepare(
+        `SELECT local_part, delivery, alias_of, forward_to, catch_all FROM mailboxes
+         WHERE team_id = ? ORDER BY local_part`
+      )
+        .bind(teamId)
+        .all()
+    ).toMatchObject({
+      results: [
+        { local_part: "glaze", delivery: "alias", alias_of: restoredId },
+        { local_part: "kiln", delivery: "inbox", catch_all: 1 },
+        {
+          local_part: "orders",
+          delivery: "forward",
+          forward_to: '["orders@fernhollow.example"]',
+        },
+      ],
+    });
+    // The restored forward's destination goes to Email Routing, as on save.
+    expect([...routing.verified.keys()]).toEqual(["orders@fernhollow.example"]);
     expect(
       await env.DB.prepare(
         `SELECT u.status, m.local_part, m.is_primary FROM users u

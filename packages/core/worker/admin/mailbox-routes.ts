@@ -191,7 +191,7 @@ async function resolveDelivery(
 }
 
 /** Lets modules act on a stored address; a failure doesn't undo the save. */
-async function announceMailboxSaved(env: Env, mailboxId: string) {
+export async function announceMailboxSaved(env: Env, mailboxId: string) {
   try {
     await runModuleHooks("mailboxSaved", env, mailboxId);
   } catch (error) {

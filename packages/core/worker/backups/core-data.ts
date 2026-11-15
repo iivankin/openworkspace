@@ -4,9 +4,11 @@ import { z } from "zod";
 import { required } from "../../shared/invariant";
 import {
   listPostingPolicies,
+  MAX_FORWARD_DESTINATIONS,
   mailboxDeliveries,
   workspaceLogo,
 } from "../../shared/workspace";
+import { announceMailboxSaved } from "../admin/mailbox-routes";
 import type { Database } from "../db/client";
 import { mailboxAddressSql } from "../db/mailboxes";
 import {
@@ -97,6 +99,9 @@ export async function coreBackup(env: Env, db: Database) {
         ownerUserId: mailboxes.ownerUserId,
         teamId: mailboxes.teamId,
         delivery: mailboxes.delivery,
+        aliasOf: mailboxes.aliasOf,
+        forwardTo: mailboxes.forwardTo,
+        catchAll: mailboxes.catchAll,
         listPosting: mailboxes.listPosting,
         isPrimary: mailboxes.isPrimary,
       })
@@ -235,6 +240,14 @@ export const coreBackupSchema = z.object({
       ownerUserId: id.nullable(),
       teamId: id.nullable(),
       delivery: z.enum(mailboxDeliveries),
+      // Absent in snapshots from before aliases and forwards.
+      aliasOf: id.nullable().default(null),
+      forwardTo: z
+        .array(z.string().max(320))
+        .max(MAX_FORWARD_DESTINATIONS)
+        .nullable()
+        .default(null),
+      catchAll: z.boolean().default(false),
       listPosting: z.enum(listPostingPolicies),
       isPrimary: z.boolean(),
     })
@@ -313,7 +326,14 @@ export async function restoreCoreBackup(
       db.select({ id: users.id }).from(users),
       db.select({ id: teams.id, slug: teams.slug }).from(teams),
       db
-        .select({ id: mailboxes.id, address: mailboxAddressSql })
+        .select({
+          id: mailboxes.id,
+          address: mailboxAddressSql,
+          domain: mailboxes.domain,
+          ownerUserId: mailboxes.ownerUserId,
+          teamId: mailboxes.teamId,
+          catchAll: mailboxes.catchAll,
+        })
         .from(mailboxes),
       db.select({ id: oidcClients.id }).from(oidcClients),
       db
@@ -364,13 +384,46 @@ export async function restoreCoreBackup(
     ...newTeams.map((team) => team.id),
   ]);
 
-  const addresses = backup.addresses.filter(
+  const candidates = backup.addresses.filter(
     (address) =>
       !taken.has(address.id) &&
       !taken.has(`address:${address.address}`) &&
       (address.ownerUserId === null || userIds.has(address.ownerUserId)) &&
       (address.teamId === null || teamIds.has(address.teamId))
   );
+
+  const backupAddress = new Map(
+    backup.addresses.map((address) => [address.id, address.address])
+  );
+
+  const existingByAddress = new Map(
+    addressRows.map((row) => [row.address, row])
+  );
+
+  const candidateIds = new Set(candidates.map((address) => address.id));
+
+  // An alias comes back only with its inbox or list: restored alongside it,
+  // or already here under the same address and owner. Aliases go last, after
+  // what they point to (alias_of is a foreign key).
+  const addresses = candidates
+    .filter((address) => {
+      if (address.delivery !== "alias") return true;
+
+      if (address.aliasOf && candidateIds.has(address.aliasOf)) return true;
+
+      const target = existingByAddress.get(
+        backupAddress.get(address.aliasOf ?? "") ?? ""
+      );
+
+      return (
+        target !== undefined &&
+        target.ownerUserId === address.ownerUserId &&
+        target.teamId === address.teamId
+      );
+    })
+    .toSorted(
+      (a, b) => Number(a.delivery === "alias") - Number(b.delivery === "alias")
+    );
 
   // A new id, so a module never finds what it kept for a deleted address
   // under the restored one (mail's Durable Object, say).
@@ -385,6 +438,12 @@ export async function restoreCoreBackup(
   );
 
   const webhooks = backup.webhooks.filter((webhook) => !taken.has(webhook.id));
+
+  // One catch-all a domain: a domain that has one here keeps it.
+  const catchAllDomains = new Set(
+    addressRows.filter((row) => row.catchAll).map((row) => row.domain)
+  );
+
   const events = new Set(Object.keys(workspaceWebhookEvents()));
   const now = new Date();
 
@@ -410,17 +469,28 @@ export async function restoreCoreBackup(
           db.insert(teamMembers).values({ teamId: team.id, ...member })
         ),
     ]),
-    ...addresses.map(({ id: oldId, address, ...mailbox }) =>
-      db.insert(mailboxes).values({
+    ...addresses.map(({ id: oldId, address, aliasOf, ...mailbox }) => {
+      const parts = mailboxAddressParts(address);
+      const catchAll = mailbox.catchAll && !catchAllDomains.has(parts.domain);
+
+      if (catchAll) catchAllDomains.add(parts.domain);
+
+      return db.insert(mailboxes).values({
         ...mailbox,
         id: required(mailboxIds.get(oldId), "every restored address has an id"),
-        ...mailboxAddressParts(address),
+        ...parts,
+        aliasOf: aliasOf
+          ? (mailboxIds.get(aliasOf) ??
+            existingByAddress.get(backupAddress.get(aliasOf) ?? "")?.id ??
+            null)
+          : null,
+        catchAll,
         // Someone already here keeps their own primary address.
         isPrimary:
           mailbox.isPrimary && restoredPeople.has(mailbox.ownerUserId ?? ""),
         createdByUserId: actorUserId,
-      })
-    ),
+      });
+    }),
     ...oidc.flatMap(({ accessTeams: access, ...client }) => [
       db
         .insert(oidcClients)
@@ -464,6 +534,18 @@ export async function restoreCoreBackup(
 
   // One batch, one transaction: all of it lands, or none.
   if (first) await db.batch([first, ...rest]);
+
+  // Email Routing gets a restored forward's destinations, as when it's saved.
+  await Promise.all(
+    addresses
+      .filter((address) => address.delivery === "forward")
+      .map((address) =>
+        announceMailboxSaved(
+          env,
+          required(mailboxIds.get(address.id), "a restored forward has an id")
+        )
+      )
+  );
 
   return {
     people: people.length,

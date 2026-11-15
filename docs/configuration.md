@@ -165,6 +165,11 @@ It puts back what the workspace is missing and leaves what exists alone:
    that exists, by id or by its address, handle or entity id, is skipped.
    Restored webhooks are off with a new secret, and restored OIDC apps have
    no client secret: rotate them before turning them on.
+   Aliases come back with the inbox or list they point to, a catch-all
+   unless its domain has one, and forwards with their destinations, which
+   Cloudflare asks to confirm again if the account is new. A destination
+   Cloudflare couldn't add shows **Not added to Cloudflare** in the address
+   editor; **Save address** adds it again.
 2. Each module's data. Mail adds each message an address is missing, in its
    place, folder, read state and conversation; it never removes or rolls back
    mail.
