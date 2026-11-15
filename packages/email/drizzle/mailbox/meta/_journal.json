@@ -43,6 +43,13 @@
       "when": 1794707828150,
       "tag": "0005_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794718198579,
+      "tag": "0006_auto_replies",
+      "breakpoints": true
     }
   ]
 }
