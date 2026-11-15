@@ -143,14 +143,20 @@ export async function resolveInboundRoute(
  * Why a message must not be forwarded, or null. Forwarding happens as mail
  * arrives, before any mailbox's spam classifier runs, so it goes by what is
  * known then: the hop limit, a sender blocked for the whole workspace, and
- * mail that failed DMARC.
+ * mail that failed DMARC whose domain asks receivers to quarantine or reject
+ * it. Under `p=none` the domain asks for nothing, so the mail goes on and
+ * the destination's own filtering judges it, as with any other mail there.
+ * DMARC failures are refused, so the sender learns the mail didn't arrive;
+ * the rest is dropped, like spam that is never shown.
  */
 async function forwardRefusal(
   db: D1Database,
   message: { from: string },
   raw: ArrayBuffer
-) {
-  if (forwardHops(raw) >= MAX_FORWARD_HOPS) return "forwarded too many times";
+): Promise<{ reason: string; bounce: boolean } | null> {
+  if (forwardHops(raw) >= MAX_FORWARD_HOPS) {
+    return { reason: "forwarded too many times", bounce: false };
+  }
 
   const headers = rawHeaderText(raw);
 
@@ -161,21 +167,33 @@ async function forwardRefusal(
       headerValues(headers, "from")[0] ?? ""
     )?.[1] ?? null;
 
-  const authentication = parseInboundAuthentication({
+  const blocks = await workspaceBlockPatterns(db);
+
+  if (
+    [message.from, from].some(
+      (address) => address && workspaceBlockFor(address, blocks)
+    )
+  ) {
+    return { reason: "blocked sender", bounce: false };
+  }
+
+  const { dmarc } = parseInboundAuthentication({
     raw: headers,
     fromAddress: from,
     envelopeFrom: message.from,
   });
 
-  if (authentication.dmarc?.result === "fail") return "failed DMARC";
+  if (
+    dmarc?.result === "fail" &&
+    (dmarc.policy === "quarantine" || dmarc.policy === "reject")
+  ) {
+    return {
+      reason: `failed DMARC, and ${dmarc.headerFrom ?? "its domain"} asks to ${dmarc.policy} such mail`,
+      bounce: true,
+    };
+  }
 
-  const blocks = await workspaceBlockPatterns(db);
-
-  return [message.from, from].some(
-    (address) => address && workspaceBlockFor(address, blocks)
-  )
-    ? "blocked sender"
-    : null;
+  return null;
 }
 
 /**
@@ -195,10 +213,16 @@ export async function forwardInbound(input: {
   const recipient = normalizeMailboxAddress(message.to);
   const refusal = await forwardRefusal(env.DB, message, raw);
 
+  if (refusal?.bounce) {
+    message.setReject(`Not forwarded: the message ${refusal.reason}`);
+
+    return;
+  }
+
   // Accepted and dropped, like spam that is never shown: the sender learns
   // nothing about the address or its block.
   if (refusal) {
-    console.warn(`Not forwarding mail for ${recipient}: ${refusal}`);
+    console.warn(`Not forwarding mail for ${recipient}: ${refusal.reason}`);
 
     return;
   }

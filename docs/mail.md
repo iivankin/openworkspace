@@ -44,11 +44,14 @@ An address under **People** or **Teams** can also be:
   it, and mail goes only to confirmed ones; the address editor shows which
   are **Confirmed** and which are **Waiting for confirmation**. If
   Cloudflare couldn't add one, it shows **Not added to Cloudflare**, and
-  **Save address** tries again. Forwarding
-  happens as mail arrives, so it skips mail that fails DMARC and mail from
-  senders blocked for everyone, and never sends mail back to its sender. A
-  message forwarded three times isn't forwarded again. If no destination is
-  confirmed, or every forward fails, the sender gets a bounce.
+  **Save address** tries again. Forwarding happens as mail arrives, before
+  any spam filtering, so it drops mail from senders blocked for everyone,
+  never sends mail back to its sender, and doesn't forward a message
+  forwarded three times already. Mail that fails DMARC is refused with a
+  bounce when its domain asks receivers to quarantine or reject such mail;
+  under `p=none` it is forwarded, and the destination's own filtering judges
+  it. If no destination is confirmed, or every forward fails, the sender
+  gets a bounce.
 
 An address with its own mailbox can be the **catch-all** for its domain (one
 per domain): it also gets mail sent to addresses on that domain that don't

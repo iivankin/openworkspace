@@ -62,21 +62,26 @@ async function createAddress(json: AddressInput) {
   return (await readJson(response, createdMailbox)).mailboxId;
 }
 
-/** A message as Email Routing hands it over, DMARC-verified unless `failsDmarc`. */
+/**
+ * A message as Email Routing hands it over, DMARC-verified unless
+ * `failsDmarc`; the sender's domain publishes `dmarcPolicy` (reject).
+ */
 function rawMessage(input: {
   from: string;
   to: string;
   messageId: string;
   failsDmarc?: boolean;
+  dmarcPolicy?: "none" | "reject";
 }) {
   const domain = input.from.split("@")[1];
   const dmarc = input.failsDmarc ? "fail" : "pass";
+  const policy = input.dmarcPolicy ?? "reject";
 
   return [
     `Received: from mail.${domain} (192.0.2.10)`,
     `        by cloudflare-email.net (cloudflare) id ${crypto.randomUUID().slice(0, 12)}`,
     `        for <${input.to}>; Sat, 31 Oct 2026 10:00:00 +0000`,
-    `Authentication-Results: mx.cloudflare.net; dmarc=${dmarc} header.from=${domain} policy.dmarc=reject; spf=${dmarc} smtp.mailfrom=${input.from}`,
+    `Authentication-Results: mx.cloudflare.net; dmarc=${dmarc} header.from=${domain} policy.dmarc=${policy}; spf=${dmarc} smtp.mailfrom=${input.from}`,
     `From: Sender <${input.from}>`,
     `To: ${input.to}`,
     `Subject: Routed ${input.messageId}`,
@@ -91,6 +96,7 @@ function deliver(input: {
   to: string;
   messageId: string;
   failsDmarc?: boolean;
+  dmarcPolicy?: "none" | "reject";
   /** Destinations Email Routing refuses, as it does unconfirmed ones. */
   unverified?: string[];
 }) {
@@ -345,6 +351,7 @@ describe("a forward", () => {
       },
     ]);
 
+    // Failing DMARC under p=reject is refused, so the sender hears of it.
     const failing = await deliver({
       to: "press@example.test",
       messageId: "press-3@x.test",
@@ -352,6 +359,22 @@ describe("a forward", () => {
     });
 
     expect(failing.forwarded).toEqual([]);
+    expect(failing.rejection).toBe(
+      "Not forwarded: the message failed DMARC, and outside.test asks to reject such mail"
+    );
+
+    // Under p=none the domain asks for nothing: it goes on.
+    const unenforced = await deliver({
+      to: "press@example.test",
+      messageId: "press-4@x.test",
+      failsDmarc: true,
+      dmarcPolicy: "none",
+    });
+
+    expect(unenforced.rejection).toBeUndefined();
+    expect(unenforced.forwarded.map((forward) => forward.to)).toEqual([
+      "pr@agency.test",
+    ]);
   });
 
   it("shows a destination Email Routing lacks, and adds it again", async () => {

@@ -370,6 +370,61 @@ describe("the catch-all", () => {
   });
 });
 
+describe("moving a team address to another team", () => {
+  it("takes its aliases along", async () => {
+    const other = await call(adminCookie, "/api/admin/teams", {
+      method: "POST",
+      json: {
+        name: "Billing",
+        slug: "billing",
+        description: null,
+        everyone: false,
+        members: [],
+      },
+    });
+
+    expect(other.status).toBe(201);
+
+    const otherTeamId = z
+      .object({ teamId: z.string() })
+      .parse(await other.json()).teamId;
+
+    const inbox = await create({
+      address: "invoices@example.test",
+      displayName: "Invoices",
+      ownerUserId: null,
+      teamId,
+      delivery: "inbox",
+    });
+
+    const alias = await create({
+      address: "bills@example.test",
+      displayName: "Bills",
+      ownerUserId: null,
+      teamId,
+      delivery: "alias",
+      aliasOf: inbox.id,
+    });
+
+    expect([inbox.status, alias.status]).toEqual([201, 201]);
+
+    expect(
+      await update(inbox.id, { displayName: "Invoices", teamId: otherTeamId })
+    ).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT id, team_id FROM mailboxes WHERE id IN (?, ?) ORDER BY id"
+    )
+      .bind(inbox.id, alias.id)
+      .all<{ id: string; team_id: string }>();
+
+    expect(results.map((row) => row.team_id)).toEqual([
+      otherTeamId,
+      otherTeamId,
+    ]);
+  });
+});
+
 describe("deleting a mailbox", () => {
   it("deletes its aliases first, each as an address", async () => {
     const inbox = await create({

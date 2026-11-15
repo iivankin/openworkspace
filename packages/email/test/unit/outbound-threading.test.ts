@@ -36,7 +36,7 @@ function shouldDetach(
 
   return shouldDetachOutboundReply({
     ownAddress,
-    plan: buildReplyPlan(ownAddress, parent),
+    plan: buildReplyPlan([ownAddress], parent),
     to,
     cc,
   });

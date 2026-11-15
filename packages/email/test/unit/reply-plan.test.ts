@@ -28,7 +28,7 @@ function incoming(
 describe("reply plans", () => {
   it("defaults a group message to Reply all and keeps a direct reply private", () => {
     const plan = buildReplyPlan(
-      "me@example.test",
+      ["me@example.test"],
       incoming({
         replyToJson: [
           address("replies@example.net"),
@@ -56,7 +56,7 @@ describe("reply plans", () => {
   });
 
   it("continues an outgoing message with visible recipients only", () => {
-    const plan = buildReplyPlan("me@example.test", {
+    const plan = buildReplyPlan(["me@example.test"], {
       ...incoming(),
       direction: "outgoing",
       messageIdHeader: "<outgoing@example.test>",
@@ -74,7 +74,7 @@ describe("reply plans", () => {
   });
 
   it("does not continue an outgoing message until the provider assigns Message-ID", () => {
-    const plan = buildReplyPlan("me@example.test", {
+    const plan = buildReplyPlan(["me@example.test"], {
       ...incoming(),
       direction: "outgoing",
       messageIdHeader: null,
@@ -88,7 +88,7 @@ describe("reply plans", () => {
 
   it("offers List-Post as an explicit mailing-list action", () => {
     const plan = buildReplyPlan(
-      "me@example.test",
+      ["me@example.test"],
       incoming({
         listId: "workers-list.example.net",
         replyToJson: [address("workers-list@example.net")],
@@ -111,7 +111,7 @@ describe("reply plans", () => {
 
   it("defaults an undisclosed recipient to a private reply", () => {
     const plan = buildReplyPlan(
-      "hidden@example.test",
+      ["hidden@example.test"],
       incoming({
         toJson: [address("alice@example.net")],
         ccJson: [address("bob@example.net")],
@@ -128,6 +128,27 @@ describe("reply plans", () => {
       label: "Reply all",
       to: ["sender@example.net"],
       cc: ["alice@example.net", "bob@example.net"],
+    });
+  });
+
+  it("keeps every address of the mailbox, and plus addresses, out of Reply all", () => {
+    const plan = buildReplyPlan(
+      ["help@example.test", "support@example.test"],
+      incoming({
+        toJson: [
+          address("support@example.test"),
+          address("help@example.test"),
+          address("help+vip@example.test"),
+        ],
+        ccJson: [address("colleague@example.net")],
+      })
+    );
+
+    expect(plan.actions).toContainEqual({
+      mode: "reply_all",
+      label: "Reply all",
+      to: ["sender@example.net"],
+      cc: ["colleague@example.net"],
     });
   });
 });

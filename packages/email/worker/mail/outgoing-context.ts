@@ -100,13 +100,15 @@ export async function resolveReplyContext(input: {
     );
   }
 
-  const from = replyAlias(
-    source,
-    await mailboxAliases(input.env.DB, input.mailboxId)
-  );
-
+  const aliases = await mailboxAliases(input.env.DB, input.mailboxId);
+  const from = replyAlias(source, aliases);
   const ownAddress = from?.address ?? input.ownAddress;
-  const plan = buildReplyPlan(ownAddress, source);
+
+  // None of the mailbox's addresses is a recipient of its own reply.
+  const plan = buildReplyPlan(
+    [ownAddress, input.ownAddress, ...aliases.map((alias) => alias.address)],
+    source
+  );
 
   const action = plan.actions.find(
     (candidate) => candidate.mode === input.mode

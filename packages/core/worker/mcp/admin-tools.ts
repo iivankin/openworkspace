@@ -219,7 +219,7 @@ export function registerAdminTools(
     {
       title: "Update mailbox address",
       description:
-        "Change a team address or a person's address: its display name, its team (team addresses only), its delivery (inbox, list, alias with aliasOf, or forward with forwardTo, as in create_mailbox), whether it is its domain's catch-all, and who may write to a mailing list. A primary address stays an inbox.",
+        "Change a team address or a person's address: its display name, its team (team addresses only; its aliases move with it), its delivery (inbox, list, alias with aliasOf, or forward with forwardTo, as in create_mailbox), whether it is its domain's catch-all, and who may write to a mailing list. A primary address stays an inbox.",
       inputSchema: z.object({
         mailboxId: entityIdSchema,
         ...updateMailboxSchema.shape,

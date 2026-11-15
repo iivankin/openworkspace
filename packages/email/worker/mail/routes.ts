@@ -230,7 +230,8 @@ function workspaceListAddress(email: Email) {
 
 function toMessageDetail(
   email: Email,
-  ownAddress: string,
+  /** The address replies come from first, then the mailbox's others. */
+  ownAddresses: readonly string[],
   identity: WorkspaceIdentity,
   history: Record<string, SenderHistory>,
   safety: MessageSafetyContext,
@@ -271,7 +272,7 @@ function toMessageDetail(
       disposition: file.disposition,
       pdfPreviewStatus: file.pdfPreviewStatus ?? null,
     })),
-    replyPlan: buildReplyPlan(ownAddress, email),
+    replyPlan: buildReplyPlan(ownAddresses, email),
     ...readReceipt,
   };
 }
@@ -1182,7 +1183,11 @@ export const mailRoutes = new Hono<AppEnv>()
             ...toMessageDetail(
               email,
               // Mail that came through an alias is answered from it.
-              replyAlias(email, aliases)?.address ?? access.address,
+              [
+                replyAlias(email, aliases)?.address ?? access.address,
+                access.address,
+                ...aliases.map((alias) => alias.address),
+              ],
               identity,
               view.history,
               safety,

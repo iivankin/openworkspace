@@ -6,7 +6,6 @@ import {
 import type { ReplyAction, ReplyPlan } from "../../shared/mail";
 import type { MailAddress } from "../mailbox/model";
 import type { Email } from "../mailbox/schema";
-import { uniqueParticipantAddresses } from "./participants";
 
 export type {
   ReplyAction,
@@ -14,8 +13,35 @@ export type {
   ReplyPlan,
 } from "../../shared/mail";
 
-function uniqueAddresses(values: MailAddress[], ownAddress: string) {
-  return uniqueParticipantAddresses(values, ownAddress);
+/**
+ * Whether `address` is one of the mailbox's own addresses (`own`, normalized),
+ * or a plus address of one (`sam+shop@` for `sam@`), which delivers there too.
+ */
+function isOwnAddress(address: string, own: ReadonlySet<string>) {
+  const normalized = normalizeMailboxAddress(address);
+
+  if (own.has(normalized)) return true;
+  const at = normalized.lastIndexOf("@");
+  const plus = normalized.indexOf("+");
+
+  return (
+    plus > 0 &&
+    plus < at &&
+    own.has(`${normalized.slice(0, plus)}${normalized.slice(at)}`)
+  );
+}
+
+/** Each address once, leaving out the mailbox's own. */
+function uniqueAddresses(values: MailAddress[], own: ReadonlySet<string>) {
+  const result = new Set<string>();
+
+  for (const value of values) {
+    const normalized = normalizeEmail(value.address);
+
+    if (normalized && !isOwnAddress(normalized, own)) result.add(normalized);
+  }
+
+  return [...result];
 }
 
 function without(values: string[], excluded: string[]) {
@@ -45,13 +71,22 @@ export function canReplyFrom(
   return Boolean(email.messageIdHeader) && email.transportState === "submitted";
 }
 
+/**
+ * How a message can be answered from a mailbox. `ownAddresses` are all of
+ * the mailbox's addresses (the one replies come from, its own and its
+ * aliases'); none of them, nor a plus address of one, is a recipient.
+ */
 export function buildReplyPlan(
-  ownAddress: string,
+  ownAddresses: readonly string[],
   email: ReplySource
 ): ReplyPlan {
+  const own = new Set(
+    ownAddresses.map((address) => normalizeMailboxAddress(address))
+  );
+
   if (email.direction === "outgoing") {
-    const to = uniqueAddresses(email.toJson, ownAddress);
-    const cc = without(uniqueAddresses(email.ccJson, ownAddress), to);
+    const to = uniqueAddresses(email.toJson, own);
+    const cc = without(uniqueAddresses(email.ccJson, own), to);
     const participants = [...to, ...cc];
 
     return {
@@ -79,12 +114,12 @@ export function buildReplyPlan(
       : email.replyToJson.length
         ? email.replyToJson
         : email.fromJson,
-    ownAddress
+    own
   );
 
   const visibleParticipants = uniqueAddresses(
     [...email.fromJson, ...email.toJson, ...email.ccJson],
-    ownAddress
+    own
   );
 
   const replyAllParticipants = uniqueAddresses(
@@ -97,16 +132,14 @@ export function buildReplyPlan(
       ...email.toJson,
       ...email.ccJson,
     ],
-    ownAddress
+    own
   );
 
   const visibleIsGroup =
     Boolean(email.listId) || replyAllParticipants.length > 1;
 
-  const own = normalizeMailboxAddress(ownAddress);
-
   const visibleRecipients = [...email.toJson, ...email.ccJson].some(
-    (recipient) => normalizeMailboxAddress(recipient.address) === own
+    (recipient) => isOwnAddress(recipient.address, own)
   );
 
   const undisclosedLocalRecipient = !email.listId && !visibleRecipients;
@@ -125,7 +158,7 @@ export function buildReplyPlan(
     email.listPostAddress
       ? [{ address: email.listPostAddress, name: null }]
       : [],
-    ownAddress
+    own
   ).slice(0, 1);
 
   if (!email.listId && visibleIsGroup) {

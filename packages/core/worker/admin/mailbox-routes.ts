@@ -442,18 +442,38 @@ export const mailboxAdminRoutes = new Hono<AppEnv>()
         }
       }
 
+      const now = new Date();
+
+      // An address moving to another team takes its aliases along: an alias
+      // delivers only into an address of its own team.
+      const movedAliases =
+        input.teamId && input.teamId !== mailbox.teamId
+          ? await db
+              .select({ id: mailboxes.id })
+              .from(mailboxes)
+              .where(eq(mailboxes.aliasOf, mailboxId))
+          : [];
+
       try {
-        await db
-          .update(mailboxes)
-          .set({
-            // Drizzle leaves the columns of omitted (undefined) fields unchanged.
-            displayName: input.displayName,
-            teamId: input.teamId,
-            ...delivery,
-            listPosting: input.listPosting,
-            updatedAt: new Date(),
-          })
-          .where(eq(mailboxes.id, mailboxId));
+        await db.batch([
+          db
+            .update(mailboxes)
+            .set({
+              // Drizzle leaves the columns of omitted (undefined) fields unchanged.
+              displayName: input.displayName,
+              teamId: input.teamId,
+              ...delivery,
+              listPosting: input.listPosting,
+              updatedAt: now,
+            })
+            .where(eq(mailboxes.id, mailboxId)),
+          ...movedAliases.map((alias) =>
+            db
+              .update(mailboxes)
+              .set({ teamId: input.teamId, updatedAt: now })
+              .where(eq(mailboxes.id, alias.id))
+          ),
+        ]);
       } catch {
         // Another address became the domain's catch-all meanwhile.
         return apiError(
@@ -464,19 +484,22 @@ export const mailboxAdminRoutes = new Hono<AppEnv>()
         );
       }
 
-      const webhookMailbox = await mailboxWebhookData(db, mailboxId);
+      for (const id of [mailboxId, ...movedAliases.map((alias) => alias.id)]) {
+        // oxlint-disable-next-line eslint/no-await-in-loop -- one address and its few aliases
+        const webhookMailbox = await mailboxWebhookData(db, id);
 
-      if (webhookMailbox) {
-        deferWebhookTask(
-          (task) => c.executionCtx.waitUntil(task),
-          (eventId) =>
-            queueMailboxWebhookEvent(
-              c.env,
-              "mailbox.updated",
-              webhookMailbox,
-              eventId
-            )
-        );
+        if (webhookMailbox) {
+          deferWebhookTask(
+            (task) => c.executionCtx.waitUntil(task),
+            (eventId) =>
+              queueMailboxWebhookEvent(
+                c.env,
+                "mailbox.updated",
+                webhookMailbox,
+                eventId
+              )
+          );
+        }
       }
 
       await announceMailboxSaved(c.env, mailboxId);
