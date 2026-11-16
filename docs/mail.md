@@ -106,8 +106,10 @@ is in Trash or Spam; then it stays on its own in Inbox.
 
 ## Rules
 
-The **Rules** tab in **Folders & AI sorting** holds a mailbox's rules. Anyone
-with access to the mailbox can add, test, reorder and turn them off. **Filter
+The **Rules** tab in **Folders & AI sorting** holds a mailbox's rules. You add,
+test, reorder and turn off your own mailbox's rules. A shared inbox's rules act
+on everyone's mail, so its members can read them, and only people who manage
+teams change them. **Filter
 messages like this** in a message's menu opens a new rule with its sender (and
 mailing list, for list mail) filled in. Each rule matches on the sender
 (address or domain), the recipient (To, Cc, or the address the mail was

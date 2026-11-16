@@ -277,6 +277,22 @@ function filterDraft(message: MessageDetail): MailRuleInput {
   };
 }
 
+/**
+ * Whether the signed-in person may change a mailbox's rules: a shared
+ * inbox's act on everyone's mail, so only people who manage teams change
+ * them; a person's own mailbox, its owner (the Worker checks the same).
+ */
+export function mayEditRules(
+  mailbox: { kind: string },
+  user: { role: string; permissions: readonly string[] } | null | undefined
+) {
+  return (
+    mailbox.kind !== "shared" ||
+    user?.role === "admin" ||
+    Boolean(user?.permissions.includes("manage_teams"))
+  );
+}
+
 /** Rules tab: ordered deterministic rules for new mail, with an inline editor. */
 export function MailboxRules({
   mailboxId,
@@ -296,8 +312,7 @@ export function MailboxRules({
   const rules = useQuery({
     queryKey,
     queryFn: async () =>
-      (await responseJson(await route.$get({ param: { id: mailboxId } })))
-        .rules,
+      responseJson(await route.$get({ param: { id: mailboxId } })),
     enabled: active,
   });
 
@@ -365,7 +380,8 @@ export function MailboxRules({
     );
   }
 
-  const list = rules.data ?? [];
+  const list = rules.data?.rules ?? [];
+  const canEdit = rules.data?.canEdit ?? false;
 
   function move(index: number, direction: -1 | 1) {
     const ids = list.map((rule) => rule.id);
@@ -382,16 +398,21 @@ export function MailboxRules({
         <p className="text-muted-foreground text-xs leading-relaxed">
           Rules run in order on each new message. A matching rule decides the
           folder instead of AI sorting; blocked senders still go to Spam.
+          {canEdit || !rules.data
+            ? null
+            : " Only people who manage teams can change a shared inbox's rules."}
         </p>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => setEditing("new")}
-        >
-          <Plus />
-          New rule
-        </Button>
+        {canEdit ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setEditing("new")}
+          >
+            <Plus />
+            New rule
+          </Button>
+        ) : null}
       </div>
       <div className="border-border/70 max-h-[min(23rem,50vh)] overflow-y-auto border-y">
         {list.length ? (
@@ -405,7 +426,7 @@ export function MailboxRules({
                   className="mt-0.5"
                   checked={rule.enabled}
                   aria-label={`${rule.enabled ? "Turn off" : "Turn on"} ${rule.name}`}
-                  disabled={change.isPending}
+                  disabled={!canEdit || change.isPending}
                   onCheckedChange={(enabled) =>
                     change.mutate({ type: "toggle", rule, enabled })
                   }
@@ -432,7 +453,7 @@ export function MailboxRules({
                     .
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center">
+                <div className="flex shrink-0 items-center" hidden={!canEdit}>
                   <Button
                     type="button"
                     variant="ghost"

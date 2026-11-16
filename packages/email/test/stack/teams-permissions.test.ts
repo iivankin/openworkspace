@@ -141,6 +141,47 @@ describe("team mailboxes", () => {
     expect(await mailboxIds(memberCookie)).toContain(mailboxId);
     expect(await mailboxIds(adminCookie)).not.toContain(mailboxId);
 
+    // A shared inbox's rules: its members read them; only people who manage
+    // teams change them.
+    const rule = {
+      name: "Receipts",
+      conditions: [{ type: "subject", op: "contains", value: "receipt" }],
+      actions: [{ type: "archive" }],
+    };
+
+    const listed = await call(
+      memberCookie,
+      `/api/mail/mailboxes/${mailboxId}/rules`
+    );
+
+    expect(await listed.json()).toMatchObject({ canEdit: false, rules: [] });
+
+    const refused = await call(
+      memberCookie,
+      `/api/mail/mailboxes/${mailboxId}/rules`,
+      { method: "POST", json: rule }
+    );
+
+    expect(refused.status).toBe(403);
+    await refused.body?.cancel();
+
+    await env.DB.prepare("UPDATE users SET permissions = ? WHERE id = ?")
+      .bind(JSON.stringify(["manage_teams"]), memberId)
+      .run();
+
+    const created = await call(
+      memberCookie,
+      `/api/mail/mailboxes/${mailboxId}/rules`,
+      { method: "POST", json: rule }
+    );
+
+    expect(created.status).toBe(201);
+    await created.body?.cancel();
+
+    await env.DB.prepare("UPDATE users SET permissions = '[]' WHERE id = ?")
+      .bind(memberId)
+      .run();
+
     const access = await env.DB.prepare(
       "SELECT can_send AS canSend FROM mailbox_access WHERE mailbox_id = ? AND user_id = ?"
     )

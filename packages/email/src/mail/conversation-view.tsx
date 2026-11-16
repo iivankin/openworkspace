@@ -1,4 +1,4 @@
-import { Button, useConfirm } from "@open-workspace/core/ui";
+import { Button, useAuth, useConfirm } from "@open-workspace/core/ui";
 import {
   ChevronUp,
   CircleAlert,
@@ -14,6 +14,7 @@ import { ConversationLoadingSkeleton } from "./conversation-loading-skeleton";
 import { ConversationMessage } from "./conversation-message";
 import { ConversationReply, ReplyActionIcon } from "./conversation-reply";
 import type { ReplyHandle, SentReply } from "./conversation-reply";
+import { mayEditRules } from "./mailbox-rules";
 import { actionButtonLabel } from "./message-actions";
 import type { SenderHandlers } from "./message-actions";
 import {
@@ -85,6 +86,7 @@ export function ConversationView({
   const replyRegion = useRef<HTMLDivElement>(null);
   const reply = useRef<ReplyHandle>(null);
   const drafts = useDrafts(mailbox?.canSend ? mailbox.id : undefined);
+  const { user } = useAuth();
   const discardDraft = useDiscardDraft();
   const openConversationId = messages.at(-1)?.conversationId;
 
@@ -398,7 +400,12 @@ export function ConversationView({
                       : undefined,
                   sender:
                     message.direction === "incoming" && senderActions && mailbox
-                      ? senderHandlers(message, senderActions, reportable)
+                      ? senderHandlers(
+                          message,
+                          senderActions,
+                          reportable,
+                          mayEditRules(mailbox, user)
+                        )
                       : undefined,
                 }}
               />
@@ -475,14 +482,16 @@ export function ConversationView({
 function senderHandlers(
   message: MessageDetail,
   actions: SenderActions,
-  reportable: boolean
+  reportable: boolean,
+  /** Whether "Filter messages like this" may make a rule here. */
+  canFilter: boolean
 ): SenderHandlers {
   return {
     onUnsubscribe: canUnsubscribe(message)
       ? () => actions.open("unsubscribe", message)
       : undefined,
     onBlock: () => actions.open("block", message),
-    onFilter: () => actions.open("filter", message),
+    onFilter: canFilter ? () => actions.open("filter", message) : undefined,
     onUnblock: () => actions.unblockSender(message),
     onReportSpam: reportable ? () => actions.reportSpam(message) : undefined,
     onTrust: message.sender?.trustedAt

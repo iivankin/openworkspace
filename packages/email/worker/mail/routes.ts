@@ -1,4 +1,5 @@
 import {
+  can,
   oauthScope,
   zValidator,
   requireAuthWith,
@@ -489,6 +490,35 @@ export function conversationPageView(
   };
 }
 
+/**
+ * A shared inbox's rules act on everyone's mail, so only people who manage
+ * teams (and their addresses) change them; a person's own mailbox, its
+ * owner. Anyone who can open the mailbox can read them.
+ */
+function mayEditRules(
+  c: Context<AppEnv>,
+  access: { ownerUserId: string | null }
+) {
+  return access.ownerUserId !== null || can(c, "manage_teams");
+}
+
+async function rulesRefusal(c: Context<AppEnv>, mailboxId: string) {
+  const access = await accessibleMailbox(c, mailboxId, "read");
+
+  if (!access) {
+    return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
+  }
+
+  return mayEditRules(c, access)
+    ? null
+    : apiError(
+        c,
+        403,
+        "FORBIDDEN",
+        "Only people who manage teams can change a shared inbox's rules"
+      );
+}
+
 export const mailRoutes = new Hono<AppEnv>()
   .use("*", requireAuthWith(mailAccessCompanion))
   .get("/mailboxes", oauthScope(MAIL_READ_SCOPE), async (c) => {
@@ -709,12 +739,16 @@ export const mailRoutes = new Hono<AppEnv>()
   .get("/mailboxes/:id/rules", oauthScope(MAIL_READ_SCOPE), async (c) => {
     const mailboxId = c.req.param("id");
 
-    if (!(await accessibleMailbox(c, mailboxId, "read"))) {
+    const access = await accessibleMailbox(c, mailboxId, "read");
+
+    if (!access) {
       return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
     }
 
     return c.json({
       ok: true as const,
+      /** Whether the signed-in person may change them (rulesRefusal). */
+      canEdit: mayEditRules(c, access),
       rules: await mailboxStub(c.env, mailboxId).listRules(),
     });
   })
@@ -725,9 +759,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await rulesRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).createRule(
         c.req.valid("json")
@@ -776,9 +810,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await rulesRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       if (
         !(await mailboxStub(c.env, mailboxId).reorderRules(
@@ -803,9 +837,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await rulesRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).updateRule(
         c.req.param("ruleId"),
@@ -829,9 +863,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await rulesRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       if (
         !(await mailboxStub(c.env, mailboxId).deleteRule(c.req.param("ruleId")))
