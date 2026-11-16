@@ -24,8 +24,21 @@ export function composerContent(
   session: ComposerSession
 ): ComposerContent {
   const editorHtml = editor.getHTML();
-  const wrapper = document.createElement("div");
+  // A document without a window: an <img src="cid:…"> here is never fetched,
+  // which in the page's own document fails with ERR_UNKNOWN_URL_SCHEME.
+  const inert = document.implementation.createHTMLDocument("");
+  const wrapper = inert.createElement("div");
   wrapper.innerHTML = editorHtml;
+
+  // Saved images keep their content id out of `src` in the editor (see
+  // StoredImage); the sent HTML refers to them by it.
+  for (const image of wrapper.querySelectorAll<HTMLImageElement>(
+    "img[data-cid]"
+  )) {
+    image.setAttribute("src", `cid:${image.dataset.cid ?? ""}`);
+    delete image.dataset.cid;
+  }
+
   const inlineAssetIds: string[] = [];
   const linkedAssetIds: string[] = [];
 
@@ -42,7 +55,7 @@ export function composerContent(
 
     if (session.isLinked(asset.id)) {
       linkedAssetIds.push(asset.id);
-      const placeholder = document.createElement("span");
+      const placeholder = inert.createElement("span");
       placeholder.dataset.linkedAttachment = asset.uploadId;
       placeholder.dataset.linkedAttachmentFilename = asset.filename;
       placeholder.textContent = asset.filename;
@@ -52,8 +65,8 @@ export function composerContent(
 
     if (asset.intent === "inline" && asset.contentId) {
       inlineAssetIds.push(asset.id);
-      const image = document.createElement("img");
-      image.src = `cid:${asset.contentId}`;
+      const image = inert.createElement("img");
+      image.setAttribute("src", `cid:${asset.contentId}`);
       image.alt = asset.filename;
       image.title = asset.filename;
       reference.replaceWith(image);

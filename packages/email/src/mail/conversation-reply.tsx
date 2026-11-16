@@ -37,6 +37,7 @@ import {
 } from "./composer-recipients";
 import type { RecipientFieldValue } from "./composer-recipients";
 import { useComposerSession } from "./composer-session";
+import { isInlineComposerImage } from "./composer-upload-client";
 import {
   draftAttachments,
   holdsOnlyInitialContent,
@@ -137,6 +138,8 @@ export function ConversationReply({
   const [documentAssetIds, setDocumentAssetIds] = useState(() =>
     restoredInlineAssetIds(draft)
   );
+
+  const [dragging, setDragging] = useState(false);
 
   const initialCc = draft?.cc ?? initialAction?.cc ?? [];
   const [cc, setCc] = useState(() => recipientField(initialCc));
@@ -329,9 +332,31 @@ export function ConversationReply({
   function handleDrop(event: DragEvent<HTMLFormElement>) {
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
+    setDragging(false);
 
     if (busy) return;
-    session.addFiles(Array.from(event.dataTransfer.files), "attachment");
+
+    // The editor takes files dropped on the text itself, where they fall;
+    // the form, files dropped anywhere else on the reply.
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-composer-editor-content]")
+    ) {
+      return;
+    }
+
+    const files = Array.from(event.dataTransfer.files);
+    const images = files.filter(isInlineComposerImage);
+
+    const attachments = files.filter((file) => !isInlineComposerImage(file));
+
+    if (images.length) {
+      const assets = session.addFiles(images, "inline");
+
+      if (assets) editor.current?.insertAssets(assets);
+    }
+
+    if (attachments.length) session.addFiles(attachments, "attachment");
   }
 
   return (
@@ -342,11 +367,28 @@ export function ConversationReply({
         ref={form}
         className="animate-rise border-input bg-surface focus-within:border-ring/60 focus-within:ring-ring/12 overflow-hidden rounded-lg border shadow-sm transition-shadow focus-within:ring-3"
         aria-busy={busy}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+
+          if (!busy) setDragging(true);
+        }}
         onDragOver={(event) => {
           if (!event.dataTransfer.types.includes("Files")) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = busy ? "none" : "copy";
         }}
+        onDragLeave={(event) => {
+          if (
+            !(
+              event.relatedTarget instanceof Node &&
+              event.currentTarget.contains(event.relatedTarget)
+            )
+          ) {
+            setDragging(false);
+          }
+        }}
+        onDragEnd={() => setDragging(false)}
         onDrop={handleDrop}
         onSubmit={(event) => {
           event.preventDefault();
@@ -504,7 +546,7 @@ export function ConversationReply({
             }}
             onChooseInlineImage={() => inlineFileInput.current?.click()}
             onSubmitShortcut={() => form.current?.requestSubmit()}
-            dragging={false}
+            dragging={dragging && !busy}
             disabled={busy}
           />
         </div>

@@ -64,7 +64,9 @@ export function restoredDraftHtml(
   for (const image of document.querySelectorAll<HTMLImageElement>(
     "img[data-stored-owner]"
   )) {
-    const contentId = (image.getAttribute("src") ?? "").replace(/^cid:/u, "");
+    const contentId =
+      image.dataset.cid ??
+      (image.getAttribute("src") ?? "").replace(/^cid:/u, "");
 
     const copy = draft.attachments.find(
       (file) =>

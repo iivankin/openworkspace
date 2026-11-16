@@ -74,6 +74,7 @@ export const StoredImage = Node.create({
         default: "",
         rendered: false,
         parseHTML: (element) =>
+          element.dataset.cid ??
           (element.getAttribute("src") ?? "").replace(/^cid:/u, ""),
       },
       src: {
@@ -93,12 +94,15 @@ export const StoredImage = Node.create({
     return [{ tag: "img[data-stored-owner]" }];
   },
 
-  // Serialized for sending: a `cid:` image, marked for takeStoredImages.
+  // Serialized with its content id in `data-cid`, not `src`: the editor
+  // serializes in the page's document, where a `cid:` src would be fetched
+  // (and fail). composerContent turns it into the `cid:` image it sends,
+  // marked for takeStoredImages.
   renderHTML({ node, HTMLAttributes }) {
     return [
       "img",
       mergeAttributes(HTMLAttributes, {
-        src: `cid:${String(node.attrs.contentId)}`,
+        "data-cid": String(node.attrs.contentId),
         alt: node.attrs.alt,
         title: node.attrs.alt,
         "data-stored-owner": node.attrs.ownerId,
