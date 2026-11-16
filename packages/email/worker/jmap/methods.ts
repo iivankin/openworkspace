@@ -102,6 +102,7 @@ const methodErrorTypes = z.enum([
   "invalidResultReference",
   "requestTooLarge",
   "stateMismatch",
+  "tooManyChanges",
   "unknownMethod",
   "unsupportedFilter",
   "unsupportedSort",
@@ -628,11 +629,64 @@ async function emailQuery(
   return {
     accountId: owner.id,
     queryState: result.state,
-    canCalculateChanges: false,
+    canCalculateChanges: true,
     position,
     ids: result.ids,
     total: result.total,
     limit,
+  };
+}
+
+const emailQueryChangesArguments = z.object({
+  accountId,
+  filter: emailFilter.nullish(),
+  sort: z.array(emailComparator).nullish(),
+  sinceQueryState: z.string(),
+  maxChanges: z.number().int().positive().nullish(),
+  // A hint the server may ignore (RFC 8620 §5.6); every change is listed.
+  upToId: z.string().nullish(),
+  calculateTotal: z.boolean().nullish(),
+  collapseThreads: z.boolean().nullish(),
+});
+
+/**
+ * Email/queryChanges: what to remove from and add to a query's results to
+ * bring them from `sinceQueryState` to now (mailbox/index.ts,
+ * jmapQueryChanges).
+ */
+async function emailQueryChanges(
+  state: RequestState,
+  args: z.output<typeof emailQueryChangesArguments>
+) {
+  const owner = account(state, args.accountId);
+
+  const changes = await mailboxStub(
+    state.context.env,
+    owner.id
+  ).jmapQueryChanges({
+    userId: state.context.user.id,
+    filter: args.filter ?? {},
+    ascending: args.sort?.[0]?.isAscending === true,
+    collapseThreads: args.collapseThreads === true,
+    sinceQueryState: args.sinceQueryState,
+  });
+
+  if (!changes) throw new MethodError("cannotCalculateChanges");
+
+  if (
+    args.maxChanges &&
+    changes.removed.length + changes.added.length > args.maxChanges
+  ) {
+    throw new MethodError("tooManyChanges");
+  }
+
+  return {
+    accountId: owner.id,
+    oldQueryState: args.sinceQueryState,
+    newQueryState: changes.state,
+    total: changes.total,
+    removed: changes.removed,
+    added: changes.added,
   };
 }
 
@@ -2508,6 +2562,14 @@ const methods = new Map<string, MethodHandler>([
     }),
   ],
   ["Email/changes", changesMethod("Email")],
+  [
+    "Email/queryChanges",
+    method({
+      arguments: emailQueryChangesArguments,
+      scopes: reading,
+      run: emailQueryChanges,
+    }),
+  ],
   [
     "Thread/get",
     method({ arguments: threadGetArguments, scopes: reading, run: threadGet }),

@@ -944,6 +944,135 @@ describe("JMAP", () => {
     expect(args(stale)).toMatchObject({ type: "cannotCalculateChanges" });
   });
 
+  it("answers Email/queryChanges so a list matches a fresh query", async () => {
+    const { accessToken, accountId } = await signIn();
+
+    const message = (id: string, subject: string, extra: string[] = []) =>
+      [
+        "From: Lee <lee@example.net>",
+        "To: jay@example.test",
+        `Subject: ${subject}`,
+        `Message-ID: <${id}@example.net>`,
+        ...extra,
+        `Date: Mon, 0${id.length % 9} Mar 2026 09:00:00 +0000`,
+        "",
+        "Hello.",
+      ].join("\r\n");
+
+    async function importAll(emails: Record<string, string>) {
+      const blobs = Object.fromEntries(
+        await Promise.all(
+          Object.entries(emails).map(async ([key, raw]) => [
+            key,
+            {
+              blobId: await uploadMessage(accessToken, accountId, raw),
+              mailboxIds: { inbox: true },
+            },
+          ])
+        )
+      );
+
+      const [imported] = await jmap(accessToken, [
+        ["Email/import", { accountId, emails: blobs }, "i"],
+      ]);
+
+      return result(imported, setResult).created ?? {};
+    }
+
+    const first = await importAll({
+      a: message("qa", "Plans"),
+      b: message("qbb", "Budget"),
+      c: message("qccc", "Offsite"),
+    });
+
+    const query = (collapseThreads: boolean) =>
+      [
+        "Email/query",
+        {
+          accountId,
+          filter: { inMailbox: "inbox" },
+          sort: [{ property: "receivedAt", isAscending: false }],
+          collapseThreads,
+        },
+        collapseThreads ? "threads" : "emails",
+      ] satisfies MethodCall;
+
+    const queryResult = z.looseObject({
+      queryState: z.string(),
+      canCalculateChanges: z.boolean(),
+      ids: z.array(z.string()),
+    });
+
+    const before = (await jmap(accessToken, [query(false), query(true)])).map(
+      (response) => result(response, queryResult)
+    );
+
+    expect(before[0]?.canCalculateChanges).toBe(true);
+
+    // A reply in Plans' thread, a new message, and Budget archived.
+    await importAll({
+      d: message("qdddd", "Re: Plans", [
+        "In-Reply-To: <qa@example.net>",
+        "References: <qa@example.net>",
+      ]),
+      e: message("qeeeee", "Invoice"),
+    });
+    await jmap(accessToken, [
+      [
+        "Email/set",
+        {
+          accountId,
+          update: {
+            [required(first.b, "Budget").id]: { mailboxIds: { archive: true } },
+          },
+        },
+        "s",
+      ],
+    ]);
+
+    const changes = z.looseObject({
+      newQueryState: z.string(),
+      total: z.number(),
+      removed: z.array(z.string()),
+      added: z.array(z.object({ id: z.string(), index: z.number() })),
+    });
+
+    const after = (await jmap(accessToken, [query(false), query(true)])).map(
+      (response) => result(response, queryResult)
+    );
+
+    for (const [index, collapseThreads] of [false, true].entries()) {
+      const old = required(before[index], "the earlier query");
+      const fresh = required(after[index], "the fresh query");
+
+      // oxlint-disable-next-line eslint/no-await-in-loop -- one query shape after the other
+      const [answer] = await jmap(accessToken, [
+        [
+          "Email/queryChanges",
+          {
+            accountId,
+            filter: { inMailbox: "inbox" },
+            sort: [{ property: "receivedAt", isAscending: false }],
+            collapseThreads,
+            sinceQueryState: old.queryState,
+          },
+          "q",
+        ],
+      ]);
+
+      const { removed, added, total, newQueryState } = result(answer, changes);
+
+      // RFC 8620 §5.6: remove, then insert by index in order.
+      const list = old.ids.filter((id) => !removed.includes(id));
+
+      for (const { id, index: at } of added) list.splice(at, 0, id);
+
+      expect(list).toEqual(fresh.ids);
+      expect(total).toBe(fresh.ids.length);
+      expect(newQueryState).toBe(fresh.queryState);
+    }
+  });
+
   it("imports with mail.organize and refuses tokens without it", async () => {
     const organizer = await signIn("mail.read mail.organize");
 

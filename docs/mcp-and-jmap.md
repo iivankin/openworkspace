@@ -52,9 +52,10 @@ updates. A few things work differently from other servers:
   or destroyed. Replies and forwards started in the web app are listed but
   sent from the web app.
 - Apps fetch only what changed (`Email/changes`, `Thread/changes`,
-  `Mailbox/changes`) for the last 100,000 changes of a mailbox; an app that
-  was away longer resyncs fully. `Email/queryChanges` isn't supported, so a
-  sorted list is queried again.
+  `Mailbox/changes`, and `Email/queryChanges` for a list, threads collapsed
+  or not) for the last 100,000 changes of a mailbox; an app that was away
+  longer resyncs fully. `Email/queryChanges` lists every email that changed
+  as removed, and adds back those the list still holds.
 
 ## Scopes
 

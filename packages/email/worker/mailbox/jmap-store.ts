@@ -97,16 +97,13 @@ export type JmapChanges = {
  * Null when `sinceState` can't be answered: not a state of this log, newer
  * than it, or older than its oldest kept entry.
  */
-export function jmapChanges(
-  sql: SqlStorage,
-  input: {
-    type: JmapChangeType;
-    sinceState: string;
-    userId: string;
-    maxChanges: number | null;
-  }
-): JmapChanges | null {
-  const match = /^c(\d+)$/u.exec(input.sinceState);
+/**
+ * The change log position a JMAP state names, if this log can answer from
+ * it: a `c<seq>` state, not newer than the log, not older than its oldest
+ * kept entry.
+ */
+function stateSeq(sql: SqlStorage, state: string) {
+  const match = /^c(\d+)$/u.exec(state);
 
   if (!match) return null;
   const since = Number(match[1]);
@@ -117,7 +114,50 @@ export function jmapChanges(
       .exec<{ seq: number | null }>("select min(seq) as seq from jmap_changes")
       .one().seq ?? current + 1;
 
-  if (since > current || since < oldest - 1) return null;
+  return since > current || since < oldest - 1 ? null : since;
+}
+
+/**
+ * The ids of `type` that changed in any way since `state`, as `userId` sees
+ * them; null when the state can't be answered from.
+ */
+export function changedSince(
+  sql: SqlStorage,
+  type: JmapChangeType,
+  state: string,
+  userId: string
+) {
+  const since = stateSeq(sql, state);
+
+  if (since === null) return null;
+
+  return new Set(
+    sql
+      .exec<{ id: string }>(
+        `select distinct id from jmap_changes
+         where type = ? and seq > ? and (user_id is null or user_id = ?)`,
+        type,
+        since,
+        userId
+      )
+      .toArray()
+      .map((row) => row.id)
+  );
+}
+
+export function jmapChanges(
+  sql: SqlStorage,
+  input: {
+    type: JmapChangeType;
+    sinceState: string;
+    userId: string;
+    maxChanges: number | null;
+  }
+): JmapChanges | null {
+  const since = stateSeq(sql, input.sinceState);
+
+  if (since === null) return null;
+  const current = currentSeq(sql);
 
   const rows = sql
     .exec<{ seq: number; id: string; kind: string }>(
@@ -306,17 +346,11 @@ function ftsQuery(text: string) {
     .join(" ");
 }
 
-export function queryEmails(
-  sql: SqlStorage,
-  input: {
-    userId: string;
-    filter: JmapEmailFilter;
-    ascending: boolean;
-    position: number;
-    limit: number;
-    collapseThreads: boolean;
-  }
-) {
+/**
+ * The emails an Email/query filter matches, ranked within their thread
+ * (newest first), as SQL and its parameters.
+ */
+function filteredEmails(input: { userId: string; filter: JmapEmailFilter }) {
   const where: string[] = [];
   const params: unknown[] = [];
   const { filter } = input;
@@ -387,13 +421,29 @@ export function queryEmails(
     );
   }
 
-  const direction = input.ascending ? "asc" : "desc";
-
-  const filtered = `
+  return {
+    sql: `
     select e.id, e.conversation_id, e.timeline_at,
       row_number() over (partition by e.conversation_id order by e.timeline_at desc, e.id desc) as thread_rank
     from emails e join conversations c on c.id = e.conversation_id
-    ${where.length ? `where ${where.join(" and ")}` : ""}`;
+    ${where.length ? `where ${where.join(" and ")}` : ""}`,
+    params,
+  };
+}
+
+type EmailQueryInput = {
+  userId: string;
+  filter: JmapEmailFilter;
+  ascending: boolean;
+  collapseThreads: boolean;
+};
+
+export function queryEmails(
+  sql: SqlStorage,
+  input: EmailQueryInput & { position: number; limit: number }
+) {
+  const { sql: filtered, params } = filteredEmails(input);
+  const direction = input.ascending ? "asc" : "desc";
 
   const rows = sql
     .exec<{ id: string; total: number }>(
@@ -418,6 +468,22 @@ export function queryEmails(
       .one().total;
 
   return { ids: rows.map((row) => row.id), total };
+}
+
+/** Every email a query lists, in order, with its thread: for Email/queryChanges. */
+export function queryAllEmails(sql: SqlStorage, input: EmailQueryInput) {
+  const { sql: filtered, params } = filteredEmails(input);
+  const direction = input.ascending ? "asc" : "desc";
+
+  return sql
+    .exec<{ id: string; conversation_id: string }>(
+      `
+    select id, conversation_id from (${filtered})
+    ${input.collapseThreads ? "where thread_rank = 1" : ""}
+    order by timeline_at ${direction}, id ${direction}`,
+      ...params
+    )
+    .toArray();
 }
 
 /** For each email: its JMAP Mailbox, and whether this user has read it. */

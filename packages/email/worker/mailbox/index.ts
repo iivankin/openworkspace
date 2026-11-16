@@ -128,12 +128,14 @@ import { readInboxCounts, writeInboxCounts } from "./inbox-counts";
 import type { InboxCounts } from "./inbox-counts";
 import {
   bumpJmapState,
+  changedSince,
   currentSeq,
   jmapChanges as jmapChangeLog,
   emailPlacement as jmapEmailPlacement,
   jmapState,
   mailboxes as jmapMailboxRows,
   moveEmails as jmapMoveEmails,
+  queryAllEmails as queryAllJmapEmails,
   queryEmails as queryJmapEmails,
   threadEmails as jmapThreadEmails,
 } from "./jmap-store";
@@ -1828,6 +1830,87 @@ export class MailboxDO extends DurableObject<Env> {
     return {
       state: jmapState(this.state.storage),
       ...queryJmapEmails(this.state.storage.sql, input),
+    };
+  }
+
+  /**
+   * Email/queryChanges (RFC 8620 §5.6): every email that changed since the
+   * state is removed and, where the query lists it now, added back at its
+   * index. Emails that didn't change can't have joined, left or moved in
+   * the list, so this turns the old list into the current one. With
+   * collapseThreads a changed email can change its thread's representative,
+   * so every email of a changed thread counts as changed. Null: resync.
+   */
+  jmapQueryChanges(
+    input: Parameters<typeof queryAllJmapEmails>[1] & {
+      sinceQueryState: string;
+    }
+  ) {
+    const store = this.state.storage.sql;
+
+    const changed = changedSince(
+      store,
+      "Email",
+      input.sinceQueryState,
+      input.userId
+    );
+
+    if (!changed) return null;
+    const removed = new Set(changed);
+    const threads = new Set<string>();
+
+    if (input.collapseThreads && input.filter.inMailbox !== DRAFTS_FOLDER_ID) {
+      for (const id of changedSince(
+        store,
+        "Thread",
+        input.sinceQueryState,
+        input.userId
+      ) ?? []) {
+        threads.add(id);
+      }
+
+      for (const row of this.db
+        .select({ conversationId: emails.conversationId })
+        .from(emails)
+        .where(inArray(emails.id, [...changed]))
+        .all()) {
+        threads.add(row.conversationId);
+      }
+
+      for (const row of this.db
+        .select({ id: emails.id })
+        .from(emails)
+        .where(inArray(emails.conversationId, [...threads]))
+        .all()) {
+        removed.add(row.id);
+      }
+    }
+
+    const listed =
+      input.filter.inMailbox === DRAFTS_FOLDER_ID
+        ? this.listDrafts(input.userId).map((draft) => ({
+            id: draft.id,
+            conversation_id: "",
+          }))
+        : queryAllJmapEmails(store, input);
+
+    if (input.filter.inMailbox === DRAFTS_FOLDER_ID && input.ascending) {
+      listed.reverse();
+    }
+
+    const added = listed.flatMap((row, index) =>
+      removed.has(row.id) || threads.has(row.conversation_id)
+        ? [{ id: row.id, index }]
+        : []
+    );
+
+    for (const { id } of added) removed.add(id);
+
+    return {
+      state: jmapState(this.state.storage),
+      removed: [...removed],
+      added,
+      total: listed.length,
     };
   }
 
