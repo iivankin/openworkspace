@@ -128,6 +128,8 @@ import { readInboxCounts, writeInboxCounts } from "./inbox-counts";
 import type { InboxCounts } from "./inbox-counts";
 import {
   bumpJmapState,
+  currentSeq,
+  jmapChanges as jmapChangeLog,
   emailPlacement as jmapEmailPlacement,
   jmapState,
   mailboxes as jmapMailboxRows,
@@ -793,7 +795,7 @@ export class MailboxDO extends DurableObject<Env> {
    * change they are told about.
    */
   private version() {
-    return Number(jmapState(this.state.storage));
+    return currentSeq(this.state.storage.sql);
   }
 
   /**
@@ -1778,6 +1780,27 @@ export class MailboxDO extends DurableObject<Env> {
 
   jmapState() {
     return jmapState(this.state.storage);
+  }
+
+  /** Foo/changes for this person (jmap-store.ts); null: resync instead. */
+  jmapChanges(input: Parameters<typeof jmapChangeLog>[1]) {
+    const changes = jmapChangeLog(this.state.storage.sql, input);
+
+    if (!changes || input.type !== "Mailbox" || !changes.emailsChanged) {
+      return changes;
+    }
+
+    // Mail changed, so any mailbox's counts may have: all of them updated.
+    const all = jmapMailboxRows(this.state.storage.sql, input.userId).map(
+      (row) => row.id
+    );
+
+    return {
+      ...changes,
+      updated: all.filter(
+        (id) => !changes.created.includes(id) && !changes.destroyed.includes(id)
+      ),
+    };
   }
 
   jmapMailboxes(userId: string) {

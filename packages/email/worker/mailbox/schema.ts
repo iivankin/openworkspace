@@ -534,3 +534,27 @@ export type FolderRecord = typeof folders.$inferSelect;
 export type NewFolder = typeof folders.$inferInsert;
 
 export type Draft = typeof drafts.$inferSelect;
+
+/**
+ * What changed in the mailbox, for JMAP's Foo/changes: one row an object
+ * created, updated or destroyed, written by triggers on the tables JMAP
+ * reads (migration 0008). `seq` orders them and is the JMAP state;
+ * `user_id` limits a row to one person (their drafts, their read state).
+ * Old rows are pruned; a state from before the oldest left can't be
+ * answered (jmap-store.ts, jmapChanges).
+ */
+export const jmapChanges = sqliteTable(
+  "jmap_changes",
+  {
+    seq: integer("seq").primaryKey({ autoIncrement: true }),
+    type: text("type", {
+      enum: ["Email", "Thread", "Mailbox", "State"],
+    }).notNull(),
+    id: text("id").notNull(),
+    kind: text("kind", {
+      enum: ["created", "updated", "destroyed"],
+    }).notNull(),
+    userId: text("user_id"),
+  },
+  (table) => [index("jmap_changes_type_seq_idx").on(table.type, table.seq)]
+);

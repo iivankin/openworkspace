@@ -57,6 +57,13 @@
       "when": 1794719386222,
       "tag": "0007_backup_hashes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794863344279,
+      "tag": "0008_jmap_changes",
+      "breakpoints": true
     }
   ]
 }

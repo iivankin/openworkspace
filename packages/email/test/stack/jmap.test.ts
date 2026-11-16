@@ -841,6 +841,109 @@ describe("JMAP", () => {
     });
   });
 
+  it("answers Foo/changes with what changed since a state", async () => {
+    const { accessToken, accountId } = await signIn();
+
+    const [mailboxes] = await jmap(accessToken, [
+      ["Mailbox/get", { accountId, ids: null }, "m"],
+    ]);
+
+    const since = z.string().parse(args(mailboxes).state);
+
+    const upload = await uploadMessage(
+      accessToken,
+      accountId,
+      [
+        "From: Lee <lee@example.net>",
+        "To: jay@example.test",
+        "Subject: Changes",
+        "Message-ID: <changes-1@example.net>",
+        "Date: Mon, 02 Mar 2026 09:00:00 +0000",
+        "",
+        "Hello.",
+      ].join("\r\n")
+    );
+
+    const [imported] = await jmap(accessToken, [
+      [
+        "Email/import",
+        {
+          accountId,
+          emails: { one: { blobId: upload, mailboxIds: { inbox: true } } },
+        },
+        "i",
+      ],
+    ]);
+
+    const emailId = required(
+      result(imported, setResult).created?.one,
+      "the email was imported"
+    ).id;
+
+    const [emailChanges, threadChanges, mailboxChanges] = await jmap(
+      accessToken,
+      [
+        ["Email/changes", { accountId, sinceState: since }, "e"],
+        ["Thread/changes", { accountId, sinceState: since }, "t"],
+        ["Mailbox/changes", { accountId, sinceState: since }, "b"],
+      ]
+    );
+
+    const changeResult = z.looseObject({
+      oldState: z.string(),
+      newState: z.string(),
+      hasMoreChanges: z.boolean(),
+      created: z.array(z.string()),
+      updated: z.array(z.string()),
+      destroyed: z.array(z.string()),
+    });
+
+    expect(result(emailChanges, changeResult)).toMatchObject({
+      oldState: since,
+      hasMoreChanges: false,
+      created: [emailId],
+      updated: [],
+      destroyed: [],
+    });
+    expect(result(threadChanges, changeResult).created).toHaveLength(1);
+    expect(result(mailboxChanges, changeResult).updated).toContain("inbox");
+
+    // Read and archived: the same email, updated.
+    const afterImport = result(emailChanges, changeResult).newState;
+
+    await jmap(accessToken, [
+      [
+        "Email/set",
+        {
+          accountId,
+          update: {
+            [emailId]: {
+              keywords: { $seen: true },
+              mailboxIds: { archive: true },
+            },
+          },
+        },
+        "s",
+      ],
+    ]);
+
+    const [moved, limited, stale] = await jmap(accessToken, [
+      ["Email/changes", { accountId, sinceState: afterImport }, "e"],
+      ["Email/changes", { accountId, sinceState: since, maxChanges: 1 }, "l"],
+      ["Email/changes", { accountId, sinceState: "0" }, "o"],
+    ]);
+
+    expect(result(moved, changeResult)).toMatchObject({
+      created: [],
+      updated: [emailId],
+      destroyed: [],
+    });
+    expect(result(limited, changeResult).created).toEqual([emailId]);
+    // A state from before the change log: the client resyncs.
+    expect(required(stale, "an answer")[0]).toBe("error");
+    expect(args(stale)).toMatchObject({ type: "cannotCalculateChanges" });
+  });
+
   it("imports with mail.organize and refuses tokens without it", async () => {
     const organizer = await signIn("mail.read mail.organize");
 

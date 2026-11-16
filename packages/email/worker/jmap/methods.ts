@@ -322,7 +322,11 @@ const utcDate = z.iso.datetime({ offset: true });
 /** Objects to create or patches to apply, each checked on its own (SetError per id). */
 const setObjects = z.record(z.string(), z.json()).nullish();
 
-const changesArguments = z.object({ accountId, sinceState: z.string() });
+const changesArguments = z.object({
+  accountId,
+  sinceState: z.string(),
+  maxChanges: z.number().int().positive().nullish(),
+});
 
 /** A SetError for an object whose properties failed `issues` (RFC 8620 §5.3). */
 function invalidProperties(
@@ -373,21 +377,6 @@ function pick<Value extends Json>(
       ([key]) => key === "id" || wanted.includes(key)
     )
   );
-}
-
-/** We cannot list changes, only say whether anything changed. */
-function changes(owner: JmapAccount, sinceState: string, state: string) {
-  if (sinceState !== state) throw new MethodError("cannotCalculateChanges");
-
-  return {
-    accountId: owner.id,
-    oldState: state,
-    newState: state,
-    hasMoreChanges: false,
-    created: [],
-    updated: [],
-    destroyed: [],
-  };
 }
 
 const addresses = (
@@ -2433,20 +2422,36 @@ function method<Schema extends z.ZodType>(definition: {
 
 const reading = () => [MAIL_READ_SCOPE];
 
-/** Foo/changes for the types that share the mailbox's one state. */
-const mailboxChanges = method({
-  arguments: changesArguments,
-  scopes: reading,
-  run: async (state, args) => {
-    const owner = account(state, args.accountId);
+/**
+ * Foo/changes from the mailbox's change log, for the types that share its
+ * one state; a state it can't answer from makes the client resync.
+ */
+const changesMethod = (type: "Email" | "Thread" | "Mailbox") =>
+  method({
+    arguments: changesArguments,
+    scopes: reading,
+    run: async (state, args) => {
+      const owner = account(state, args.accountId);
 
-    return changes(
-      owner,
-      args.sinceState,
-      await mailboxStub(state.context.env, owner.id).jmapState()
-    );
-  },
-});
+      const changes = await mailboxStub(
+        state.context.env,
+        owner.id
+      ).jmapChanges({
+        type,
+        sinceState: args.sinceState,
+        userId: state.context.user.id,
+        maxChanges: args.maxChanges ?? null,
+      });
+
+      if (!changes) throw new MethodError("cannotCalculateChanges");
+      const { emailsChanged: _counts, ...answer } = changes;
+
+      // Mailbox/changes also says which properties changed: any of them.
+      return type === "Mailbox"
+        ? { accountId: owner.id, ...answer, updatedProperties: null }
+        : { accountId: owner.id, ...answer };
+    },
+  });
 
 const methods = new Map<string, MethodHandler>([
   [
@@ -2473,7 +2478,7 @@ const methods = new Map<string, MethodHandler>([
       run: mailboxQuery,
     }),
   ],
-  ["Mailbox/changes", mailboxChanges],
+  ["Mailbox/changes", changesMethod("Mailbox")],
   [
     "Email/query",
     method({
@@ -2502,12 +2507,12 @@ const methods = new Map<string, MethodHandler>([
       run: emailImport,
     }),
   ],
-  ["Email/changes", mailboxChanges],
+  ["Email/changes", changesMethod("Email")],
   [
     "Thread/get",
     method({ arguments: threadGetArguments, scopes: reading, run: threadGet }),
   ],
-  ["Thread/changes", mailboxChanges],
+  ["Thread/changes", changesMethod("Thread")],
   [
     "SearchSnippet/get",
     method({

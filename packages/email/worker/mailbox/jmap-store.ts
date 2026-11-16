@@ -49,15 +49,148 @@ export type JmapEmailFilter = {
   hasAttachment?: boolean;
 };
 
-const STATE_KEY = "jmap:state";
-
-/** A counter bumped on every change; JMAP clients compare it to resync. */
-export function jmapState(storage: DurableObjectStorage) {
-  return String(storage.kv.get<number>(STATE_KEY) ?? 0);
+/** The newest change's number in the change log (jmap_changes), or 0. */
+export function currentSeq(sql: SqlStorage) {
+  return (
+    sql
+      .exec<{ seq: number | null }>("select max(seq) as seq from jmap_changes")
+      .one().seq ?? 0
+  );
 }
 
+/**
+ * The mailbox's JMAP state: the change log's newest entry, `c<seq>`. The
+ * prefix tells it from the plain counters of before the log, which are
+ * then answered with cannotCalculateChanges (one full resync).
+ */
+export function jmapState(storage: DurableObjectStorage) {
+  return `c${currentSeq(storage.sql)}`;
+}
+
+/**
+ * Moves the state on for a change no trigger records (the log's triggers
+ * cover what JMAP shows), so streams and push see something happened.
+ */
 export function bumpJmapState(storage: DurableObjectStorage) {
-  storage.kv.put(STATE_KEY, (storage.kv.get<number>(STATE_KEY) ?? 0) + 1);
+  storage.sql.exec(
+    "insert into jmap_changes (type, id, kind) values ('State', '', 'updated')"
+  );
+}
+
+export type JmapChangeType = "Email" | "Thread" | "Mailbox";
+
+export type JmapChanges = {
+  oldState: string;
+  newState: string;
+  hasMoreChanges: boolean;
+  created: string[];
+  updated: string[];
+  destroyed: string[];
+  /** Mailbox only: an email changed, so mailbox counts may have too. */
+  emailsChanged: boolean;
+};
+
+/**
+ * Foo/changes from the change log: the objects of `type` created, updated
+ * or destroyed since `sinceState`, as `userId` sees them (rows for another
+ * person's drafts or read state are left out), at most `maxChanges` ids.
+ * Null when `sinceState` can't be answered: not a state of this log, newer
+ * than it, or older than its oldest kept entry.
+ */
+export function jmapChanges(
+  sql: SqlStorage,
+  input: {
+    type: JmapChangeType;
+    sinceState: string;
+    userId: string;
+    maxChanges: number | null;
+  }
+): JmapChanges | null {
+  const match = /^c(\d+)$/u.exec(input.sinceState);
+
+  if (!match) return null;
+  const since = Number(match[1]);
+  const current = currentSeq(sql);
+
+  const oldest =
+    sql
+      .exec<{ seq: number | null }>("select min(seq) as seq from jmap_changes")
+      .one().seq ?? current + 1;
+
+  if (since > current || since < oldest - 1) return null;
+
+  const rows = sql
+    .exec<{ seq: number; id: string; kind: string }>(
+      `select seq, id, kind from jmap_changes
+       where type = ? and seq > ? and (user_id is null or user_id = ?)
+       order by seq`,
+      input.type,
+      since,
+      input.userId
+    )
+    .toArray();
+
+  // Each id's first creation or destruction in range, and its last change:
+  // whether it existed before and exists now decide created, updated or
+  // destroyed. (Updates don't say: a conversation can be noted as updated
+  // by its first email just before its own row is written.)
+  const seen = new Map<string, { lifecycle: string | null; last: string }>();
+  let newState = current;
+  let hasMoreChanges = false;
+
+  for (const row of rows) {
+    const known = seen.get(row.id);
+
+    if (!known && input.maxChanges !== null && seen.size >= input.maxChanges) {
+      // Stop before this id; the next call goes on from here.
+      newState = row.seq - 1;
+      hasMoreChanges = true;
+      break;
+    }
+
+    seen.set(row.id, {
+      lifecycle: known?.lifecycle ?? (row.kind === "updated" ? null : row.kind),
+      last: row.kind,
+    });
+  }
+
+  const created: string[] = [];
+  const updated: string[] = [];
+  const destroyed: string[] = [];
+
+  for (const [id, { lifecycle, last }] of seen) {
+    const existedBefore = lifecycle !== "created";
+    const existsNow = last !== "destroyed";
+
+    if (existedBefore && existsNow) updated.push(id);
+    else if (existsNow) created.push(id);
+    else if (existedBefore) destroyed.push(id);
+  }
+
+  const emailsChanged =
+    input.type === "Mailbox" &&
+    sql
+      .exec<{ found: number }>(
+        `select exists (
+           select 1 from jmap_changes
+           where type = 'Email' and seq > ? and seq <= ?
+             and (user_id is null or user_id = ?)
+         ) as found`,
+        since,
+        newState,
+        input.userId
+      )
+      .one().found === 1;
+
+  return {
+    oldState: `c${since}`,
+    newState: `c${newState}`,
+    hasMoreChanges,
+    created,
+    updated,
+    destroyed,
+    emailsChanged,
+  };
 }
 
 const unread = (userId: string) => ({

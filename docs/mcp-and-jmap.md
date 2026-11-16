@@ -51,7 +51,10 @@ updates. A few things work differently from other servers:
   with a new one, as they usually do, and it stays in Drafts until it is sent
   or destroyed. Replies and forwards started in the web app are listed but
   sent from the web app.
-- Apps resync fully after changes, instead of fetching only what changed.
+- Apps fetch only what changed (`Email/changes`, `Thread/changes`,
+  `Mailbox/changes`) for the last 100,000 changes of a mailbox; an app that
+  was away longer resyncs fully. `Email/queryChanges` isn't supported, so a
+  sorted list is queried again.
 
 ## Scopes
 
