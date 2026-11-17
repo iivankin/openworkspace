@@ -952,8 +952,8 @@ export class MailboxDO extends DurableObject<Env> {
     return mailboxJmap.jmapEmails(this.context, userId, ids);
   }
 
-  jmapThreads(ids: string[]) {
-    return mailboxJmap.jmapThreads(this.context, ids);
+  jmapThreads(ids: string[], userId: string) {
+    return mailboxJmap.jmapThreads(this.context, ids, userId);
   }
 
   jmapMoveEmails(emailIds: string[], target: string) {

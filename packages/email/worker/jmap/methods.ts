@@ -802,10 +802,9 @@ function draftEmailObject(
     {
       id: draft.id,
       blobId: `draft~${draft.id}`,
-      threadId:
-        draft.kind === "reply" && draft.conversationId
-          ? draft.conversationId
-          : draft.id,
+      // A thread of its own: Thread/get of its conversation lists only
+      // what everyone with the mailbox sees.
+      threadId: draft.id,
       mailboxIds: { [DRAFTS_FOLDER_ID]: true },
       keywords: { $draft: true, $seen: true },
       size:
@@ -1798,7 +1797,8 @@ async function threadGet(
   const owner = account(state, args.accountId);
 
   const result = await mailboxStub(state.context.env, owner.id).jmapThreads(
-    args.ids
+    args.ids,
+    state.context.user.id
   );
 
   const threads = new Map(

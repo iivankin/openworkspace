@@ -97,13 +97,6 @@ export type JmapChanges = {
 };
 
 /**
- * Foo/changes from the change log: the objects of `type` created, updated
- * or destroyed since `sinceState`, as `userId` sees them (rows for another
- * person's drafts or read state are left out), at most `maxChanges` ids.
- * Null when `sinceState` can't be answered: not a state of this log, newer
- * than it, or older than its oldest kept entry.
- */
-/**
  * The change log position a JMAP state names, if this log can answer from
  * it: a `c<seq>` state, not newer than the log, not older than its oldest
  * kept entry.
@@ -151,6 +144,13 @@ export function changedSince(
   );
 }
 
+/**
+ * Foo/changes from the change log: the objects of `type` created, updated
+ * or destroyed since `sinceState`, as `userId` sees them (rows for another
+ * person's drafts or read state are left out), at most `maxChanges` ids.
+ * Null when `sinceState` can't be answered: not a state of this log, newer
+ * than it, or older than its oldest kept entry.
+ */
 export function jmapChanges(
   sql: SqlStorage,
   input: {
@@ -513,10 +513,26 @@ export function emailPlacement(sql: SqlStorage, userId: string, ids: string[]) {
   );
 }
 
-export function threadEmails(sql: SqlStorage, threadIds: string[]) {
+/**
+ * The emails of each thread, oldest first. A draft of `userId` is a thread
+ * of its own, as its `threadId` says.
+ */
+export function threadEmails(
+  sql: SqlStorage,
+  threadIds: string[],
+  userId: string
+) {
   const threads = new Map<string, string[]>();
 
   if (!threadIds.length) return threads;
+
+  for (const row of sql.exec<{ id: string }>(
+    `select id from drafts where user_id = ? and id in ${IDS}`,
+    userId,
+    JSON.stringify(threadIds)
+  )) {
+    threads.set(row.id, [row.id]);
+  }
 
   for (const row of sql.exec<{ id: string; conversation_id: string }>(
     `select id, conversation_id from emails where conversation_id in ${IDS}

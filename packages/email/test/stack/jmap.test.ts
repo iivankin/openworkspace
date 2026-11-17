@@ -658,35 +658,47 @@ describe("JMAP", () => {
       expect.objectContaining({ id: draftId, subject: "Plans" }),
     ]);
 
-    const [mailboxes, query, got, moved, kept] = await jmap(accessToken, [
-      ["Mailbox/query", { accountId, filter: { role: "drafts" } }, "m"],
-      ["Email/query", { accountId, filter: { inMailbox: "drafts" } }, "q"],
+    const [mailboxes, query, got, thread, moved, kept] = await jmap(
+      accessToken,
       [
-        "Email/get",
-        {
-          accountId,
-          ids: [draftId],
-          properties: ["mailboxIds", "keywords", "to", "subject", "bodyValues"],
-          fetchTextBodyValues: true,
-        },
-        "g",
-      ],
-      [
-        "Email/set",
-        { accountId, update: { [draftId]: { "mailboxIds/archive": true } } },
-        "u",
-      ],
-      [
-        "Email/set",
-        { accountId, update: { [draftId]: { "keywords/$seen": true } } },
-        "k",
-      ],
-    ]);
+        ["Mailbox/query", { accountId, filter: { role: "drafts" } }, "m"],
+        ["Email/query", { accountId, filter: { inMailbox: "drafts" } }, "q"],
+        [
+          "Email/get",
+          {
+            accountId,
+            ids: [draftId],
+            properties: [
+              "threadId",
+              "mailboxIds",
+              "keywords",
+              "to",
+              "subject",
+              "bodyValues",
+            ],
+            fetchTextBodyValues: true,
+          },
+          "g",
+        ],
+        ["Thread/get", { accountId, ids: [draftId] }, "t"],
+        [
+          "Email/set",
+          { accountId, update: { [draftId]: { "mailboxIds/archive": true } } },
+          "u",
+        ],
+        [
+          "Email/set",
+          { accountId, update: { [draftId]: { "keywords/$seen": true } } },
+          "k",
+        ],
+      ]
+    );
 
     expect(args(mailboxes)).toMatchObject({ ids: ["drafts"] });
     expect(args(query)).toMatchObject({ ids: [draftId], total: 1 });
     expect(result(got, getResult).list).toEqual([
       expect.objectContaining({
+        threadId: draftId,
         mailboxIds: { drafts: true },
         keywords: { $draft: true, $seen: true },
         to: [{ name: null, email: "grace@example.net" }],
@@ -696,6 +708,12 @@ describe("JMAP", () => {
         },
       }),
     ]);
+    // A draft is a thread of its own.
+    expect(args(thread)).toMatchObject({
+      list: [{ id: draftId, emailIds: [draftId] }],
+      notFound: [],
+    });
+    const threadState = z.string().parse(args(thread).state);
     // A draft stays in Drafts until it is sent.
     expect(result(moved, setResult).notUpdated?.[draftId]).toMatchObject({
       type: "invalidProperties",
@@ -713,13 +731,93 @@ describe("JMAP", () => {
     expect(draftSource.headers.get("content-type")).toBe("message/rfc822");
     expect(await draftSource.text()).toContain("Subject: Plans");
 
-    const [destroyed, after] = await jmap(accessToken, [
+    const [destroyed, after, threads] = await jmap(accessToken, [
       ["Email/set", { accountId, destroy: [draftId] }, "d"],
       ["Email/query", { accountId, filter: { inMailbox: "drafts" } }, "q"],
+      ["Thread/changes", { accountId, sinceState: threadState }, "c"],
     ]);
 
     expect(result(destroyed, setResult).destroyed).toEqual([draftId]);
     expect(args(after)).toMatchObject({ ids: [], total: 0 });
+    expect(args(threads)).toMatchObject({ destroyed: [draftId] });
+  });
+
+  it("lets only members who can send delete shared mail for good", async () => {
+    await signIn();
+
+    const admin = z
+      .object({ id: z.string() })
+      .parse(
+        await env.DB.prepare(
+          "SELECT id FROM users WHERE role = 'admin'"
+        ).first()
+      );
+
+    const readerId = `usr_jmap_reader_${crypto.randomUUID()}`;
+    const teamId = `team_jmap_${crypto.randomUUID()}`;
+    const sharedId = `mbx_jmap_shared_${crypto.randomUUID()}`;
+    const now = Date.now();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, name, role, status, created_at, updated_at) VALUES (?, 'Reader', 'member', 'active', ?, ?)"
+      ).bind(readerId, now, now),
+      env.DB.prepare(
+        "INSERT INTO teams (id, name, slug, created_by_user_id, created_at, updated_at) VALUES (?, 'Support', ?, ?, ?, ?)"
+      ).bind(teamId, `support-${teamId.slice(-8)}`, admin.id, now, now),
+      env.DB.prepare(
+        "INSERT INTO team_members (team_id, user_id, can_send, created_at) VALUES (?, ?, 0, ?)"
+      ).bind(teamId, readerId, now),
+      env.DB.prepare(
+        "INSERT INTO mailboxes (id, local_part, domain, display_name, team_id, created_by_user_id, created_at, updated_at) VALUES (?, 'support', 'example.test', 'Support', ?, ?, ?, ?)"
+      ).bind(sharedId, teamId, admin.id, now, now),
+    ]);
+
+    await mailbox(sharedId).seedMailbox(
+      [],
+      [
+        {
+          id: "msg_shared_trash",
+          conversationId: "conv_shared_trash",
+          direction: "incoming",
+          fromJson: [{ address: "ada@example.net", name: null }],
+          toJson: [{ address: "support@example.test", name: null }],
+          subject: "Old ticket",
+          timelineAt: new Date(now),
+          transportState: "received",
+        },
+      ],
+      [{ id: "conv_shared_trash", mailboxState: "trash" }]
+    );
+
+    const login = await worker.fetch(
+      new Request(`${origin}/api/auth/mock/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: readerId }),
+      })
+    );
+
+    const { accessToken } = await mcpAccessToken(sessionCookie(login), {
+      scope: "mail.read mail.send mail.organize",
+      resource: `${origin}/jmap`,
+    });
+
+    const [refused] = await jmap(accessToken, [
+      [
+        "Email/set",
+        { accountId: sharedId, destroy: ["msg_shared_trash"] },
+        "d",
+      ],
+    ]);
+
+    expect(args(refused)).toMatchObject({
+      destroyed: null,
+      notDestroyed: { msg_shared_trash: { type: "forbidden" } },
+    });
+    expect(await mailbox(sharedId).getEmail("msg_shared_trash")).toMatchObject({
+      id: "msg_shared_trash",
+    });
   });
 
   it("imports uploaded messages into a mailbox", async () => {
@@ -939,6 +1037,15 @@ describe("JMAP", () => {
     });
     expect(result(threadChanges, changeResult).created).toHaveLength(1);
     expect(result(mailboxChanges, changeResult).updated).toContain("inbox");
+
+    // Every mailbox's counts may have changed, more than the client takes.
+    const [fewMailboxes] = await jmap(accessToken, [
+      ["Mailbox/changes", { accountId, sinceState: since, maxChanges: 1 }, "b"],
+    ]);
+
+    expect(args(fewMailboxes)).toMatchObject({
+      type: "cannotCalculateChanges",
+    });
 
     // Read and archived: the same email, updated.
     const afterImport = result(emailChanges, changeResult).newState;

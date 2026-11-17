@@ -36,16 +36,22 @@ export function jmapChanges(
   }
 
   // Mail changed, so any mailbox's counts may have: all of them updated.
-  const all = jmapMailboxRows(m.state.storage.sql, input.userId).map(
-    (row) => row.id
-  );
-
-  return {
-    ...changes,
-    updated: all.filter(
+  const updated = jmapMailboxRows(m.state.storage.sql, input.userId)
+    .map((row) => row.id)
+    .filter(
       (id) => !changes.created.includes(id) && !changes.destroyed.includes(id)
-    ),
-  };
+    );
+
+  // More than the client takes at once: it reads the mailboxes again.
+  if (
+    input.maxChanges !== null &&
+    changes.created.length + changes.destroyed.length + updated.length >
+      input.maxChanges
+  ) {
+    return null;
+  }
+
+  return { ...changes, updated };
 }
 
 export function jmapMailboxes(m: MailboxContext, userId: string) {
@@ -198,10 +204,10 @@ export function jmapEmails(m: MailboxContext, userId: string, ids: string[]) {
   };
 }
 
-export function jmapThreads(m: MailboxContext, ids: string[]) {
+export function jmapThreads(m: MailboxContext, ids: string[], userId: string) {
   return {
     state: jmapStateOf(m.state.storage),
-    threads: [...jmapThreadEmails(m.state.storage.sql, ids)].map(
+    threads: [...jmapThreadEmails(m.state.storage.sql, ids, userId)].map(
       ([id, emailIds]) => ({ id, emailIds })
     ),
   };

@@ -49,8 +49,8 @@ updates. A few things work differently from other servers:
 - Drafts created in the Drafts mailbox (`$draft`) are the same drafts the web
   app lists, yours alone. A draft can't be edited in place: apps replace it
   with a new one, as they usually do, and it stays in Drafts until it is sent
-  or destroyed. Replies and forwards started in the web app are listed but
-  sent from the web app.
+  or destroyed. Each draft is a thread of its own. Replies and forwards
+  started in the web app are listed but sent from the web app.
 - Apps fetch only what changed (`Email/changes`, `Thread/changes`,
   `Mailbox/changes`, and `Email/queryChanges` for a list, threads collapsed
   or not) for the last 100,000 changes of a mailbox; an app that was away
