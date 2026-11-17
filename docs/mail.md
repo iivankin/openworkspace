@@ -51,7 +51,8 @@ An address under **People** or **Teams** can also be:
   bounce when its domain asks receivers to quarantine or reject such mail;
   under `p=none` it is forwarded, and the destination's own filtering judges
   it. If no destination is confirmed, or every forward fails, the sender
-  gets a bounce.
+  gets a bounce. A disabled person's forwards send nothing on; their mail
+  bounces.
 
 An address with its own mailbox can be the **catch-all** for its domain (one
 per domain): it also gets mail sent to addresses on that domain that don't

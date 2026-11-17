@@ -377,6 +377,45 @@ describe("a forward", () => {
     ]);
   });
 
+  it("stops sending a disabled person's mail on", async () => {
+    fakeEmailRouting();
+
+    await createAddress({
+      address: "sam.out@example.test",
+      displayName: "Sam",
+      ownerUserId: adminId,
+      teamId: null,
+      delivery: "forward",
+      forwardTo: ["sam@home.test"],
+    });
+
+    const active = await deliver({
+      to: "sam.out@example.test",
+      messageId: "sam-out-1@x.test",
+    });
+
+    expect(active.forwarded.map((forward) => forward.to)).toEqual([
+      "sam@home.test",
+    ]);
+
+    await env.DB.prepare("UPDATE users SET status = 'disabled' WHERE id = ?")
+      .bind(adminId)
+      .run();
+
+    try {
+      const disabled = await deliver({
+        to: "sam.out@example.test",
+        messageId: "sam-out-2@x.test",
+      });
+
+      expect(disabled.forwarded).toEqual([]);
+    } finally {
+      await env.DB.prepare("UPDATE users SET status = 'active' WHERE id = ?")
+        .bind(adminId)
+        .run();
+    }
+  });
+
   it("shows a destination Email Routing lacks, and adds it again", async () => {
     const routing = fakeEmailRouting();
 

@@ -1,6 +1,7 @@
 import {
   createDb,
   mailboxes,
+  users,
   normalizeMailboxAddress,
 } from "@open-workspace/core/module";
 import type { MailboxDelivery } from "@open-workspace/core/shared";
@@ -76,6 +77,7 @@ const routeColumns = {
   listPosting: mailboxes.listPosting,
   aliasOf: mailboxes.aliasOf,
   forwardTo: mailboxes.forwardTo,
+  ownerUserId: mailboxes.ownerUserId,
 };
 
 type RouteRow = AddressRow & {
@@ -121,7 +123,21 @@ export async function resolveInboundRoute(
   if (!row) return null;
 
   if (row.delivery === "forward") {
-    return { kind: "forward", id: row.id, forwardTo: row.forwardTo ?? [] };
+    // A disabled person's mail isn't sent on: the forward bounces as one
+    // without destinations does.
+    const [owner] = row.ownerUserId
+      ? await orm
+          .select({ status: users.status })
+          .from(users)
+          .where(eq(users.id, row.ownerUserId))
+          .limit(1)
+      : [];
+
+    return {
+      kind: "forward",
+      id: row.id,
+      forwardTo: owner?.status === "disabled" ? [] : (row.forwardTo ?? []),
+    };
   }
 
   if (row.delivery !== "alias") return { kind: "mailbox", mailbox: row };
