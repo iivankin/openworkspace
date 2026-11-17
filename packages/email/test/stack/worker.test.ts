@@ -1755,14 +1755,19 @@ describe("mail worker", () => {
       raw: "From: Sender <sender@example.net>\r\nTo: admin@example.test\r\nSubject: Inbound test\r\nMessage-ID: <inbound-test@example.net>\r\n\r\nHello from email routing.",
     };
 
+    // Sent mail keeps its copy there too.
+    const rawCopies = async () =>
+      (
+        await env.MAIL_STORAGE.list({
+          prefix: `mailboxes/${personalMailboxId}/raw/`,
+        })
+      ).objects.length;
+
+    const copiesBefore = await rawCopies();
+
     // A known mailbox is never rejected, and the same message is stored once.
     expect((await hooks.email(knownRecipient)).rejection).toBeUndefined();
     expect((await hooks.email(knownRecipient)).rejection).toBeUndefined();
-
-    const stored = await env.MAIL_STORAGE.list({
-      prefix: `mailboxes/${personalMailboxId}/raw/`,
-    });
-
-    expect(stored.objects).toHaveLength(1);
+    expect(await rawCopies()).toBe(copiesBefore + 1);
   });
 });

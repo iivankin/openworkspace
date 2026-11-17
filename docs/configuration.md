@@ -113,7 +113,10 @@ up where an interrupted run stopped. Each snapshot holds:
   their own.
 - `backups/objects/<sha256>.<extension>`: each message (`.eml`), settings
   (`.json`) and file (`.bin`), stored once however many snapshots list it.
-  Sent mail is written as MIME from what was sent.
+  Sent mail is the MIME kept when it was sent (see
+  [How sent mail is kept](#how-sent-mail-is-kept)), except that one which
+  sent large files as download links is rebuilt with those files attached,
+  so a restore still has them.
 - `backups/<id>/complete.json`: written last. A snapshot without it was still
   being written, or failed, and may lack part of the data.
 
@@ -280,6 +283,10 @@ Sending returned and the time it was sent. Cloudflare adds its own headers
 and DKIM signature on the way out; those aren't in the copy. Describe it that
 way in your GoBD procedure documentation (Verfahrensdokumentation). Received
 mail is kept as the bytes that arrived, signatures included.
+
+The same copy is kept in the mailbox as the sent message's source: mail apps
+download it as the message's blob, backups and the archive read it, and
+deleting the message for good deletes it.
 
 ### What the lock does and doesn't guarantee
 

@@ -395,43 +395,78 @@ async function sendEntryId(env: Env, id: string) {
 
 /**
  * Every message the workspace sends goes through here: it hands `message`
- * to Email Sending and archives exactly that, with the Message-ID it got
- * back (`sentEml`) and the time it was sent. The entry is recorded before
+ * to Email Sending and keeps exactly that as sent, with the Message-ID it
+ * got back (`sentEml`) and the time it was sent. A stored message keeps it
+ * at `sent.rawKey` (its `rawMimeR2Key`, which backups, JMAP and the archive
+ * read); the archive copies it too. The archive entry is recorded before
  * sending, so a send whose Worker dies before the copy is still retried
- * (rebuilt from the mailbox). Archiving never fails the send. `sent.id`
- * names the copy: the stored message's id, or any unique id for mail that
- * isn't stored (e.g. an auto-reply).
+ * (rebuilt from the mailbox). Keeping and archiving never fail the send.
+ * `sent.id` names the copy: the stored message's id, or any unique id for
+ * mail that isn't stored (e.g. an auto-reply, which has no `rawKey`).
  */
 export async function sendArchived(
   env: Env,
-  sent: { id: string; mailboxId: string },
+  sent: { id: string; mailboxId: string; rawKey?: string },
   message: SentMessage
 ) {
-  if (!env.MAIL_ARCHIVE) return env.EMAIL.send(message);
+  const entry: NewEntry | null = env.MAIL_ARCHIVE
+    ? {
+        id: await sendEntryId(env, sent.id),
+        mailboxId: sent.mailboxId,
+        direction: "outgoing",
+        sourceKey: null,
+        createdAt: new Date(),
+      }
+    : null;
 
-  const entry: NewEntry = {
-    id: await sendEntryId(env, sent.id),
-    mailboxId: sent.mailboxId,
-    direction: "outgoing",
-    sourceKey: null,
-    createdAt: new Date(),
-  };
-
-  const recorded = await recordEntry(env, entry);
+  const recorded = entry ? await recordEntry(env, entry) : false;
   const result = await env.EMAIL.send(message);
 
+  if (!entry && !sent.rawKey) return { ...result, rawKey: null };
+  const sentAt = entry?.createdAt ?? new Date();
+  let bytes: Bytes;
+
   try {
-    const bytes = sentEml(
-      { id: sent.id, date: entry.createdAt, messageId: result.messageId },
+    bytes = sentEml(
+      { id: sent.id, date: sentAt, messageId: result.messageId },
       message
     );
-
-    await archiveNow(env, entry, bytes, recorded);
   } catch (error) {
-    console.error(`Could not archive sent message ${sent.id}`, error);
+    console.error(`Could not keep sent message ${sent.id}`, error);
+
+    return { ...result, rawKey: null };
   }
 
-  return result;
+  let rawKey: string | null = null;
+
+  if (sent.rawKey) {
+    try {
+      await env.MAIL_STORAGE.put(sent.rawKey, bytes, {
+        httpMetadata: { contentType: "message/rfc822" },
+      });
+      rawKey = sent.rawKey;
+    } catch (error) {
+      console.error(`Could not keep sent message ${sent.id}`, error);
+    }
+  }
+
+  if (entry) {
+    try {
+      // The kept copy is the archive's retry source, as received mail's is.
+      if (rawKey && recorded) {
+        await createDb(env.DB)
+          .update(mailArchiveEntries)
+          .set({ sourceKey: rawKey })
+          .where(eq(mailArchiveEntries.id, entry.id));
+      }
+
+      await archiveNow(env, { ...entry, sourceKey: rawKey }, bytes, recorded);
+    } catch (error) {
+      console.error(`Could not archive sent message ${sent.id}`, error);
+    }
+  }
+
+  return { ...result, rawKey };
 }
 
 /** Raw copies that must outlive object cleanup until they are archived. */

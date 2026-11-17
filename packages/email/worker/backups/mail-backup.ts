@@ -104,7 +104,11 @@ function backupPlacement(input: {
  */
 type MessageBytes = { bytes: Uint8Array<ArrayBuffer>; final: boolean };
 
-/** Outgoing mail as Email Sending got it (same body and attachments), as MIME. */
+/**
+ * Outgoing mail rebuilt from its fields, every file attached: also those
+ * that went out as download links, which the message as sent only links to
+ * (they would be gone after a restore).
+ */
 async function sentMessageBytes(
   env: Env,
   email: Email,
@@ -114,7 +118,13 @@ async function sentMessageBytes(
   let complete = true;
 
   try {
-    delivery = await prepareOutboundDelivery(env, email);
+    delivery = await prepareOutboundDelivery(env, {
+      ...email,
+      attachmentsJson: email.attachmentsJson.map((attachment) => ({
+        ...attachment,
+        delivery: "attached" as const,
+      })),
+    });
   } catch (cause) {
     // A missing attachment must not cost the backup the message itself.
     error(
@@ -161,7 +171,12 @@ async function messageBytes(
   email: Email,
   error: (message: string) => void
 ): Promise<MessageBytes> {
-  if (email.rawMimeR2Key) {
+  // The copy as sent links to these files instead of holding them.
+  const linksFiles = email.attachmentsJson.some(
+    (attachment) => attachment.delivery === "download_link"
+  );
+
+  if (email.rawMimeR2Key && !(email.direction === "outgoing" && linksFiles)) {
     const object = await env.MAIL_STORAGE.get(email.rawMimeR2Key);
 
     if (object) {

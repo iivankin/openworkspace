@@ -111,6 +111,7 @@ import { buildEmailSearchQuery } from "../mail/search";
 import { spamhausDqsKey, workspaceIdentity } from "../mail/security-settings";
 import type { WorkspaceIdentity } from "../mail/security-settings";
 import { collectSenderIntel } from "../mail/sender-intel";
+import { rawMessageKey } from "../mail/storage-keys";
 import {
   workspaceBlockPatterns,
   workspaceFeedbackSummary,
@@ -5021,11 +5022,14 @@ export class MailboxDO extends DurableObject<Env> {
     }
 
     try {
+      const mailboxId = this.state.id.name ?? "unknown-mailbox";
+
       const result = await sendArchived(
         this.bindings,
         {
           id: message.id,
-          mailboxId: this.state.id.name ?? "unknown-mailbox",
+          mailboxId,
+          rawKey: rawMessageKey(mailboxId, message.id),
         },
         delivery
       );
@@ -5035,6 +5039,15 @@ export class MailboxDO extends DurableObject<Env> {
         messageIdHeader: result.messageId,
         error: null,
       });
+
+      // The message as sent: what backups, JMAP and the archive read.
+      if (result.rawKey) {
+        this.db
+          .update(emails)
+          .set({ rawMimeR2Key: result.rawKey })
+          .where(eq(emails.id, message.id))
+          .run();
+      }
     } catch (error) {
       this.updateTransport(message.id, {
         state: "unconfirmed",

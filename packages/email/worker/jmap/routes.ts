@@ -24,9 +24,11 @@ import {
   MAIL_SEND_SCOPE,
   mailScopes,
 } from "../../shared/permissions";
+import { serializeEml } from "../backups/eml";
 import { vapidConfiguration } from "../mail/push-notifications";
 import {
   createComposerUploadIntent,
+  draftFileKey,
   finalizeComposerUpload,
   loadComposerUpload,
   storeComposerUploadContent,
@@ -118,6 +120,61 @@ function problem(
 ) {
   return c.json({ type, status, detail }, status, {
     "content-type": "application/problem+json",
+  });
+}
+
+/**
+ * One of the person's drafts as MIME (its `draft~` blob): what the message
+ * would be if sent now, with its files. Null when the draft is gone.
+ */
+async function draftEml(
+  env: Env,
+  account: JmapAccount,
+  userId: string,
+  draftId: string
+) {
+  const draft = await mailboxStub(env, account.id).getDraft(userId, draftId);
+
+  if (!draft) return null;
+
+  const list = (values: string[]) =>
+    values.map((address) => ({ address, name: null }));
+
+  const attachments = await Promise.all(
+    draft.attachments.map(async (file) => {
+      const object = await env.MAIL_STORAGE.get(
+        draftFileKey(account.id, userId, file.uploadId)
+      );
+
+      return object
+        ? [
+            {
+              filename: file.filename,
+              type: file.contentType,
+              disposition: file.disposition,
+              contentId: file.contentId ?? undefined,
+              content: await object.arrayBuffer(),
+            },
+          ]
+        : [];
+    })
+  );
+
+  return serializeEml({
+    id: draft.id,
+    from: [{ address: account.address, name: account.displayName || null }],
+    to: list(draft.to),
+    cc: list(draft.cc),
+    bcc: list(draft.bcc),
+    replyTo: draft.replyTo ? list([draft.replyTo]) : [],
+    subject: draft.subject,
+    date: draft.updatedAt,
+    messageId: null,
+    inReplyTo: [],
+    references: [],
+    text: draft.bodyText,
+    html: draft.bodyHtml ?? undefined,
+    attachments: attachments.flat(),
   });
 }
 
@@ -378,6 +435,23 @@ export const jmapRoutes = new Hono<JmapEnv>()
 
     if (!account) return problem(c, 404, "about:blank", "Account not found");
     const blobId = c.req.param("blobId");
+    const draft = /^draft~(.+)$/u.exec(blobId);
+
+    if (draft) {
+      const bytes = await draftEml(c.env, account, user.id, draft[1] ?? "");
+
+      if (!bytes) return problem(c, 404, "about:blank", "Blob not found");
+
+      return new Response(bytes, {
+        headers: {
+          "content-type": c.req.query("type") || "message/rfc822",
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(c.req.param("name"))}`,
+          // A draft changes: no long caching.
+          "cache-control": "private, no-store",
+        },
+      });
+    }
+
     const upload = UPLOAD_BLOB.exec(blobId);
     const blob = /^(raw|att)~([^~]+)(?:~(.+))?$/u.exec(blobId);
     let key: string | null | undefined;

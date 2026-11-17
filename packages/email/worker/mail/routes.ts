@@ -266,7 +266,8 @@ function toMessageDetail(
       email.direction === "incoming"
         ? storedSenderIntel(email.senderIntelJson)
         : null,
-    hasOriginal: Boolean(email.rawMimeR2Key),
+    // "Show original" explains how received mail got here.
+    hasOriginal: email.direction === "incoming" && Boolean(email.rawMimeR2Key),
     attachments: email.attachmentsJson.map((file) => ({
       id: file.id,
       filename: file.filename,

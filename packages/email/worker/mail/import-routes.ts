@@ -32,6 +32,7 @@ import { mailboxStub } from "../mailbox";
 import type { ImportMessageResult } from "../mailbox";
 import { readCappedBody } from "./capped-body";
 import { inboundMessageId, rawMessageId } from "./inbound";
+import { rawMessageKey } from "./storage-keys";
 
 /**
  * Importing existing mail (the `open-workspace import` CLI).
@@ -124,7 +125,7 @@ export async function importRawMessage(input: {
   const known = await mailbox.findImported(importId, rawMessageId(raw));
 
   if (known) return { status: "duplicate", ...known };
-  const rawObjectKey = `mailboxes/${target.id}/raw/${importId}.eml`;
+  const rawObjectKey = rawMessageKey(target.id, importId);
   await env.MAIL_STORAGE.put(rawObjectKey, raw, {
     httpMetadata: { contentType: "message/rfc822" },
   });

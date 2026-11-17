@@ -5,6 +5,7 @@ import { receiveArchived } from "./archive";
 import { inboundDeliveryId } from "./inbound-delivery";
 import { deliverToList } from "./mailing-list";
 import { forwardInbound, resolveInboundRoute } from "./routing";
+import { rawMessageKey } from "./storage-keys";
 
 /**
  * Stores incoming mail for a workspace address, fans a list's mail out, or
@@ -78,7 +79,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
     raw,
   });
 
-  const objectKey = `mailboxes/${mailbox.id}/raw/${deliveryId}.eml`;
+  const objectKey = rawMessageKey(mailbox.id, deliveryId);
 
   await receiveArchived(
     env,

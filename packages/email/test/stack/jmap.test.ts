@@ -549,6 +549,27 @@ describe("JMAP", () => {
       ],
     });
 
+    // Its blob is the message as sent, once Email Sending took it.
+    const source = await pollUntil(
+      async () => {
+        const response = await worker.fetch(
+          new Request(
+            `${origin}/jmap/download/${accountId}/raw~${sentId}/agenda.eml`,
+            { headers: { authorization: `Bearer ${accessToken}` } }
+          )
+        );
+
+        if (response.ok) return response.text();
+        await response.body?.cancel();
+
+        return null;
+      },
+      { failure: "the sent message's source downloads" }
+    );
+
+    expect(source).toContain("Subject: Agenda");
+    expect(source).toContain("agenda.txt");
+
     const [rejected] = await jmap(accessToken, [
       [
         "Email/set",
@@ -680,6 +701,17 @@ describe("JMAP", () => {
       type: "invalidProperties",
     });
     expect(result(kept, setResult).updated).toEqual({ [draftId]: null });
+
+    // Its blob is the draft as a message, as it would be sent now.
+    const draftSource = await worker.fetch(
+      new Request(
+        `${origin}/jmap/download/${accountId}/draft~${draftId}/plans.eml`,
+        { headers: { authorization: `Bearer ${accessToken}` } }
+      )
+    );
+
+    expect(draftSource.headers.get("content-type")).toBe("message/rfc822");
+    expect(await draftSource.text()).toContain("Subject: Plans");
 
     const [destroyed, after] = await jmap(accessToken, [
       ["Email/set", { accountId, destroy: [draftId] }, "d"],
