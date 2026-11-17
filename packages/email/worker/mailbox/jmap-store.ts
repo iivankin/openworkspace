@@ -16,6 +16,12 @@ export const EMAIL_MAILBOX_SQL = `case
   else 'inbox'
 end`;
 
+/**
+ * An id list bound as one JSON parameter: a statement binds at most 100
+ * parameters, and JMAP asks for up to 500 ids at a time.
+ */
+const IDS = "(select cast(value as text) from json_each(?))";
+
 const SYSTEM_MAILBOXES = [
   { id: "inbox", name: "Inbox", role: "inbox" },
   { id: "sent", name: "Sent", role: "sent" },
@@ -361,10 +367,8 @@ function filteredEmails(input: { userId: string; filter: JmapEmailFilter }) {
   }
 
   if (filter.inMailboxOtherThan?.length) {
-    where.push(
-      `${EMAIL_MAILBOX_SQL} not in (${filter.inMailboxOtherThan.map(() => "?").join(", ")})`
-    );
-    params.push(...filter.inMailboxOtherThan);
+    where.push(`${EMAIL_MAILBOX_SQL} not in ${IDS}`);
+    params.push(JSON.stringify(filter.inMailboxOtherThan));
   }
 
   if (filter.before !== undefined) {
@@ -500,9 +504,9 @@ export function emailPlacement(sql: SqlStorage, userId: string, ids: string[]) {
         `
       select e.id, ${EMAIL_MAILBOX_SQL} as mailbox, ${isUnread.sql} as is_unread
       from emails e join conversations c on c.id = e.conversation_id
-      where e.id in (${ids.map(() => "?").join(", ")})`,
+      where e.id in ${IDS}`,
         ...isUnread.params,
-        ...ids
+        JSON.stringify(ids)
       )
       .toArray()
       .map((row) => [row.id, { mailboxId: row.mailbox, seen: !row.is_unread }])
@@ -515,9 +519,9 @@ export function threadEmails(sql: SqlStorage, threadIds: string[]) {
   if (!threadIds.length) return threads;
 
   for (const row of sql.exec<{ id: string; conversation_id: string }>(
-    `select id, conversation_id from emails where conversation_id in (${threadIds.map(() => "?").join(", ")})
+    `select id, conversation_id from emails where conversation_id in ${IDS}
      order by timeline_at, id`,
-    ...threadIds
+    JSON.stringify(threadIds)
   )) {
     threads.set(row.conversation_id, [
       ...(threads.get(row.conversation_id) ?? []),
@@ -561,13 +565,13 @@ export function moveEmails(
          when ? in ('trash', 'spam') and mailbox_state <> ? then ?
          else state_changed_at
        end
-     where id in (select conversation_id from emails where id in (${emailIds.map(() => "?").join(", ")}))`,
+     where id in (select conversation_id from emails where id in ${IDS})`,
     state,
     folderId,
     state,
     state,
     Date.now(),
-    ...emailIds
+    JSON.stringify(emailIds)
   );
 
   return true;

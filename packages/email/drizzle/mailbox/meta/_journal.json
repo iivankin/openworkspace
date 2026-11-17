@@ -64,6 +64,13 @@
       "when": 1794863344279,
       "tag": "0008_jmap_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794920365500,
+      "tag": "0009_jmap_thread_destroyed",
+      "breakpoints": true
     }
   ]
 }

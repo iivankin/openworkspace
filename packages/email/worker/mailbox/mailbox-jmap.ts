@@ -1,5 +1,5 @@
 /** The mailbox as JMAP sees it: state, changes, queries and moves. */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { DRAFTS_FOLDER_ID } from "../../shared/folder-order";
 import {
@@ -121,7 +121,9 @@ export function jmapQueryChanges(
     for (const row of m.db
       .select({ conversationId: emails.conversationId })
       .from(emails)
-      .where(inArray(emails.id, [...changed]))
+      .where(
+        sql`${emails.id} in (select cast(value as text) from json_each(${stringListJson([...changed])}))`
+      )
       .all()) {
       threads.add(row.conversationId);
     }
@@ -129,7 +131,9 @@ export function jmapQueryChanges(
     for (const row of m.db
       .select({ id: emails.id })
       .from(emails)
-      .where(inArray(emails.conversationId, [...threads]))
+      .where(
+        sql`${emails.conversationId} in (select cast(value as text) from json_each(${stringListJson([...threads])}))`
+      )
       .all()) {
       removed.add(row.id);
     }
@@ -183,7 +187,12 @@ export function jmapEmails(m: MailboxContext, userId: string, ids: string[]) {
       ? m.db
           .select()
           .from(drafts)
-          .where(and(eq(drafts.userId, userId), inArray(drafts.id, draftIds)))
+          .where(
+            and(
+              eq(drafts.userId, userId),
+              sql`${drafts.id} in (select cast(value as text) from json_each(${stringListJson(draftIds)}))`
+            )
+          )
           .all()
       : [],
   };

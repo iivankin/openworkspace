@@ -974,6 +974,49 @@ describe("JMAP", () => {
     // A state from before the change log: the client resyncs.
     expect(required(stale, "an answer")[0]).toBe("error");
     expect(args(stale)).toMatchObject({ type: "cannotCalculateChanges" });
+
+    // More ids than a statement can bind one by one.
+    const [many] = await jmap(accessToken, [
+      [
+        "Email/get",
+        {
+          accountId,
+          ids: [
+            emailId,
+            ...Array.from({ length: 150 }, (_, index) => `missing_${index}`),
+          ],
+          properties: ["id"],
+        },
+        "g",
+      ],
+    ]);
+
+    expect(result(many, getResult).list).toEqual([{ id: emailId }]);
+
+    // Deleted for good from Trash: the email and its thread are destroyed.
+    const [, threadBefore] = await jmap(accessToken, [
+      [
+        "Email/set",
+        { accountId, update: { [emailId]: { mailboxIds: { trash: true } } } },
+        "t",
+      ],
+      ["Thread/get", { accountId, ids: [] }, "g"],
+    ]);
+
+    const beforeDelete = z.string().parse(args(threadBefore).state);
+
+    await jmap(accessToken, [
+      ["Email/set", { accountId, destroy: [emailId] }, "d"],
+    ]);
+
+    const [threadsGone] = await jmap(accessToken, [
+      ["Thread/changes", { accountId, sinceState: beforeDelete }, "c"],
+    ]);
+
+    expect(result(threadsGone, changeResult)).toMatchObject({
+      updated: [],
+      destroyed: [expect.any(String)],
+    });
   });
 
   it("answers Email/queryChanges so a list matches a fresh query", async () => {
