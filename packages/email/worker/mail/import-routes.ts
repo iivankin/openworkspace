@@ -29,7 +29,7 @@ import {
   MAIL_ORGANIZE_SCOPE,
 } from "../../shared/permissions";
 import { mailboxStub } from "../mailbox";
-import type { ImportMessageResult } from "../mailbox/support";
+import type { ImportMessageResult, ImportOriginal } from "../mailbox/support";
 import { readCappedBody } from "./capped-body";
 import { inboundMessageId, rawMessageId } from "./inbound";
 import { rawMessageKey } from "./storage-keys";
@@ -118,11 +118,19 @@ export async function importRawMessage(input: {
   seen: boolean;
   thread: string | null;
   direction: "incoming" | "outgoing" | null;
+  /** A backup's ids for the message in this mailbox: see `ImportMessageInput`. */
+  original?: ImportOriginal;
 }): Promise<ImportMessageResult> {
   const { env, mailbox: target, raw } = input;
   const mailbox = mailboxStub(env, target.id);
   const importId = await importIdOf(input.importKey);
-  const known = await mailbox.findImported(importId, rawMessageId(raw));
+  const original = input.original ?? null;
+
+  const known = await mailbox.findImported(
+    importId,
+    rawMessageId(raw),
+    original
+  );
 
   if (known) return { status: "duplicate", ...known };
   const rawObjectKey = rawMessageKey(target.id, importId);
@@ -150,6 +158,7 @@ export async function importRawMessage(input: {
     conversationId: input.thread
       ? `conv_imp_${(await sha256Hex(input.thread)).slice(0, 32)}`
       : null,
+    original,
     direction: input.direction,
   });
 }

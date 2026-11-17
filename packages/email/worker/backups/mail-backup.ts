@@ -458,6 +458,7 @@ export const mailBackup: ModuleBackup = {
       seen: message.seen,
       thread: `backup:${message.thread}`,
       direction: message.direction,
+      original: { emailId: message.id, conversationId: message.thread },
     });
 
     if (result.status === "unprocessable") {

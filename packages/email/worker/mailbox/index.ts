@@ -152,6 +152,7 @@ import type {
   FolderListItem,
   FolderListRow,
   ImportMessageInput,
+  ImportOriginal,
   ImportMessageResult,
   InboundDeliveryInput,
   InboundScreening,
@@ -1906,9 +1907,14 @@ export class MailboxDO extends DurableObject<Env> {
    * The message an import already stored: the one `importId` made, or one
    * with the same Message-ID (from another source, or delivered here).
    */
-  findImported(importId: string, messageIdHeader: string | null) {
+  findImported(
+    importId: string,
+    messageIdHeader: string | null,
+    original: ImportOriginal | null
+  ) {
     const existing =
       this.getEmail(inboundMessageId(importId)) ??
+      (original ? this.getEmail(original.emailId) : null) ??
       (messageIdHeader ? this.getEmailByMessageId(messageIdHeader) : null);
 
     return existing
@@ -1927,10 +1933,17 @@ export class MailboxDO extends DurableObject<Env> {
    */
   async importMessage(input: ImportMessageInput): Promise<ImportMessageResult> {
     const id = inboundMessageId(input.importId);
-    const known = this.getEmail(id);
+
+    const known =
+      this.getEmail(id) ??
+      (input.original ? this.getEmail(input.original.emailId) : null);
 
     if (known) {
-      return { status: "duplicate", id, conversationId: known.conversationId };
+      return {
+        status: "duplicate",
+        id: known.id,
+        conversationId: known.conversationId,
+      };
     }
 
     const object = await this.bindings.MAIL_STORAGE.get(input.rawObjectKey);
@@ -1994,9 +2007,19 @@ export class MailboxDO extends DurableObject<Env> {
         ? "outgoing"
         : "incoming");
 
+    // A restored message rejoins its conversation when that is still here.
+    const originalConversation =
+      input.original &&
+      this.db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, input.original.conversationId))
+        .all()[0]?.id;
+
     const imported: NewEmail = {
       ...parsed,
-      conversationId: input.conversationId ?? parsed.conversationId,
+      conversationId:
+        originalConversation ?? input.conversationId ?? parsed.conversationId,
       direction,
       bodyText: clampText(parsed.bodyText),
       quotedText: clampText(parsed.quotedText),

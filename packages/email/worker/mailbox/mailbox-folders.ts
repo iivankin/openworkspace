@@ -10,6 +10,7 @@ import {
 import { MAX_CUSTOM_FOLDER_COUNT } from "../../shared/mail";
 import { systemFolderDefinitions } from "./folder-model";
 import { folders, systemFolderOrder } from "./schema";
+import { IMPORTED_FOLDERS_KEY } from "./support";
 import type { MailFolder, MailboxContext } from "./support";
 
 /** The system folders at their places in the mailbox's folder order. */
@@ -186,6 +187,9 @@ export function reorderFolders(m: MailboxContext, folderIds: string[]) {
       }
     }
   });
+  // Every folder is now where the person put it, so a later restore leaves
+  // the imports' folders where they are too.
+  m.state.storage.kv.delete(IMPORTED_FOLDERS_KEY);
   m.publishUpdate();
 
   return { status: "ok" as const };

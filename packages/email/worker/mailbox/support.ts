@@ -86,7 +86,10 @@ export const MAX_DRAFTS_PER_USER = 200;
 /** Set while imported mail has not been announced (counts, realtime, JMAP state). */
 export const IMPORT_PENDING_KEY = "import:pending";
 
-/** Custom folders imports created, until a restored settings line orders them. */
+/**
+ * Custom folders imports created, until a restored settings line or the
+ * person orders them.
+ */
 export const IMPORTED_FOLDERS_KEY = "imported-folders";
 
 /** How long imported mail may wait to be announced when the importer does not finish. */
@@ -215,6 +218,9 @@ export type InboundDeliveryInput = {
   receivedAt: number;
 };
 
+/** A message's ids in the mailbox it was backed up from. */
+export type ImportOriginal = { emailId: string; conversationId: string };
+
 export type ImportMessageInput = {
   /** The import's delivery id: the message is stored as `inboundMessageId(importId)`. */
   importId: string;
@@ -231,6 +237,12 @@ export type ImportMessageInput = {
   seenBy: string[];
   /** The conversation the importer's thread key names; null threads by Message-ID headers. */
   conversationId: string | null;
+  /**
+   * The ids the message and its conversation had in this mailbox (a
+   * backup's): the message still here is a duplicate, and its conversation
+   * still here takes it instead of `conversationId`.
+   */
+  original: ImportOriginal | null;
   /** Null decides by the From address. */
   direction: "incoming" | "outgoing" | null;
 };

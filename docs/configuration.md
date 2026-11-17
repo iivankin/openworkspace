@@ -203,8 +203,8 @@ It puts back what the workspace is missing and leaves what exists alone:
    Cloudflare couldn't add shows **Not added to Cloudflare** in the address
    editor; **Save address** adds it again.
 2. Each module's data. Mail adds each message an address is missing, in its
-   place, folder, read state and conversation; it never removes or rolls back
-   mail. It adds the folders, rules (moving to the restored folders of the
+   place, folder, read state and conversation (joining it when part of it is
+   still there); it never removes or rolls back mail. It adds the folders, rules (moving to the restored folders of the
    same name), drafts, blocked senders (never the workspace's own mail
    domains) and signatures that aren't there, and
    an auto-reply, AI instructions or notification choice only where none is
