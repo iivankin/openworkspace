@@ -1941,9 +1941,9 @@ describe("mailbox conversation index", () => {
     const now = Date.now();
 
     const [bodyKey, rawKey, attachmentKey] = [
-      `test/bulk/${crypto.randomUUID()}/body.html`,
-      `test/bulk/${crypto.randomUUID()}/raw.eml`,
-      `test/bulk/${crypto.randomUUID()}/attachment.txt`,
+      `mailboxes/${mailboxId}/bulk/${crypto.randomUUID()}/body.html`,
+      `mailboxes/${mailboxId}/bulk/${crypto.randomUUID()}/raw.eml`,
+      `mailboxes/${mailboxId}/bulk/${crypto.randomUUID()}/attachment.txt`,
     ];
 
     const objectKeys = [bodyKey, rawKey, attachmentKey];
@@ -2052,7 +2052,7 @@ describe("mailbox conversation index", () => {
     const deliveryId = `pending_delete_${crypto.randomUUID()}`;
     const messageId = inboundMessageId(deliveryId);
     const conversationId = "conv_pending_delete";
-    const rawObjectKey = `test/pending-delete/${crypto.randomUUID()}/raw.eml`;
+    const rawObjectKey = `mailboxes/${mailboxId}/raw/${deliveryId}.eml`;
     const now = Date.now();
     await env.MAIL_STORAGE.put(
       rawObjectKey,
@@ -2154,7 +2154,7 @@ describe("mailbox conversation index", () => {
   it("keeps shared objects until their last referencing email is deleted", async () => {
     const mailboxId = `mbx_shared_object_${crypto.randomUUID()}`;
     const mailbox = mailboxStub(mailboxId);
-    const objectKey = `test/shared-object/${crypto.randomUUID()}/attachment.txt`;
+    const objectKey = `mailboxes/${mailboxId}/shared/${crypto.randomUUID()}/attachment.txt`;
 
     const attachment = {
       id: "att_shared",

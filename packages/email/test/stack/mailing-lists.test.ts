@@ -245,6 +245,14 @@ describe("team mailing lists", () => {
     });
     expect(await received(otherId, "post-1@example.net")).toBeNull();
 
+    // Each member keeps its own original, so deleting one for good leaves
+    // the others theirs.
+    const adminCopy = await received(adminId, "post-1@example.net");
+
+    expect(adminCopy?.rawMimeR2Key).toStartWith(
+      `mailboxes/${await primaryMailboxId(adminId)}/raw/`
+    );
+
     const leadMailbox = await primaryMailboxId(leadId);
 
     const list = await call(

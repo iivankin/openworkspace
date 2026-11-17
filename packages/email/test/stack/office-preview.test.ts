@@ -28,7 +28,7 @@ useFreshWorkspace();
 
 async function insertOffice(filename = "report.xlsx", size = 5) {
   const mailboxId = `mbx_preview_${crypto.randomUUID()}`;
-  const sourceKey = `test/${mailboxId}/attachment`;
+  const sourceKey = `mailboxes/${mailboxId}/attachment`;
   const mailbox = mailboxStub(mailboxId);
   await mailbox.testFake({ officePreviews: "capture" });
   await env.MAIL_STORAGE.put(sourceKey, "bytes");

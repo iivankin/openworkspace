@@ -111,7 +111,7 @@ import { buildEmailSearchQuery } from "../mail/search";
 import { spamhausDqsKey, workspaceIdentity } from "../mail/security-settings";
 import type { WorkspaceIdentity } from "../mail/security-settings";
 import { collectSenderIntel } from "../mail/sender-intel";
-import { rawMessageKey } from "../mail/storage-keys";
+import { mailboxOwnsObject, rawMessageKey } from "../mail/storage-keys";
 import {
   workspaceBlockPatterns,
   workspaceFeedbackSummary,
@@ -1772,10 +1772,22 @@ export class MailboxDO extends DurableObject<Env> {
    * holds, so a save racing this one can't lose its file.
    */
   async forgetDraftFiles(objectKeys: string[]) {
-    if (!objectKeys.length) return;
+    await this.forgetObjects(objectKeys);
+  }
+
+  /**
+   * Queues this mailbox's objects for deletion. The queue skips a key a
+   * message or draft still holds, and one the archive doesn't have yet.
+   */
+  private async forgetObjects(objectKeys: string[]) {
+    const mailboxId = this.state.id.name ?? "";
+
+    const owned = objectKeys.filter((key) => mailboxOwnsObject(mailboxId, key));
+
+    if (!owned.length) return;
     const cleanupAt = new Date();
 
-    for (const objectKey of new Set(objectKeys)) {
+    for (const objectKey of new Set(owned)) {
       this.db
         .insert(pendingObjectDeletions)
         .values({ objectKey, nextAttemptAt: cleanupAt })
@@ -4325,8 +4337,12 @@ export class MailboxDO extends DurableObject<Env> {
       candidates
     );
 
+    const mailboxId = this.state.id.name ?? "";
+
     const ownedObjectKeys = objectKeys.filter(
-      (objectKey) => !referencedObjectKeys.has(objectKey)
+      (objectKey) =>
+        mailboxOwnsObject(mailboxId, objectKey) &&
+        !referencedObjectKeys.has(objectKey)
     );
 
     const cleanupAt = new Date();
@@ -4593,6 +4609,8 @@ export class MailboxDO extends DurableObject<Env> {
           .delete(pendingInbound)
           .where(eq(pendingInbound.id, job.id))
           .run();
+        // Its original copy isn't kept (once archived, if it's to be).
+        await this.forgetObjects([job.rawObjectKey]);
 
         return;
       }

@@ -86,6 +86,11 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
     { id: deliveryId, mailboxId: mailbox.id, sourceKey: objectKey, receivedAt },
     raw,
     async () => {
+      // Stored before it is queued: a failed upload bounces the message
+      // instead of leaving a delivery without its original.
+      await env.MAIL_STORAGE.put(objectKey, raw, {
+        httpMetadata: { contentType: "message/rfc822" },
+      });
       await mailboxStub(env, mailbox.id).enqueueInbound({
         id: deliveryId,
         mailboxId: mailbox.id,
@@ -93,9 +98,6 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
         envelopeFrom: message.from,
         envelopeTo: message.to,
         receivedAt,
-      });
-      await env.MAIL_STORAGE.put(objectKey, raw, {
-        httpMetadata: { contentType: "message/rfc822" },
       });
     }
   );

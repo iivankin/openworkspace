@@ -30,8 +30,9 @@ async function deleteMailboxObjects(
 }
 
 export async function deleteMailboxStorage(env: Env, mailboxId: string) {
-  // Archive what's still open first, so its raw copies can go too.
-  // ponytail: a copy that still fails stays in the mail bucket after it is archived; clean such leftovers up in runArchiveTick if they ever add up.
+  // Archive what's still open first, so its raw copies can go too. Those
+  // that still fail stay until the archive's retry copies them, which then
+  // deletes them.
   const keep = await archiveMailboxNow(env, mailboxId);
 
   await Promise.all([

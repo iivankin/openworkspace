@@ -17,6 +17,7 @@ import {
 } from "./archive-object";
 import type { ArchiveDirection, SentMessage } from "./archive-object";
 import { prepareOutboundDelivery } from "./outbound-delivery";
+import { objectMailboxId } from "./storage-keys";
 
 /**
  * The optional write-once mail archive (`Email({ archive })`): every
@@ -199,6 +200,29 @@ async function storedBytes(env: Env, entry: Entry): Promise<Bytes> {
 }
 
 /**
+ * A retried copy's source under a mailbox that was deleted meanwhile: the
+ * mailbox kept it only until it was archived (mailbox-deletion.ts), so
+ * nothing else deletes it.
+ */
+async function deleteOrphanedSource(env: Env, sourceKey: string) {
+  const owner = objectMailboxId(sourceKey);
+
+  if (!owner) return;
+
+  try {
+    const [exists] = await createDb(env.DB)
+      .select({ id: mailboxes.id })
+      .from(mailboxes)
+      .where(eq(mailboxes.id, owner))
+      .limit(1);
+
+    if (!exists) await env.MAIL_STORAGE.delete(sourceKey);
+  } catch (error) {
+    console.error(`Could not clean up ${sourceKey} after archiving`, error);
+  }
+}
+
+/**
  * Copies one recorded message. Never throws: a failure is recorded for
  * Administration → Mail archive and retried. `load` defaults to the stored
  * copy.
@@ -209,6 +233,7 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
   if (!bucket) return false;
   const db = createDb(env.DB);
   let createdAt: Date | null = null;
+  let stagingKey: string | null = null;
 
   try {
     const [entry] = await db
@@ -221,6 +246,11 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
 
     if (entry.status === "archived") return true;
     createdAt = entry.createdAt;
+
+    if (entry.sourceKey?.startsWith(ARCHIVE_STAGING_PREFIX)) {
+      stagingKey = entry.sourceKey;
+    }
+
     const bytes = await (load ? load() : storedBytes(env, entry));
     const sha256 = await writeArchive(bucket, entry, bytes);
     const now = new Date();
@@ -239,6 +269,8 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
 
     if (entry.sourceKey?.startsWith(ARCHIVE_STAGING_PREFIX)) {
       await env.MAIL_STORAGE.delete(entry.sourceKey).catch(() => undefined);
+    } else if (!load && entry.sourceKey) {
+      await deleteOrphanedSource(env, entry.sourceKey);
     }
 
     return true;
@@ -253,6 +285,11 @@ async function archiveEntry(env: Env, id: string, load?: () => Promise<Bytes>) {
       error instanceof ArchiveSourceGone ||
       (createdAt !== null &&
         Date.now() - createdAt.getTime() >= ABANDON_AFTER_MS);
+
+    // A staged copy given up on isn't kept.
+    if (abandoned && stagingKey) {
+      await env.MAIL_STORAGE.delete(stagingKey).catch(() => undefined);
+    }
 
     await db
       .update(mailArchiveEntries)
@@ -588,10 +625,14 @@ async function adoptStaged(env: Env) {
       }))
     );
 
-    // Archived some other way (e.g. the copy landed but D1 didn't hear of it).
-    const done = staged.filter(
-      (item) => byId.get(item.id)?.status === "archived"
-    );
+    // Archived some other way (e.g. the copy landed but D1 didn't hear of
+    // it), or given up on: the staged copy has no more use, and left there
+    // it would crowd newer ones out of these pages.
+    const done = staged.filter((item) => {
+      const status = byId.get(item.id)?.status;
+
+      return status === "archived" || status === "abandoned";
+    });
 
     if (done.length) {
       // oxlint-disable-next-line eslint/no-await-in-loop -- see above

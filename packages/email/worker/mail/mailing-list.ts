@@ -17,6 +17,7 @@ import { receiveArchived } from "./archive";
 import { parseInboundAuthentication } from "./auth-headers";
 import { rawHeaderText } from "./inbound";
 import { inboundDeliveryId } from "./inbound-delivery";
+import { rawMessageKey } from "./storage-keys";
 
 export type MailingList = {
   id: string;
@@ -145,6 +146,21 @@ export async function deliverToList(input: {
   if (!recipients.length) return;
   const listAddress = normalizeMailboxAddress(message.to);
 
+  // Each member keeps its own original, so deleting one copy for good
+  // leaves the others theirs.
+  const deliveries = await Promise.all(
+    recipients.map(async (mailboxId) => {
+      const id = await inboundDeliveryId({
+        mailboxId,
+        envelopeFrom: message.from,
+        envelopeTo: message.to,
+        raw,
+      });
+
+      return { id, mailboxId, rawObjectKey: rawMessageKey(mailboxId, id) };
+    })
+  );
+
   const deliveryId = await inboundDeliveryId({
     mailboxId: list.id,
     envelopeFrom: message.from,
@@ -152,40 +168,34 @@ export async function deliverToList(input: {
     raw,
   });
 
-  const objectKey = `lists/${list.id}/raw/${deliveryId}.eml`;
-
-  // Archived once, as the list's: the members' copies share this original.
+  // Archived once, as the list's, from the first member's copy (which its
+  // mailbox keeps until it is archived).
   await receiveArchived(
     env,
     {
       id: deliveryId,
       mailboxId: list.id,
-      sourceKey: objectKey,
+      sourceKey: deliveries[0]?.rawObjectKey ?? null,
       receivedAt: input.receivedAt,
     },
     raw,
     async () => {
       await Promise.all(
-        recipients.map(async (mailboxId) =>
-          mailboxStub(env, mailboxId).enqueueInbound({
-            id: await inboundDeliveryId({
-              mailboxId,
-              envelopeFrom: message.from,
-              envelopeTo: message.to,
-              raw,
-            }),
-            mailboxId,
-            rawObjectKey: objectKey,
+        deliveries.map(async (delivery) => {
+          // Stored before it is queued: a failed upload bounces the
+          // message instead of leaving a delivery without its original.
+          await env.MAIL_STORAGE.put(delivery.rawObjectKey, raw, {
+            httpMetadata: { contentType: "message/rfc822" },
+          });
+          await mailboxStub(env, delivery.mailboxId).enqueueInbound({
+            ...delivery,
             envelopeFrom: message.from,
             envelopeTo: message.to,
             listAddress,
             receivedAt: input.receivedAt,
-          })
-        )
+          });
+        })
       );
-      await env.MAIL_STORAGE.put(objectKey, raw, {
-        httpMetadata: { contentType: "message/rfc822" },
-      });
     }
   );
 }
