@@ -122,6 +122,7 @@ export function useDraftAutosave({
   draftId,
   restored,
   content,
+  current,
   blank,
   editing,
   onSaved,
@@ -132,12 +133,18 @@ export function useDraftAutosave({
   draftId: string;
   /** The draft this composer reopened. */
   restored?: Pick<SavedDraft, "version">;
+  /** What the composer holds as of its last reported change; a change starts the timer. */
   content: DraftContent;
   /**
-   * Nothing worth keeping yet (an untouched composer, or one holding only
-   * the signature it opened with): it creates no draft. Read when saving.
+   * What the composer holds right now, read when saving: the editor reports
+   * changes after a short pause, so `content` can be behind it.
    */
-  blank: () => boolean;
+  current: () => DraftContent;
+  /**
+   * Nothing worth keeping (an untouched composer, or one holding only the
+   * signature it opened with): it creates no draft.
+   */
+  blank: (content: DraftContent) => boolean;
   /** False while sending and once sent: only an editing composer saves. */
   editing: boolean;
   /** The draft was first saved: it now exists under `draftId`. */
@@ -156,24 +163,41 @@ export function useDraftAutosave({
   });
 
   // Saves read this render's values; the timer, page events and unmount run later.
-  const latest = useRef({ mailboxId, content, key, blank, editing, onSaved });
+  const latest = useRef({
+    mailboxId,
+    content,
+    current,
+    key,
+    blank,
+    editing,
+    onSaved,
+  });
+
   useLayoutEffect(() => {
-    latest.current = { mailboxId, content, key, blank, editing, onSaved };
+    latest.current = {
+      mailboxId,
+      content,
+      current,
+      key,
+      blank,
+      editing,
+      onSaved,
+    };
     // The close-time save copies the uploads, so closing must not delete them.
-    session.setRetainUploads(!blank() && !saved.current.stopped);
+    session.setRetainUploads(!blank(content) && !saved.current.stopped);
   });
 
   const save = useCallback(
-    (keepalive = false, override?: DraftContent) => {
+    (keepalive = false) => {
       const state = saved.current;
       const { mailboxId: target, blank: isBlank } = latest.current;
-      const json = override ?? latest.current.content;
+      const json = latest.current.current();
       const jsonKey = JSON.stringify(json);
 
       if (
         state.stopped ||
         jsonKey === state.key ||
-        (!state.version && isBlank())
+        (!state.version && isBlank(json))
       ) {
         return;
       }
@@ -274,7 +298,10 @@ export function useDraftAutosave({
         (state.inFlight > 0 ||
           state.failed ||
           (latest.current.key !== state.key &&
-            !(state.version === 0 && latest.current.blank())));
+            !(
+              state.version === 0 &&
+              latest.current.blank(latest.current.content)
+            )));
 
       if (unsaved) event.preventDefault();
     }
@@ -302,7 +329,7 @@ export function useDraftAutosave({
   return {
     draftId,
     /** Saves pending changes now, e.g. when the composer closes. */
-    flush: (override?: DraftContent) => save(false, override),
+    flush: () => save(false),
     /** Stops saving and deletes the draft, if one was saved. */
     discard: async () => {
       const state = saved.current;

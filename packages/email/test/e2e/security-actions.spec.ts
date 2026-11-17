@@ -107,7 +107,7 @@ test("blocks and unblocks a domain for the whole workspace", async ({
   await expect(blocks.getByText("@blocked-in-e2e.example")).toHaveCount(0);
 });
 
-test("offers no filter rules in the message menu or the folder manager", async ({
+test("offers filter rules in the message menu and the folder manager", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Menus are covered once");
@@ -118,7 +118,9 @@ test("offers no filter rules in the message menu or the folder manager", async (
   await expect(
     page.getByRole("menuitem", { name: "Report spam" })
   ).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: /filter/iu })).toHaveCount(0);
+  await expect(
+    page.getByRole("menuitem", { name: "Filter messages like this" })
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
   await page
@@ -129,6 +131,7 @@ test("offers no filter rules in the message menu or the folder manager", async (
   await expect(dialog.getByRole("tab")).toHaveText([
     "Folders",
     "Blocked",
+    "Rules",
     "AI sorting",
   ]);
 });

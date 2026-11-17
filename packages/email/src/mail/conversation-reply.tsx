@@ -9,7 +9,6 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
-  useAuth,
 } from "@open-workspace/core/ui";
 import {
   Check,
@@ -22,34 +21,23 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { DragEvent, Ref } from "react";
+import { useImperativeHandle, useMemo, useState } from "react";
+import type { Ref } from "react";
 import { toast } from "sonner";
 
 import { normalizeExternalEmailAddress } from "../../shared/mail";
 import { ComposerAttachmentList } from "./composer-attachment-list";
 import { ComposerEditor } from "./composer-editor";
-import type { ComposerContent, ComposerEditorHandle } from "./composer-editor";
+import type { ComposerContent } from "./composer-editor";
 import {
   recipientAddresses,
   recipientField,
   validateComposerRecipients,
 } from "./composer-recipients";
 import type { RecipientFieldValue } from "./composer-recipients";
-import { useComposerSession } from "./composer-session";
-import { isInlineComposerImage } from "./composer-upload-client";
-import {
-  draftAttachments,
-  holdsOnlyInitialContent,
-  openingText,
-  restoredComposerAssets,
-  restoredDraftContent,
-  restoredDraftHtml,
-  restoredInlineAssetIds,
-} from "./draft-attachments";
+import { notifyOutboundResult } from "./outbound-notification";
 import { RecipientCombobox } from "./recipient-combobox";
 import { ReplyToWarning } from "./reply-to-warning";
-import { messageSignatureHtml } from "./signature";
 import type {
   Mailbox,
   MessageDetail,
@@ -57,12 +45,16 @@ import type {
   ReplyActionMode,
 } from "./types";
 import { useComposerAttachmentPreflight } from "./use-composer-attachment-preflight";
+import { useComposerCore } from "./use-composer-core";
+import {
+  hasAuthoredContent,
+  useComposerSubmission,
+} from "./use-composer-submission";
 import { newDraftId, useDraftAutosave } from "./use-drafts";
-import type { SavedDraft } from "./use-drafts";
-import { useReplySubmission } from "./use-reply-submission";
-import type { SentReply } from "./use-reply-submission";
+import type { DraftContent, SavedDraft } from "./use-drafts";
+import type { SubmittedMessage } from "./use-mail-send";
 
-export type { SentReply } from "./use-reply-submission";
+export type SentReply = Pick<SubmittedMessage, "conversationId" | "detached">;
 
 /** What the conversation asks the open reply box before replacing it. */
 export type ReplyHandle = {
@@ -80,15 +72,6 @@ const EMPTY_RECIPIENT_FIELD: RecipientFieldValue = {
 function recipientAddressSet(value: RecipientFieldValue) {
   return new Set(recipientAddresses(value).map(normalizeExternalEmailAddress));
 }
-
-const EMPTY_CONTENT: ComposerContent = {
-  bodyHtml: "",
-  editorHtml: "",
-  bodyText: "",
-  inlineAssetIds: [],
-  linkedAssetIds: [],
-  storedImages: [],
-};
 
 export function ConversationReply({
   mailbox,
@@ -110,36 +93,33 @@ export function ConversationReply({
   draft?: SavedDraft;
   ref?: Ref<ReplyHandle>;
 }) {
-  const form = useRef<HTMLFormElement>(null);
-  const editor = useRef<ComposerEditorHandle>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const inlineFileInput = useRef<HTMLInputElement>(null);
   const initialAction = findAction(parent, mode);
   const fieldsSource = `${mode}\0${parent.id}`;
-  const { user } = useAuth();
 
-  // A reopened draft as it was saved; otherwise the signature that applies,
-  // as editable content above the quoted text the Worker adds. Either way it
-  // is added once, so a reopened draft never gets a second signature.
-  // oxlint-disable-next-line react/hook-use-state -- read once, when the editor is created; nothing sets it
-  const [initialHtml] = useState(() =>
-    draft
-      ? restoredDraftHtml(draft)
-      : mailbox
-        ? messageSignatureHtml(mailbox, "reply", user?.name ?? "")
-        : ""
-  );
+  const core = useComposerCore({ mailbox, draft, signature: "reply" });
 
-  // Changes only as the person edits; a reopened draft starts as it opens.
-  const [content, setContent] = useState<ComposerContent>(() =>
-    draft ? restoredDraftContent(draft) : EMPTY_CONTENT
-  );
-
-  const [documentAssetIds, setDocumentAssetIds] = useState(() =>
-    restoredInlineAssetIds(draft)
-  );
-
-  const [dragging, setDragging] = useState(false);
+  const {
+    session,
+    snapshot,
+    editor,
+    activeAssets,
+    dropProps,
+    addFiles,
+    attachmentError,
+    attachmentListProps,
+    content: reportedContent,
+    editorProps,
+    fileInput,
+    form,
+    holdsOnlyOpening,
+    inlineFileInput,
+    keptAttachments,
+    limitError,
+    readContent,
+    uploadsError,
+    uploadsFailed,
+    uploadsPending,
+  } = core;
 
   const initialCc = draft?.cc ?? initialAction?.cc ?? [];
   const [cc, setCc] = useState(() => recipientField(initialCc));
@@ -160,25 +140,6 @@ export function ConversationReply({
     setShowCc(Boolean(initialAction?.cc.length));
   }
 
-  const { session, snapshot } = useComposerSession(
-    mailbox?.id ?? "",
-    undefined,
-    restoredComposerAssets(mailbox?.id ?? "", draft)
-  );
-
-  // Attachments, and the inline images still in the text.
-  const activeAssets = snapshot.assets.filter(
-    (asset) =>
-      asset.intent === "attachment" || documentAssetIds.includes(asset.id)
-  );
-
-  const uploadLimitError = session.limitError();
-
-  const uploadsPending = activeAssets.some(
-    (asset) => asset.status === "uploading"
-  );
-
-  const uploadsFailed = activeAssets.some((asset) => asset.status === "error");
   const action = useMemo(() => findAction(parent, mode), [mode, parent]);
 
   const recipients = validateComposerRecipients({
@@ -187,96 +148,122 @@ export function ConversationReply({
     bcc,
   });
 
+  const preflightContext = (content: ComposerContent) => ({
+    kind: "reply" as const,
+    mailboxId: mailbox?.id ?? "",
+    sourceEmailId: parent.id,
+    mode: action?.mode ?? mode,
+    cc: recipients.cc,
+    bcc: recipients.bcc,
+    bodyText: content.bodyText,
+    bodyHtml: content.bodyHtml || undefined,
+  });
+
   useComposerAttachmentPreflight(
     session,
-    {
-      kind: "reply",
-      mailboxId: mailbox?.id ?? "",
-      sourceEmailId: parent.id,
-      mode: action?.mode ?? mode,
-      cc: recipients.cc,
-      bcc: recipients.bcc,
-      bodyText: content.bodyText,
-      bodyHtml: content.bodyHtml || undefined,
-    },
+    preflightContext(reportedContent),
     activeAssets,
     snapshot.phase === "editing" && Boolean(mailbox && action)
   );
-
-  const keptAttachments = draftAttachments(activeAssets);
-
-  // The text the editor opened with: a new reply still holding just that
-  // (its signature) is untouched and creates no draft.
-  // oxlint-disable-next-line react/hook-use-state -- read once; nothing sets it
-  const [initialText] = useState(() => openingText(initialHtml));
 
   // One id for the reply box's lifetime: created once, never replaced.
   // oxlint-disable-next-line react/hook-use-state -- the lazy initializer keeps one id; there is nothing to set
   const [draftId] = useState(() => draft?.id ?? newDraftId());
 
+  const draftContent = (
+    body: ComposerContent,
+    attachments: DraftContent["attachments"]
+  ): DraftContent => ({
+    kind: "reply",
+    sourceEmailId: parent.id,
+    conversationId: parent.conversationId,
+    replyMode: action?.mode ?? mode,
+    // Shown in the drafts list; sending works out the recipients again.
+    to: action?.to ?? [],
+    cc: recipientAddresses(cc),
+    bcc: recipientAddresses(bcc),
+    replyTo: null,
+    subject: parent.subject,
+    bodyText: body.bodyText,
+    bodyHtml: body.bodyHtml || null,
+    // The editor's HTML, so the reopened editor puts the files back in place.
+    editorHtml: body.editorHtml || null,
+    attachments,
+    storedImages: body.storedImages,
+  });
+
   // A reopened draft already exists, so it is never blank.
-  const blank = () =>
-    !draft &&
-    holdsOnlyInitialContent(content, initialText, keptAttachments.length);
+  const blank = (saved: Pick<DraftContent, "bodyText" | "attachments">) =>
+    !draft && holdsOnlyOpening(saved);
 
   const autosave = useDraftAutosave({
     mailboxId: mailbox?.id ?? "",
     session,
     draftId,
     restored: draft,
-    content: {
-      kind: "reply",
-      sourceEmailId: parent.id,
-      conversationId: parent.conversationId,
-      replyMode: action?.mode ?? mode,
-      // Shown in the drafts list; sending works out the recipients again.
-      to: action?.to ?? [],
-      cc: recipientAddresses(cc),
-      bcc: recipientAddresses(bcc),
-      replyTo: null,
-      subject: parent.subject,
-      bodyText: content.bodyText,
-      bodyHtml: content.bodyHtml || null,
-      // The editor's HTML, so the reopened editor puts the files back in place.
-      editorHtml: content.editorHtml || null,
-      attachments: keptAttachments,
-      storedImages: content.storedImages,
-    },
+    content: draftContent(reportedContent, keptAttachments()),
+    current: () => draftContent(readContent(), keptAttachments()),
     blank,
     editing:
       snapshot.phase === "editing" && Boolean(mailbox?.canSend && action),
   });
 
-  const submission = useReplySubmission({
+  const submission = useComposerSubmission({
     session,
     phase: snapshot.phase,
-    mailbox,
-    parent,
-    action,
-    recipients,
     editor,
-    // `content` changes only as the person edits.
-    edited: content !== EMPTY_CONTENT,
-    activeAssets,
-    uploadLimitError,
-    uploadsPending,
-    uploadsFailed,
-    draftId: autosave.draftId,
+    validate: () =>
+      !mailbox?.canSend || !action
+        ? "Reply is no longer available"
+        : (recipients.error ?? uploadsError),
+    missingText: (content) =>
+      hasAuthoredContent(content) &&
+      !blank({
+        bodyText: content.bodyText,
+        attachments: keptAttachments(),
+      })
+        ? null
+        : "Add text to the reply before sending",
+    context: preflightContext,
+    command: (content, uploadedAttachments) => ({
+      kind: "reply",
+      mailboxId: mailbox?.id ?? "",
+      cc: recipients.cc,
+      bcc: recipients.bcc,
+      bodyText: content.bodyText,
+      bodyHtml: content.bodyHtml,
+      uploadedAttachments,
+      storedImages: content.storedImages,
+      parentEmailId: parent.id,
+      mode: action?.mode ?? mode,
+      draftId: autosave.draftId,
+    }),
+    failureLabel: "Could not send reply",
     onSuccess: (result) => {
+      notifyOutboundResult(result, "reply");
       autosave.sent();
       setBcc(EMPTY_RECIPIENT_FIELD);
-      onSent(result);
+      onSent({
+        conversationId: result.conversationId,
+        detached: result.detached,
+      });
     },
   });
 
+  // What the reply holds right now, not as of the editor's last report.
+  const holdsNothing = () =>
+    blank({
+      bodyText: readContent().bodyText,
+      attachments: keptAttachments(),
+    });
+
   useImperativeHandle(ref, () => ({
-    hasContent: () => !blank(),
+    hasContent: () => !holdsNothing(),
     discard: autosave.discard,
   }));
 
   const { busy } = submission;
   const { confirm, dialog: confirmDialog } = useConfirm();
-  const linkedIds = snapshot.linkedAssetIds;
 
   const toAddresses = new Set(
     (action?.to ?? []).map(normalizeExternalEmailAddress)
@@ -302,7 +289,7 @@ export function ConversationReply({
 
   async function cancel() {
     if (
-      !blank() &&
+      !holdsNothing() &&
       !(await confirm({
         title: "Discard this reply?",
         description:
@@ -329,36 +316,6 @@ export function ConversationReply({
     onCancel();
   }
 
-  function handleDrop(event: DragEvent<HTMLFormElement>) {
-    if (!event.dataTransfer.types.includes("Files")) return;
-    event.preventDefault();
-    setDragging(false);
-
-    if (busy) return;
-
-    // The editor takes files dropped on the text itself, where they fall;
-    // the form, files dropped anywhere else on the reply.
-    if (
-      event.target instanceof Element &&
-      event.target.closest("[data-composer-editor-content]")
-    ) {
-      return;
-    }
-
-    const files = Array.from(event.dataTransfer.files);
-    const images = files.filter(isInlineComposerImage);
-
-    const attachments = files.filter((file) => !isInlineComposerImage(file));
-
-    if (images.length) {
-      const assets = session.addFiles(images, "inline");
-
-      if (assets) editor.current?.insertAssets(assets);
-    }
-
-    if (attachments.length) session.addFiles(attachments, "attachment");
-  }
-
   return (
     <div>
       {confirmDialog}
@@ -367,29 +324,11 @@ export function ConversationReply({
         ref={form}
         className="animate-rise border-input bg-surface focus-within:border-ring/60 focus-within:ring-ring/12 overflow-hidden rounded-lg border shadow-sm transition-shadow focus-within:ring-3"
         aria-busy={busy}
-        onDragEnter={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-
-          if (!busy) setDragging(true);
-        }}
-        onDragOver={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = busy ? "none" : "copy";
-        }}
-        onDragLeave={(event) => {
-          if (
-            !(
-              event.relatedTarget instanceof Node &&
-              event.currentTarget.contains(event.relatedTarget)
-            )
-          ) {
-            setDragging(false);
-          }
-        }}
-        onDragEnd={() => setDragging(false)}
-        onDrop={handleDrop}
+        onDragEnter={dropProps.onDragEnter}
+        onDragOver={dropProps.onDragOver}
+        onDragLeave={dropProps.onDragLeave}
+        onDragEnd={dropProps.onDragEnd}
+        onDrop={dropProps.onDrop}
         onSubmit={(event) => {
           event.preventDefault();
           void submission.submit();
@@ -526,28 +465,13 @@ export function ConversationReply({
         <div className="flex h-64 flex-col">
           <ComposerEditor
             ref={editor}
-            session={session}
-            initialHtml={initialHtml}
+            {...editorProps}
             label="Reply"
             placeholder={
               action.mode === "reply_all"
                 ? "Reply to everyone"
                 : `Reply to ${action.to.join(", ")}`
             }
-            onChange={setContent}
-            onAssetsChange={setDocumentAssetIds}
-            onAddInlineFiles={(files, position) => {
-              const assets = session.addFiles(files, "inline");
-
-              if (assets) editor.current?.insertAssets(assets, position);
-            }}
-            onAddAttachmentFiles={(files) => {
-              session.addFiles(files, "attachment");
-            }}
-            onChooseInlineImage={() => inlineFileInput.current?.click()}
-            onSubmitShortcut={() => form.current?.requestSubmit()}
-            dragging={dragging && !busy}
-            disabled={busy}
           />
         </div>
         <div className="border-border text-muted-foreground flex items-center gap-2 border-t px-2 py-1.5 text-sm">
@@ -558,10 +482,7 @@ export function ConversationReply({
             multiple
             disabled={busy}
             onChange={(event) => {
-              session.addFiles(
-                Array.from(event.target.files ?? []),
-                "attachment"
-              );
+              addFiles(Array.from(event.target.files ?? []), "attachment");
               event.target.value = "";
             }}
           />
@@ -575,12 +496,7 @@ export function ConversationReply({
             aria-hidden
             disabled={busy}
             onChange={(event) => {
-              const assets = session.addFiles(
-                Array.from(event.target.files ?? []),
-                "inline"
-              );
-
-              if (assets) editor.current?.insertAssets(assets);
+              addFiles(Array.from(event.target.files ?? []), "inline");
               event.target.value = "";
             }}
           />
@@ -597,13 +513,11 @@ export function ConversationReply({
           <span
             className={cn(
               "min-w-0 flex-1 text-xs",
-              (uploadLimitError || snapshot.planError) && "text-destructive"
+              attachmentError && "text-destructive"
             )}
           >
-            {uploadLimitError ||
-              (activeAssets.length > 0 && snapshot.planError ? (
-                "Could not check attachment delivery"
-              ) : activeAssets.length ? (
+            {attachmentError ??
+              (activeAssets.length ? (
                 `${activeAssets.length} attachment${activeAssets.length === 1 ? "" : "s"}`
               ) : (
                 <span className="hidden sm:inline">Ctrl + Enter to send</span>
@@ -613,10 +527,7 @@ export function ConversationReply({
             type="submit"
             size="sm"
             disabled={
-              busy ||
-              Boolean(uploadLimitError) ||
-              uploadsPending ||
-              uploadsFailed
+              busy || Boolean(limitError) || uploadsPending || uploadsFailed
             }
           >
             {busy ? <LoaderCircle className="animate-spin" /> : <Send />}
@@ -624,14 +535,7 @@ export function ConversationReply({
           </Button>
         </div>
 
-        <ComposerAttachmentList
-          uploads={activeAssets}
-          linkedIds={linkedIds}
-          progress={session.progress}
-          disabled={busy}
-          onRemove={(asset) => session.remove(asset.id)}
-          onRetry={(asset) => void session.retry(asset.id)}
-        />
+        <ComposerAttachmentList {...attachmentListProps} />
       </form>
     </div>
   );

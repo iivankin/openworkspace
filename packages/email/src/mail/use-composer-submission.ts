@@ -1,27 +1,94 @@
 import { ApiError } from "@open-workspace/core/ui";
 import { useEffect, useRef } from "react";
+import type { RefObject } from "react";
 import { toast } from "sonner";
 
-import { isComposerSessionBusy } from "./composer-session";
+import type { ComposerContent, ComposerEditorHandle } from "./composer-editor";
+import { isComposerSessionBusy, isUploadedAsset } from "./composer-session";
 import type { ComposerSession, ComposerSessionPhase } from "./composer-session";
+import { resolveComposerAttachmentPlan } from "./use-composer-attachment-preflight";
+import type { PreflightContext } from "./use-composer-attachment-preflight";
 import { useMailSend, withMailSendRequestId } from "./use-mail-send";
 import type { MailSendDraft, SubmittedMessage } from "./use-mail-send";
 
-export type PreparedComposerSubmission = {
-  assetIds: string[];
-  command: MailSendDraft;
-  submissionKey: string;
-};
+type UploadedAttachment = NonNullable<
+  MailSendDraft["uploadedAttachments"]
+>[number];
+
+/** Whether the body holds something the person wrote or added. */
+export function hasAuthoredContent(content: ComposerContent) {
+  return Boolean(
+    content.bodyText.trim() ||
+    content.inlineAssetIds.length ||
+    content.storedImages.length
+  );
+}
 
 /**
- * Owns the shared preflight -> submit -> release/complete transition. Draft
- * preparation remains composer-specific, but transport ownership has one path.
+ * The body and files a message sends. With files, the delivery plan is
+ * settled first (which go as links), and the body is read again with the
+ * link cards that plan chose, so what is sent is what the person sees.
+ */
+async function settledMessage(
+  session: ComposerSession,
+  editor: ComposerEditorHandle,
+  context: (content: ComposerContent) => PreflightContext,
+  signal: AbortSignal
+) {
+  let content = editor.content();
+  const assets = session.documentAssets();
+
+  if (assets.length) {
+    await resolveComposerAttachmentPlan(
+      session,
+      context(content),
+      assets,
+      signal
+    );
+    editor.reconcileAssets();
+    content = editor.content();
+  }
+
+  const linked = new Set(content.linkedAssetIds);
+  const submitted = session.documentAssets().filter(isUploadedAsset);
+
+  const uploadedAttachments: UploadedAttachment[] = submitted.map((asset) => {
+    // A linked inline image goes as a plain attachment, without its content ID.
+    const linkedInline = asset.intent === "inline" && linked.has(asset.id);
+
+    return {
+      uploadId: asset.uploadId,
+      disposition: linkedInline ? "attachment" : asset.intent,
+      // JSON leaves an undefined one out.
+      contentId: (!linkedInline && asset.contentId) || undefined,
+    };
+  });
+
+  return {
+    content,
+    assetIds: submitted.map((asset) => asset.id),
+    uploadedAttachments,
+  };
+}
+
+/**
+ * Sends a composer's message: checks it, settles its files' delivery, sends
+ * it once (retries of the same message reuse its request id), and hands the
+ * uploads to the Worker or back to the composer.
  */
 export function useComposerSubmission(input: {
   session: ComposerSession;
   phase: ComposerSessionPhase;
+  editor: RefObject<ComposerEditorHandle | null>;
+  /** Why the message can't be sent as it is, if it can't. */
   validate: () => string | null;
-  prepare: (signal: AbortSignal) => Promise<PreparedComposerSubmission>;
+  /** Why the body can't be sent as it is (nothing written), if it can't. */
+  missingText: (content: ComposerContent) => string | null;
+  context: (content: ComposerContent) => PreflightContext;
+  command: (
+    content: ComposerContent,
+    uploadedAttachments: UploadedAttachment[]
+  ) => MailSendDraft;
   failureLabel: string;
   onSuccess: (result: SubmittedMessage) => void;
 }) {
@@ -38,8 +105,36 @@ export function useComposerSubmission(input: {
     };
   }, []);
 
+  async function prepare(signal: AbortSignal) {
+    const editor = input.editor.current;
+
+    if (!editor) throw new Error(input.failureLabel);
+
+    const message = await settledMessage(
+      input.session,
+      editor,
+      input.context,
+      signal
+    );
+
+    const error = input.missingText(message.content);
+
+    if (error) throw new Error(error);
+    const command = input.command(message.content, message.uploadedAttachments);
+
+    return {
+      assetIds: message.assetIds,
+      command,
+      submissionKey: JSON.stringify(command),
+    };
+  }
+
   async function submit() {
-    const validationError = input.validate();
+    const content = input.editor.current?.content();
+
+    const validationError =
+      input.validate() ??
+      (content ? input.missingText(content) : input.failureLabel);
 
     if (validationError) {
       toast.error(validationError);
@@ -52,7 +147,7 @@ export function useComposerSubmission(input: {
     const controller = new AbortController();
     preflightRequest.current = controller;
 
-    const preparation = await input.prepare(controller.signal).then(
+    const preparation = await prepare(controller.signal).then(
       (prepared) => ({ prepared }),
       (cause: unknown) => ({ cause })
     );

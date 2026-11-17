@@ -157,18 +157,24 @@ describe("draft attachments", () => {
       size: 2048,
     };
 
-    const [image, huge, plain] = restoredComposerAssets("mbx_1", {
-      attachments: [
-        file,
-        { ...file, assetId: crypto.randomUUID(), size: 50_000_000 },
-        {
-          ...file,
-          assetId: crypto.randomUUID(),
-          disposition: "attachment",
-          contentId: null,
-        },
-      ],
-    });
+    const hugeId = crypto.randomUUID();
+
+    const [image, huge, plain] = restoredComposerAssets(
+      "mbx_1",
+      {
+        attachments: [
+          file,
+          { ...file, assetId: hugeId, size: 50_000_000 },
+          {
+            ...file,
+            assetId: crypto.randomUUID(),
+            disposition: "attachment",
+            contentId: null,
+          },
+        ],
+      },
+      `<p><span data-composer-asset="${file.assetId}"></span><span data-composer-asset="${hugeId}"></span></p>`
+    );
 
     expect(image).toMatchObject({
       id: file.assetId,
@@ -179,7 +185,24 @@ describe("draft attachments", () => {
     });
     expect(huge?.previewUrl).toBeNull();
     expect(plain?.previewUrl).toBeNull();
-    expect(restoredComposerAssets("mbx_1", undefined)).toEqual([]);
+    expect(restoredComposerAssets("mbx_1", undefined, "")).toEqual([]);
+  });
+
+  it("leaves out inline files the reopened text no longer shows", () => {
+    const file = {
+      assetId: crypto.randomUUID(),
+      uploadId: `upl_${"d".repeat(32)}`,
+      disposition: "inline" as const,
+      contentId: "signature-copy@openworkspace.local",
+      filename: "logo.png",
+      contentType: "image/png",
+      size: 2048,
+    };
+
+    // E.g. a copy of a signature image whose image was taken out.
+    expect(
+      restoredComposerAssets("mbx_1", { attachments: [file] }, "<p>Hi</p>")
+    ).toEqual([]);
   });
 });
 
@@ -189,30 +212,33 @@ describe("an untouched composer", () => {
   it("holds only the signature it opened with, however it is spaced", () => {
     expect(
       holdsOnlyInitialContent(
-        { bodyText: "\n\nBest,\nAda   Lovelace\n", inlineAssetIds: [] },
-        signature,
-        0
+        { bodyText: "\n\nBest,\nAda   Lovelace\n", attachments: [] },
+        signature
       )
     ).toBe(true);
   });
 
-  it("is touched by text, an inline image or an attachment", () => {
-    const content = { bodyText: signature, inlineAssetIds: [] };
-
+  it("is touched by text or a file", () => {
     expect(
       holdsOnlyInitialContent(
-        { ...content, bodyText: `Hi\n\n${signature}` },
-        signature,
-        0
+        { bodyText: `Hi\n\n${signature}`, attachments: [] },
+        signature
       )
     ).toBe(false);
     expect(
       holdsOnlyInitialContent(
-        { ...content, inlineAssetIds: ["asset"] },
-        signature,
-        0
+        {
+          bodyText: signature,
+          attachments: [
+            {
+              assetId: "asset",
+              uploadId: `upl_${"e".repeat(32)}`,
+              disposition: "inline",
+            },
+          ],
+        },
+        signature
       )
     ).toBe(false);
-    expect(holdsOnlyInitialContent(content, signature, 1)).toBe(false);
   });
 });

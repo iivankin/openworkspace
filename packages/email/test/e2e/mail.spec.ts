@@ -469,6 +469,7 @@ test("phones reach every folder from the dock", async ({ page }, testInfo) => {
     "SB",
     /^Inbox/u,
     "Sent",
+    /^Drafts/u,
     "Archive",
     "Spam",
     "Trash",
@@ -540,6 +541,7 @@ test("a custom folder moves among the system folders", async ({
     ordered([
       "Inbox",
       "Sent",
+      "Drafts",
       "Archive",
       "Spam",
       "Trash",
@@ -581,6 +583,7 @@ test("a custom folder moves among the system folders", async ({
     ordered([
       "Inbox",
       "Sent",
+      "Drafts",
       "Archive",
       "Spam",
       "Product",
@@ -594,6 +597,7 @@ test("a custom folder moves among the system folders", async ({
     ordered([
       "Inbox",
       "Sent",
+      "Drafts",
       "Archive",
       "Spam",
       "Product",
@@ -658,6 +662,65 @@ test("empty composer stops before the send request", async ({
     page.getByText("Add text to the message before sending")
   ).toBeVisible();
   expect(sendRequests).toBe(0);
+});
+
+test("saves a draft only once something is written, as it is when closed", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop",
+    "Desktop composer interactions"
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open seeded local demo" }).click();
+  await expect(page).toHaveURL(/\/mail\//u);
+
+  const signature = await page.request.put("/api/mail/signature", {
+    data: { html: "<p>Best, Sam</p>", text: "Best, Sam" },
+  });
+
+  expect(signature.ok()).toBe(true);
+  await page.reload();
+
+  const draftSaves: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.method() === "PUT" &&
+      new URL(request.url()).pathname.startsWith("/api/mail/drafts/")
+    ) {
+      draftSaves.push(request.postData() ?? "");
+    }
+  });
+
+  try {
+    // Opening with just the signature and closing writes no draft.
+    await page.getByRole("button", { name: "New message" }).click();
+    const composer = page.getByRole("dialog", { name: "New message" });
+    const body = composer.getByRole("textbox", { name: "Message body" });
+    await expect(body).toContainText("Best, Sam");
+    await composer.getByRole("button", { name: "Close composer" }).click();
+    await expect(composer).toHaveCount(0);
+
+    // Typing and closing at once saves what was typed, not what the editor
+    // last reported.
+    await page.getByRole("button", { name: "New message" }).click();
+    await body.click();
+    await page.keyboard.type("Quick note");
+
+    const saved = page.waitForRequest(
+      (request) =>
+        request.method() === "PUT" &&
+        new URL(request.url()).pathname.startsWith("/api/mail/drafts/")
+    );
+
+    await composer.getByRole("button", { name: "Close composer" }).click();
+    expect((await saved).postData()).toContain("Quick note");
+    expect(draftSaves).toHaveLength(1);
+  } finally {
+    await page.request.put("/api/mail/signature", {
+      data: { html: "", text: "" },
+    });
+  }
 });
 
 test("keeps several mailboxes open in the sidebar", async ({
@@ -1347,7 +1410,7 @@ test("previews a large inline image as the link that will be sent", async ({
   await expect(composer).toHaveCount(0);
 });
 
-test("keeps undo-retained uploads inside composer limits", async ({
+test("counts only the files the message holds against its limits", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -1381,11 +1444,13 @@ test("keeps undo-retained uploads inside composer limits", async ({
       buffer: Buffer.from(`replacement ${index + 1}`),
     }))
   );
-  await expect(
-    page.getByText("Use at most 10 attachments", { exact: true })
-  ).toBeVisible();
-  await expect(composer.getByText("Attached", { exact: true })).toHaveCount(0);
+  // The removed file isn't the message's any more, so ten more fit.
+  await expect(composer.getByText("Attached", { exact: true })).toHaveCount(10);
 
+  // Undo takes the ten out again, and then brings the removed file back;
+  // history can't hold both at once, so undo never goes over the limit.
+  await composer.getByRole("button", { name: "Undo" }).click();
+  await expect(composer.getByText("Attached", { exact: true })).toHaveCount(0);
   await composer.getByRole("button", { name: "Undo" }).click();
   await expect(linkedAttachment).toBeVisible();
   await composer.getByRole("button", { name: "Close composer" }).click();
@@ -1800,7 +1865,10 @@ test("offers Reply and Reply all on a group message", async ({ page }) => {
   await expect(
     replyForm.getByText("30-day link", { exact: true })
   ).toBeVisible();
-  await replyForm.getByPlaceholder(/Reply to/u).fill("Following up privately.");
+  // The link card is in the text now, so the reply box isn't empty.
+  await replyForm
+    .getByRole("textbox", { name: "Reply" })
+    .pressSequentially("Following up privately.");
   await replyForm.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page).toHaveURL(/\/mail\/[^/]+\/sent\/conv_[^/]+$/u);
   await expect(
@@ -1808,7 +1876,10 @@ test("offers Reply and Reply all on a group message", async ({ page }) => {
       .getByLabel("Reading pane", { exact: true })
       .getByText("Following up privately.", { exact: false })
   ).toBeVisible();
-  await expect(page.getByText("reply-note.txt", { exact: true })).toBeVisible();
+  // As in a new message, the linked file is a download link in the text.
+  await expect(
+    page.getByRole("link", { name: "reply-note.txt Download file" })
+  ).toBeVisible();
 });
 
 test("restores an archived conversation to the inbox", async ({

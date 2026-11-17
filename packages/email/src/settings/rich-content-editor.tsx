@@ -62,8 +62,7 @@ export const RichContentEditor = forwardRef<
 ) {
   const editor = useRef<ComposerEditorHandle>(null);
   const inlineFileInput = useRef<HTMLInputElement>(null);
-  const { session, snapshot } = useComposerSession(uploadMailboxId ?? "");
-  const [documentAssetIds, setDocumentAssetIds] = useState<string[]>([]);
+  const { session } = useComposerSession(uploadMailboxId ?? "");
 
   // oxlint-disable-next-line react/hook-use-state -- read once, when the editor is created; nothing sets it
   const [initialHtml] = useState(() =>
@@ -78,10 +77,9 @@ export const RichContentEditor = forwardRef<
     value: () => {
       const content = editor.current?.content();
 
-      const uploading = snapshot.assets.some(
-        (asset) =>
-          documentAssetIds.includes(asset.id) && asset.status !== "uploaded"
-      );
+      const uploading = session
+        .documentAssets()
+        .some((asset) => asset.status !== "uploaded");
 
       if (!content || uploading) {
         throw new Error("Wait for images to finish uploading");
@@ -129,7 +127,7 @@ export const RichContentEditor = forwardRef<
         label={label}
         placeholder={placeholder}
         onChange={onEdit}
-        onAssetsChange={setDocumentAssetIds}
+        onAssetsChange={session.setDocumentAssetIds}
         onAddInlineFiles={addImages}
         onAddAttachmentFiles={() => {
           toast.error("Only images can go in here");

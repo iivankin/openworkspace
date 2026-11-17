@@ -58,7 +58,13 @@ export function isComposerSessionBusy(phase: ComposerSessionPhase) {
 }
 
 type ComposerSessionSnapshot = {
+  /** Every asset still held, including those removed but kept for undo. */
   assets: readonly ComposerAsset[];
+  /**
+   * The assets the message holds: those the editor's document refers to.
+   * Only these count against the limits, are saved and are sent.
+   */
+  documentAssetIds: ReadonlySet<string>;
   phase: ComposerSessionPhase;
   planError: boolean;
   linkedAssetIds: ReadonlySet<string>;
@@ -78,6 +84,7 @@ export class ComposerSession {
 
   private snapshot: ComposerSessionSnapshot = {
     assets: [],
+    documentAssetIds: EMPTY_LINKED_ASSETS,
     phase: "editing",
     planError: false,
     linkedAssetIds: EMPTY_LINKED_ASSETS,
@@ -106,7 +113,12 @@ export class ComposerSession {
     /** Uploaded assets a reopened draft brings back. */
     restoredAssets: readonly ComposerAsset[] = []
   ) {
-    this.snapshot = { ...this.snapshot, assets: restoredAssets };
+    this.snapshot = {
+      ...this.snapshot,
+      assets: restoredAssets,
+      // The editor bookmarks every asset it opens with.
+      documentAssetIds: new Set(restoredAssets.map((asset) => asset.id)),
+    };
   }
 
   getSnapshot = () => this.snapshot;
@@ -140,9 +152,24 @@ export class ComposerSession {
     return this.snapshot.linkedAssetIds.has(id);
   }
 
+  /** The assets the message holds (documentAssetIds), in upload order. */
+  documentAssets() {
+    const { assets, documentAssetIds } = this.snapshot;
+
+    return assets.filter((asset) => documentAssetIds.has(asset.id));
+  }
+
+  /** The editor's document now refers to these assets. */
+  setDocumentAssetIds = (assetIds: readonly string[]) => {
+    const next = new Set(assetIds);
+
+    if (setsEqual(next, this.snapshot.documentAssetIds)) return;
+    this.publish({ ...this.snapshot, documentAssetIds: next });
+  };
+
   limitError() {
     return composerAttachmentLimitError([
-      ...this.snapshot.assets,
+      ...this.documentAssets(),
       ...this.reservedAssets,
     ]);
   }
@@ -171,7 +198,7 @@ export class ComposerSession {
     if (!accepted.length) return null;
 
     const limitError = composerAttachmentLimitError([
-      ...this.snapshot.assets,
+      ...this.documentAssets(),
       ...this.reservedAssets,
       ...accepted.map((file) => ({ size: file.size })),
     ]);
@@ -383,8 +410,12 @@ export class ComposerSession {
     if (this.disposed) return;
     this.disposed = true;
     const claimed = this.claimedAssetIds;
+    const { documentAssetIds } = this.snapshot;
+    // A saved draft holds only the files still in the message.
     this.disposeAssets(
-      (asset) => !claimed.has(asset.id) && !this.retainUploads
+      (asset) =>
+        !claimed.has(asset.id) &&
+        !(this.retainUploads && documentAssetIds.has(asset.id))
     );
     this.publish({ ...this.snapshot, phase: "closed" });
   };

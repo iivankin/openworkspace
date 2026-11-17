@@ -24,40 +24,81 @@ export function draftAttachments(
   );
 }
 
-/** A reopened draft's files as composer assets, already uploaded. */
+/**
+ * A reopened draft's files as composer assets, already uploaded: its
+ * attachments, and the inline files its editor HTML (`html`, from
+ * restoredDraftHtml) still shows. An inline file the HTML no longer refers
+ * to, such as a copy of a signature image left out, isn't brought back.
+ */
 export function restoredComposerAssets(
   mailboxId: string,
-  draft: Pick<SavedDraft, "attachments"> | undefined
+  draft: Pick<SavedDraft, "attachments"> | undefined,
+  html: string
 ): ComposerAsset[] {
-  return (draft?.attachments ?? []).map((file) => ({
-    id: file.assetId,
-    uploadId: file.uploadId,
-    filename: file.filename,
-    contentType: file.contentType,
-    size: file.size,
-    intent: file.disposition,
-    contentId: file.contentId,
-    // As for a new upload: an image too large to send inline becomes a link.
-    previewUrl:
-      file.disposition === "inline" && file.size <= EMAIL_SERVICE_MAX_BYTES
-        ? `/api/mail/drafts/files/${encodeURIComponent(file.uploadId)}?mailboxId=${encodeURIComponent(mailboxId)}`
-        : null,
-    status: "uploaded",
-    error: null,
-  }));
+  // The HTML is the browser's serialization, so the attribute reads this way.
+  const shown = new Set(
+    Array.from(
+      html.matchAll(/data-composer-asset="([^"]+)"/gu),
+      (match) => match[1]
+    )
+  );
+
+  return (draft?.attachments ?? []).flatMap((file) =>
+    file.disposition === "inline" && !shown.has(file.assetId)
+      ? []
+      : [
+          {
+            id: file.assetId,
+            uploadId: file.uploadId,
+            filename: file.filename,
+            contentType: file.contentType,
+            size: file.size,
+            intent: file.disposition,
+            contentId: file.contentId,
+            // As for a new upload: an image too large to send inline becomes a link.
+            previewUrl:
+              file.disposition === "inline" &&
+              file.size <= EMAIL_SERVICE_MAX_BYTES
+                ? `/api/mail/drafts/files/${encodeURIComponent(file.uploadId)}?mailboxId=${encodeURIComponent(mailboxId)}`
+                : null,
+            status: "uploaded" as const,
+            error: null,
+          },
+        ]
+  );
+}
+
+/** Plain text as editor HTML: a paragraph per blank-line-separated block. */
+function textHtml(text: string) {
+  const document = new DOMParser().parseFromString("", "text/html");
+
+  for (const block of text.split(/\r?\n\s*\r?\n/u)) {
+    const paragraph = document.createElement("p");
+
+    block.split(/\r?\n/u).forEach((line, index) => {
+      if (index > 0) paragraph.appendChild(document.createElement("br"));
+      paragraph.appendChild(document.createTextNode(line));
+    });
+    document.body.appendChild(paragraph);
+  }
+
+  return document.body.innerHTML;
 }
 
 /**
  * A reopened draft's editor HTML. The signature images it kept as its own
  * files become ordinary inline images of those files, so the draft no longer
- * depends on the signature as it is now.
+ * depends on the signature as it is now. A mail app's draft has no editor
+ * HTML: its HTML is taken as is, and a text-only one becomes paragraphs.
  */
 export function restoredDraftHtml(
-  draft: Pick<SavedDraft, "bodyHtml" | "editorHtml" | "attachments">
+  draft: Pick<
+    SavedDraft,
+    "bodyHtml" | "editorHtml" | "bodyText" | "attachments"
+  >
 ) {
-  // A mail app's draft has no editor HTML; the editor takes its HTML as is.
   const document = new DOMParser().parseFromString(
-    draft.editorHtml ?? draft.bodyHtml ?? "",
+    draft.editorHtml ?? draft.bodyHtml ?? textHtml(draft.bodyText),
     "text/html"
   );
 
@@ -89,34 +130,26 @@ export function restoredDraftHtml(
 }
 
 /**
- * A reopened draft as the composer's content, the way its editor opens it:
- * the restored HTML (signature images as the draft's own files) and the
- * inline files in it. Starting from this, opening a draft changes nothing,
- * so it doesn't save; and it counts as written, so it can be sent as is.
+ * A reopened draft as the composer's content, the way its editor opens it
+ * (`html`, from restoredDraftHtml). Starting from this, opening a draft
+ * changes nothing, so it doesn't save; and it counts as written, so it can
+ * be sent as is.
  */
 export function restoredDraftContent(
-  draft: Pick<
-    SavedDraft,
-    "bodyHtml" | "editorHtml" | "bodyText" | "attachments"
-  >
+  draft: Pick<SavedDraft, "bodyHtml" | "bodyText">,
+  html: string,
+  assets: readonly ComposerAsset[]
 ): ComposerContent {
   return {
     bodyHtml: draft.bodyHtml ?? "",
-    editorHtml: restoredDraftHtml(draft),
+    editorHtml: html,
     bodyText: draft.bodyText,
-    inlineAssetIds: restoredInlineAssetIds(draft),
+    inlineAssetIds: assets.flatMap((asset) =>
+      asset.intent === "inline" ? [asset.id] : []
+    ),
     storedImages: [],
     linkedAssetIds: [],
   };
-}
-
-/** The ids of a reopened draft's inline files, which its editor shows. */
-export function restoredInlineAssetIds(
-  draft: Pick<SavedDraft, "attachments"> | undefined
-) {
-  return (draft?.attachments ?? []).flatMap((file) =>
-    file.disposition === "inline" ? [file.assetId] : []
-  );
 }
 
 /** The text of HTML the editor opens with, images as their alt text, as the editor reads it. */
@@ -131,21 +164,19 @@ export function openingText(html: string) {
 }
 
 /**
- * Whether a composer holds nothing but what it opened with (`initialText`,
- * e.g. the signature): no new text, inline images or attachments. Spacing
- * is ignored, since the editor and the opening HTML space blocks apart
+ * Whether a draft holds nothing but what its composer opened with
+ * (`initialText`, e.g. the signature): no new text and no files. Spacing is
+ * ignored, since the editor and the opening HTML space blocks apart
  * differently.
  */
 export function holdsOnlyInitialContent(
-  content: Pick<ComposerContent, "bodyText" | "inlineAssetIds">,
-  initialText: string,
-  attachmentCount: number
+  content: Pick<DraftContent, "bodyText" | "attachments">,
+  initialText: string
 ) {
   const squeeze = (text: string) => text.replaceAll(/\s+/gu, "");
 
   return (
-    squeeze(content.bodyText) === squeeze(initialText) &&
-    !content.inlineAssetIds.length &&
-    !attachmentCount
+    squeeze(content.bodyText ?? "") === squeeze(initialText) &&
+    !content.attachments?.length
   );
 }

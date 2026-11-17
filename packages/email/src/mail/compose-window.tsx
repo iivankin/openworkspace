@@ -1,13 +1,12 @@
-import { useAuth, useConfirm } from "@open-workspace/core/ui";
+import { useConfirm } from "@open-workspace/core/ui";
 import {
   useEffect,
   useEffectEvent,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import type { DragEvent, RefObject } from "react";
+import type { RefObject } from "react";
 import { toast } from "sonner";
 
 import { forwardSubject } from "../../shared/mail";
@@ -19,7 +18,7 @@ import {
 } from "./compose-window-chrome";
 import { ComposerAttachmentList } from "./composer-attachment-list";
 import { ComposerEditor } from "./composer-editor";
-import type { ComposerContent, ComposerEditorHandle } from "./composer-editor";
+import type { ComposerContent } from "./composer-editor";
 import { ComposerRecipientFields } from "./composer-recipient-fields";
 import {
   recipientAddresses,
@@ -27,37 +26,21 @@ import {
   validateComposerRecipients,
 } from "./composer-recipients";
 import type { RecipientFieldValue } from "./composer-recipients";
-import { useComposerSession } from "./composer-session";
-import { isInlineComposerImage } from "./composer-upload-client";
-import {
-  draftAttachments,
-  holdsOnlyInitialContent,
-  openingText,
-  restoredComposerAssets,
-  restoredDraftContent,
-  restoredInlineAssetIds,
-  restoredDraftHtml,
-} from "./draft-attachments";
+import { notifyOutboundResult } from "./outbound-notification";
 import { ReplyToWarning } from "./reply-to-warning";
-import { messageSignatureHtml } from "./signature";
 import type { Mailbox, MessageDetail } from "./types";
-import { useComposeSubmission } from "./use-compose-submission";
 import { useComposerAttachmentPreflight } from "./use-composer-attachment-preflight";
+import { useComposerCore } from "./use-composer-core";
+import {
+  hasAuthoredContent,
+  useComposerSubmission,
+} from "./use-composer-submission";
 import { useDraftAutosave } from "./use-drafts";
 import type { DraftContent, SavedDraft } from "./use-drafts";
 
 const EMPTY_RECIPIENT_FIELD: RecipientFieldValue = {
   recipients: [],
   input: "",
-};
-
-const EMPTY_CONTENT: ComposerContent = {
-  bodyHtml: "",
-  editorHtml: "",
-  bodyText: "",
-  inlineAssetIds: [],
-  storedImages: [],
-  linkedAssetIds: [],
 };
 
 /** Below Tailwind's `sm`, the composer covers the screen. */
@@ -202,11 +185,6 @@ export function ComposeWindow({
   onSaved: (draftId: string) => void;
   onClose: () => void;
 }) {
-  const form = useRef<HTMLFormElement>(null);
-  const editor = useRef<ComposerEditorHandle>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const inlineFileInput = useRef<HTMLInputElement>(null);
-
   const [to, setTo] = useState<RecipientFieldValue>(() =>
     draft ? recipientField(draft.to) : EMPTY_RECIPIENT_FIELD
   );
@@ -227,17 +205,7 @@ export function ComposeWindow({
       (forwardedMessage ? forwardSubject(forwardedMessage.subject) : "")
   );
 
-  // Changes only as the person edits; a reopened draft starts as it opens.
-  const [content, setContent] = useState<ComposerContent>(() =>
-    draft ? restoredDraftContent(draft) : EMPTY_CONTENT
-  );
-
-  const [documentAssetIds, setDocumentAssetIds] = useState(() =>
-    restoredInlineAssetIds(draft)
-  );
-
   const [minimized, setMinimized] = useState(false);
-  const [dragging, setDragging] = useState(false);
   const section = useRef<HTMLElement>(null);
   const minimizeButton = useRef<HTMLButtonElement>(null);
   const restoreButton = useRef<HTMLButtonElement>(null);
@@ -245,32 +213,35 @@ export function ComposeWindow({
   const focusAfterToggle = useRef(false);
   const phone = usePhoneLayout();
 
-  const { session, snapshot } = useComposerSession(
-    mailbox.id,
-    forwardedMessage?.attachments,
-    restoredComposerAssets(mailbox.id, draft)
-  );
+  const core = useComposerCore({
+    mailbox,
+    draft,
+    signature: forwardedMessage ? "reply" : "new",
+    reservedAssets: forwardedMessage?.attachments,
+  });
 
-  const { user } = useAuth();
-
-  // A reopened draft as it was saved; otherwise the signature that applies,
-  // as editable content. Either way it is added once, so a reopened draft
-  // never gets a second signature.
-  // oxlint-disable-next-line react/hook-use-state -- read once, when the editor is created; nothing sets it
-  const [initialHtml] = useState(() =>
-    draft
-      ? restoredDraftHtml(draft)
-      : messageSignatureHtml(
-          mailbox,
-          forwardedMessage ? "reply" : "new",
-          user?.name ?? ""
-        )
-  );
-
-  // The text the editor opened with: a new composer still holding just that
-  // (its signature) is untouched and creates no draft.
-  // oxlint-disable-next-line react/hook-use-state -- read once; nothing sets it
-  const [initialText] = useState(() => openingText(initialHtml));
+  const {
+    session,
+    snapshot,
+    editor,
+    activeAssets,
+    dropProps,
+    addFiles,
+    attachmentError,
+    attachmentListProps,
+    content: reportedContent,
+    editorProps,
+    fileInput,
+    form,
+    holdsOnlyOpening,
+    inlineFileInput,
+    keptAttachments,
+    limitError,
+    readContent,
+    uploadsError,
+    uploadsFailed,
+    uploadsPending,
+  } = core;
 
   const recipients = validateComposerRecipients({
     to,
@@ -279,156 +250,132 @@ export function ComposeWindow({
     replyTo,
   });
 
-  const recipientCount = recipients.count;
-
-  const documentAssetIdSet = useMemo(
-    () => new Set(documentAssetIds),
-    [documentAssetIds]
-  );
-
-  const activeAssets = useMemo(
-    () => snapshot.assets.filter((asset) => documentAssetIdSet.has(asset.id)),
-    [documentAssetIdSet, snapshot.assets]
-  );
-
-  useComposerAttachmentPreflight(
-    session,
+  const preflightContext = (content: ComposerContent) =>
     forwardedMessage
       ? {
-          kind: "forward",
+          kind: "forward" as const,
           mailboxId: mailbox.id,
           sourceEmailId: forwardedMessage.id,
           bodyText: content.bodyText,
           bodyHtml: content.bodyHtml || undefined,
         }
       : {
-          kind: "compose",
+          kind: "compose" as const,
           mailboxId: mailbox.id,
           subject,
           bodyText: content.bodyText,
           bodyHtml: content.bodyHtml || undefined,
-        },
+        };
+
+  useComposerAttachmentPreflight(
+    session,
+    preflightContext(reportedContent),
     activeAssets,
     snapshot.phase === "editing"
   );
-  const linkedIds = snapshot.linkedAssetIds;
-  const attachmentError = session.limitError();
 
-  const uploadsPending = activeAssets.some(
-    (asset) => asset.status === "uploading"
-  );
-
-  const uploadsFailed = activeAssets.some((asset) => asset.status === "error");
-  const toAddresses = recipientAddresses(to);
-  const ccAddresses = recipientAddresses(cc);
-  const bccAddresses = recipientAddresses(bcc);
-
-  const keptAttachments = draftAttachments(activeAssets);
-
-  const draftContent = (body: ComposerContent): DraftContent => ({
+  const draftContent = (
+    body: ComposerContent,
+    attachments: DraftContent["attachments"]
+  ): DraftContent => ({
     kind: forwardedMessage ? "forward" : "compose",
     sourceEmailId: forwardedMessage?.id ?? null,
     conversationId: forwardedMessage?.conversationId ?? null,
-    to: toAddresses,
-    cc: ccAddresses,
-    bcc: bccAddresses,
+    to: recipientAddresses(to),
+    cc: recipientAddresses(cc),
+    bcc: recipientAddresses(bcc),
     replyTo: replyTo.trim() || null,
     subject,
     bodyText: body.bodyText,
     bodyHtml: body.bodyHtml,
     // The editor's HTML, so the reopened editor puts the files back in place.
     editorHtml: body.editorHtml,
-    attachments: keptAttachments,
+    attachments,
     storedImages: body.storedImages,
   });
+
+  // The body holds only what it opened with (e.g. the signature), no files.
+  const untouched = (saved: Pick<DraftContent, "bodyText" | "attachments">) =>
+    !draft && holdsOnlyOpening(saved);
 
   const autosave = useDraftAutosave({
     mailboxId: mailbox.id,
     session,
     draftId,
     restored: draft,
-    content: draftContent(content),
-    blank: () =>
-      !draft &&
-      !toAddresses.length &&
-      !ccAddresses.length &&
-      !bccAddresses.length &&
+    content: draftContent(reportedContent, keptAttachments()),
+    current: () => draftContent(readContent(), keptAttachments()),
+    blank: (saved) =>
+      !recipientAddresses(to).length &&
+      !recipientAddresses(cc).length &&
+      !recipientAddresses(bcc).length &&
       (Boolean(forwardedMessage) || !subject.trim()) &&
-      holdsOnlyInitialContent(content, initialText, keptAttachments.length),
+      untouched(saved),
     editing: snapshot.phase === "editing" && mailbox.canSend,
     onSaved,
   });
 
-  const submission = useComposeSubmission({
+  const submission = useComposerSubmission({
     session,
     phase: snapshot.phase,
-    mailbox,
-    forwardedMessage,
-    recipients,
-    subject,
-    content,
-    // `content` changes only as the person edits.
-    edited: content !== EMPTY_CONTENT,
     editor,
-    activeAssets,
-    uploadLimitError: attachmentError,
-    uploadsPending,
-    uploadsFailed,
-    draftId: autosave.draftId,
-    // Sent: the server deleted the draft.
-    onClose: () => {
+    validate: () => {
+      if (recipients.error) return recipients.error;
+
+      if (recipients.count === 0) {
+        return "Add at least one recipient in To, Cc, or Bcc";
+      }
+
+      return (
+        uploadsError ?? (mailbox.canSend ? null : "This mailbox is read-only")
+      );
+    },
+    // A forward can go without a note.
+    missingText: (content) =>
+      forwardedMessage ||
+      (hasAuthoredContent(content) &&
+        !untouched({
+          bodyText: content.bodyText,
+          attachments: keptAttachments(),
+        }))
+        ? null
+        : "Add text to the message before sending",
+    context: preflightContext,
+    command: (content, uploadedAttachments) => {
+      const common = {
+        mailboxId: mailbox.id,
+        bodyText: content.bodyText,
+        bodyHtml:
+          content.bodyText.trim() ||
+          content.inlineAssetIds.length ||
+          content.linkedAssetIds.length ||
+          content.storedImages.length
+            ? content.bodyHtml
+            : undefined,
+        uploadedAttachments,
+        storedImages: content.storedImages,
+        draftId: autosave.draftId,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
+        replyTo: recipients.replyTo,
+      };
+
+      return forwardedMessage
+        ? { ...common, kind: "forward", sourceEmailId: forwardedMessage.id }
+        : { ...common, kind: "compose", subject };
+    },
+    failureLabel: "Could not send message",
+    onSuccess: (result) => {
+      notifyOutboundResult(result, "message");
+      // Sent: the server deleted the draft.
       autosave.sent();
       onClose();
     },
   });
 
   const { confirm, dialog: confirmDialog } = useConfirm();
-
   const { busy } = submission;
-  // Sending takes over the window: no drop target while it is busy.
-  const dropTarget = dragging && !busy;
-
-  function addInlineFiles(files: File[], position?: number) {
-    const assets = session.addFiles(files, "inline");
-
-    if (!assets) return;
-    editor.current?.insertAssets(assets, position);
-  }
-
-  function addAttachmentFiles(files: File[], position?: number) {
-    const assets = session.addFiles(files, "attachment");
-
-    if (!assets) return;
-    editor.current?.insertAssets(assets, position);
-  }
-
-  function handleComposerDrop(event: DragEvent<HTMLFormElement>) {
-    if (!event.dataTransfer.types.includes("Files")) return;
-    event.preventDefault();
-    setDragging(false);
-
-    if (busy) return;
-
-    // ProseMirror owns editor-body drops so it can preserve the insertion
-    // position. The form catches files dropped on every other composer area.
-    if (
-      event.target instanceof Element &&
-      event.target.closest("[data-composer-editor-content]")
-    ) {
-      return;
-    }
-
-    const inline: File[] = [];
-    const attachments: File[] = [];
-
-    for (const file of Array.from(event.dataTransfer.files)) {
-      (isInlineComposerImage(file) ? inline : attachments).push(file);
-    }
-
-    if (inline.length) addInlineFiles(inline);
-
-    if (attachments.length) addAttachmentFiles(attachments);
-  }
 
   function closeComposer() {
     if (busy) {
@@ -437,8 +384,8 @@ export function ComposeWindow({
       return;
     }
 
-    // The editor reports changes after a short pause; save what it has now.
-    autosave.flush(draftContent(editor.current?.content() ?? content));
+    // Saves what the editor holds now, not just what it last reported.
+    autosave.flush();
     session.close();
     onClose();
   }
@@ -510,30 +457,15 @@ export function ComposeWindow({
         ref={form}
         className="flex min-h-0 flex-1 flex-col"
         aria-busy={busy}
-        onSubmit={submission.submit}
-        onDragEnter={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
+        onSubmit={(event) => {
           event.preventDefault();
-
-          if (!busy) setDragging(true);
+          void submission.submit();
         }}
-        onDragOver={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = busy ? "none" : "copy";
-        }}
-        onDragLeave={(event) => {
-          if (
-            !(
-              event.relatedTarget instanceof Node &&
-              event.currentTarget.contains(event.relatedTarget)
-            )
-          ) {
-            setDragging(false);
-          }
-        }}
-        onDragEnd={() => setDragging(false)}
-        onDrop={handleComposerDrop}
+        onDragEnter={dropProps.onDragEnter}
+        onDragOver={dropProps.onDragOver}
+        onDragLeave={dropProps.onDragLeave}
+        onDragEnd={dropProps.onDragEnd}
+        onDrop={dropProps.onDrop}
       >
         <ComposeWindowHeader
           from={mailbox.address}
@@ -573,63 +505,26 @@ export function ComposeWindow({
           </>
         ) : null}
 
-        <ComposerEditor
-          ref={editor}
-          session={session}
-          onChange={setContent}
-          onAssetsChange={setDocumentAssetIds}
-          onAddInlineFiles={(files, position) => {
-            addInlineFiles(files, position);
-          }}
-          onAddAttachmentFiles={(files, position) => {
-            addAttachmentFiles(files, position);
-          }}
-          onChooseInlineImage={() => inlineFileInput.current?.click()}
-          onSubmitShortcut={() => form.current?.requestSubmit()}
-          initialHtml={initialHtml}
-          dragging={dropTarget}
-          disabled={busy}
-        />
+        <ComposerEditor ref={editor} {...editorProps} />
 
-        <ComposerAttachmentList
-          uploads={activeAssets.filter(
-            (asset) => !linkedIds.has(asset.id) || asset.status !== "uploaded"
-          )}
-          linkedIds={linkedIds}
-          progress={session.progress}
-          disabled={busy}
-          onRemove={(asset) => {
-            if (editor.current?.removeAsset(asset.id)) return;
-            session.remove(asset.id);
-          }}
-          onRetry={(asset) => {
-            void session.retry(asset.id);
-          }}
-        />
+        <ComposerAttachmentList {...attachmentListProps} />
 
         <ComposeWindowFooter
           fileInput={fileInput}
           inlineFileInput={inlineFileInput}
           uploads={activeAssets}
-          error={
-            attachmentError ??
-            (activeAssets.length > 0 && snapshot.planError
-              ? "Could not check attachment delivery"
-              : null)
-          }
+          error={attachmentError}
           sending={busy}
           sendDisabled={
             busy ||
-            recipientCount === 0 ||
+            recipients.count === 0 ||
             !mailbox.canSend ||
-            Boolean(attachmentError) ||
+            Boolean(limitError) ||
             uploadsPending ||
             uploadsFailed
           }
-          onAddAttachments={addAttachmentFiles}
-          onAddInlineImages={(files) => {
-            addInlineFiles(files);
-          }}
+          onAddAttachments={(files) => addFiles(files, "attachment")}
+          onAddInlineImages={(files) => addFiles(files, "inline")}
         />
       </form>
     </section>
