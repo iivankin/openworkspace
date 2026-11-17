@@ -129,7 +129,14 @@ export async function submitOutgoing(input: {
   try {
     submission = await stub.submitOutgoing(prepared.email);
   } catch (error) {
-    await discardPreparedObjects(input.env, prepared.storageKeys);
+    // The mailbox may have stored the message before failing (its send was
+    // cut off): its files are then the message's, kept. Unsure, keep them.
+    const stored = await stub.getEmail(id).then(
+      (email) => email !== null,
+      () => true
+    );
+
+    if (!stored) await discardPreparedObjects(input.env, prepared.storageKeys);
     throw error;
   }
 

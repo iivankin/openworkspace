@@ -181,7 +181,6 @@ import {
   PRESENCE_TTL_MS,
   RETENTION_BATCH_SIZE,
   SESSION_SOCKET_TAG,
-  clampText,
   errorMessage,
   folderMembership,
   headerDate,
@@ -2021,8 +2020,6 @@ export class MailboxDO extends DurableObject<Env> {
       conversationId:
         originalConversation ?? input.conversationId ?? parsed.conversationId,
       direction,
-      bodyText: clampText(parsed.bodyText),
-      quotedText: clampText(parsed.quotedText),
       // Not an SMTP delivery to this workspace.
       envelopeFrom: null,
       envelopeTo: null,
@@ -3099,9 +3096,20 @@ export class MailboxDO extends DurableObject<Env> {
     messageIdHeader: string,
     status: RecipientDeliveryStatus
   ) {
-    const email = this.getEmailByMessageId(messageIdHeader);
+    // Sent here: a copy that came back (Cc to itself) has the same Message-ID.
+    const email =
+      this.db
+        .select()
+        .from(emails)
+        .where(
+          and(
+            eq(emails.messageIdHeader, messageIdHeader),
+            eq(emails.direction, "outgoing")
+          )
+        )
+        .all()[0] ?? null;
 
-    if (!email || email.direction !== "outgoing") return "not_found" as const;
+    if (!email) return "not_found" as const;
 
     const existing = email.deliveryStatusJson.find(
       (item) => item.recipient === status.recipient

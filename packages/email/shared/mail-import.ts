@@ -29,10 +29,3 @@ export type ImportPlacement = (typeof importPlacements)[number];
 
 /** The longest caller-supplied source id and thread key. */
 export const MAX_IMPORT_KEY_LENGTH = 512;
-
-/**
- * Text bodies live in the mailbox's SQLite rows (HTML and attachments in
- * R2), and a row must stay well under the Durable Object's row limit; an
- * imported plain-text body beyond this is cut (the raw message keeps all of it).
- */
-export const MAX_IMPORTED_TEXT_CHARACTERS = 200_000;

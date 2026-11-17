@@ -239,8 +239,9 @@ export function jmapChanges(
   };
 }
 
+/** Received mail without the person's read mark; sent mail is always read. */
 const unread = (userId: string) => ({
-  sql: "not exists (select 1 from email_read_states r where r.email_id = e.id and r.user_id = ?)",
+  sql: "(e.direction = 'incoming' and not exists (select 1 from email_read_states r where r.email_id = e.id and r.user_id = ?))",
   params: [userId],
 });
 

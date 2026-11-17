@@ -300,3 +300,43 @@ it("counts correspondents in both directions for the first-time-sender hint", as
     "old@contact.example": { inboundCount: 3, outboundCount: 2 },
   });
 });
+
+it("stores a received text body too long for a row, cut short", async () => {
+  const mailboxId = `mbx_long_${crypto.randomUUID()}`;
+  const mailbox = mailboxStub(mailboxId);
+  const id = `delivery_${crypto.randomUUID()}`;
+  const rawObjectKey = `mailboxes/${mailboxId}/raw/${id}.eml`;
+
+  // About 3 MB of log lines: more than a Durable Object row holds.
+  const body = "log line 0123456789 abcdefghijklmnopqrstuvwxyz\r\n".repeat(
+    64_000
+  );
+
+  await env.MAIL_STORAGE.put(
+    rawObjectKey,
+    [
+      "From: Reports <reports@example.net>",
+      "To: user@example.com",
+      "Subject: Nightly log",
+      "Message-ID: <nightly-log@example.net>",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      body,
+    ].join("\r\n")
+  );
+  await mailbox.enqueueInbound({
+    id,
+    mailboxId,
+    rawObjectKey,
+    envelopeFrom: "reports@example.net",
+    envelopeTo: "user@example.com",
+    receivedAt: Date.now(),
+  });
+
+  const email = await runAlarmUntil(mailboxId, () =>
+    mailbox.getEmail(inboundMessageId(id))
+  );
+
+  expect(email.subject).toBe("Nightly log");
+  expect(email.bodyText.length).toBe(200_000);
+});

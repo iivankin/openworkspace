@@ -159,6 +159,19 @@ export type InboundMessageSource = Pick<
   | "receivedAt"
 >;
 
+/**
+ * Text bodies live in the mailbox's SQLite rows (HTML and attachments in
+ * R2), and a row must stay well under the Durable Object's 2 MB limit: a
+ * plain-text body beyond this is cut (the raw message keeps all of it).
+ */
+const MAX_STORED_TEXT_CHARACTERS = 200_000;
+
+function clampText(value: string | null) {
+  return value && value.length > MAX_STORED_TEXT_CHARACTERS
+    ? value.slice(0, MAX_STORED_TEXT_CHARACTERS)
+    : value;
+}
+
 export async function prepareInboundEmail(input: {
   env: Env;
   mailboxId: string;
@@ -266,8 +279,8 @@ export async function prepareInboundEmail(input: {
     bccJson: bcc,
     subject: parsed.subject?.trim() || "(no subject)",
     preview: replyText.bodyText.replaceAll(/\s+/gu, " ").trim().slice(0, 220),
-    bodyText: replyText.bodyText,
-    quotedText: replyText.quotedText,
+    bodyText: clampText(replyText.bodyText),
+    quotedText: clampText(replyText.quotedText),
     bodyHtmlR2Key,
     rawMimeR2Key: job.rawObjectKey,
     attachmentsJson: attachments,

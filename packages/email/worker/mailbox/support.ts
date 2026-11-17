@@ -6,7 +6,6 @@ import type { DRAFTS_FOLDER_ID } from "../../shared/folder-order";
 import type { MailboxRealtimeClientMessage } from "../../shared/mail";
 import type { SenderBlock } from "../../shared/mail-feedback";
 import { headerValues } from "../../shared/mail-headers";
-import { MAX_IMPORTED_TEXT_CHARACTERS } from "../../shared/mail-import";
 import type { ImportPlacement } from "../../shared/mail-import";
 import { rawHeaderText } from "../mail/inbound";
 import {
@@ -257,12 +256,6 @@ export type ImportMessageResult =
     }
   | { status: "duplicate"; id: string; conversationId: string }
   | { status: "unprocessable"; reason: string };
-
-export function clampText(value: string | null | undefined) {
-  return value && value.length > MAX_IMPORTED_TEXT_CHARACTERS
-    ? value.slice(0, MAX_IMPORTED_TEXT_CHARACTERS)
-    : (value ?? null);
-}
 
 /** The Date header of a raw message, in ms, if it parses. */
 export function headerDate(rawMime: ArrayBuffer) {

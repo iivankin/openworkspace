@@ -501,7 +501,9 @@ export function ReaderPane({ mail }: { mail: MailController }) {
     <div className="@container/reader flex min-h-0 flex-1 flex-col">
       <CommandBar mail={mail} actions={senderActions} />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* One per conversation: its reply box and the draft it reopens are that conversation's. */}
         <ConversationView
+          key={`${mailbox?.id ?? ""}:${conversationId}`}
           messages={conversationMessages}
           messageCount={
             conversation?.messageCount ?? conversationMessages.length

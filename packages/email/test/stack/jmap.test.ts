@@ -380,7 +380,7 @@ describe("JMAP", () => {
         {
           accountId,
           ids: [sentId],
-          properties: ["subject", "mailboxIds", "to"],
+          properties: ["subject", "mailboxIds", "keywords", "to"],
         },
         "y",
       ],
@@ -390,9 +390,11 @@ describe("JMAP", () => {
     // Sending it deleted the draft.
     expect(args(gone)).toMatchObject({ list: [], notFound: [draftId] });
 
+    // Sent mail is read.
     expect(result(sent, getResult).list[0]).toMatchObject({
       subject: "Re: Quarterly plan",
       mailboxIds: { sent: true },
+      keywords: { $seen: true },
       to: [{ email: "ada@example.net" }],
     });
 

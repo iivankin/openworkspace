@@ -62,6 +62,18 @@ describe("Email Service delivery events", () => {
       timelineAt: new Date(),
       transportState: "submitted",
     });
+    // Its own copy came back (Cc to itself): same Message-ID, newer.
+    await stub.insertEmail({
+      id: "msg_delivery_event_copy",
+      conversationId: "conv_delivery_event",
+      direction: "incoming",
+      messageIdHeader: "cf-message-123",
+      fromJson: [{ address: "admin@example.test", name: "Admin" }],
+      toJson: [{ address: "admin@example.test", name: null }],
+      subject: "Delivery event",
+      timelineAt: new Date(Date.now() + 1000),
+      transportState: "received",
+    });
 
     const event = {
       type: "cf.email.sending.message.delivered",
