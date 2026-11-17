@@ -99,8 +99,8 @@ function backupPlacement(input: {
 /**
  * A message's `.eml`, and whether it is final: its hash may then stand for
  * it in every later snapshot. One rebuilt without its attachments, or sent
- * mail before Email Sending gave it its Message-ID, isn't: the next
- * snapshot builds it again.
+ * mail before Email Sending gave it its Message-ID (unless its send failed
+ * for good), isn't: the next snapshot builds it again.
  */
 type MessageBytes = { bytes: Uint8Array<ArrayBuffer>; final: boolean };
 
@@ -161,8 +161,12 @@ async function sentMessageBytes(
 
   return {
     bytes,
+    // A send that failed never gets one, and won't change any more.
     final:
-      complete && (email.direction !== "outgoing" || !!email.messageIdHeader),
+      complete &&
+      (email.direction !== "outgoing" ||
+        Boolean(email.messageIdHeader) ||
+        email.transportState === "failed"),
   };
 }
 
