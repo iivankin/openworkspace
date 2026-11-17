@@ -645,4 +645,40 @@ describe("auto-replies", () => {
       await answeredSenders(["srs0=k1=pt=partner.test=known@relay.test"])
     ).toEqual(["srs0=k1=pt=partner.test=known@relay.test"]);
   });
+
+  it("give the inside message only to a colleague's own address", async () => {
+    const saved = await call(
+      adminCookie,
+      `/api/mail/mailboxes/${primaryId}/auto-reply`,
+      {
+        method: "PUT",
+        json: {
+          enabled: true,
+          inside: message("At the offsite, call me"),
+          outside: message("Away", false),
+        },
+      }
+    );
+
+    expect(saved.status).toBe(200);
+    await saved.json();
+
+    // A colleague's signed message resent by someone else: the reply would
+    // go to them, so it gets neither message.
+    await deliver({
+      from: "member@example.test",
+      envelopeFrom: "replay@outside.test",
+      to: "admin@example.test",
+      id: "replay-1@example.test",
+    });
+    await deliver({
+      from: "member@example.test",
+      to: "admin@example.test",
+      id: "member-1@example.test",
+    });
+
+    expect(await answeredSenders(["member@example.test"])).not.toContain(
+      "replay@outside.test"
+    );
+  });
 });

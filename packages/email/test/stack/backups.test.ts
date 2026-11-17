@@ -11,7 +11,7 @@ import { z } from "zod";
 import { fakeEmailRouting } from "./fake-email-routing.ts";
 import { readJson } from "./json.ts";
 import { bootstrapAdmin } from "./mail-flow-helpers.ts";
-import { env, hooks, useFreshWorkspace, worker } from "./workspace.ts";
+import { env, hooks, mailbox, useFreshWorkspace, worker } from "./workspace.ts";
 
 useFreshWorkspace();
 
@@ -565,6 +565,165 @@ describe("backups", () => {
     const again = await restore("state-again");
     expect(again).toContain("people 0, teams 0, addresses 0");
     expect(again).toContain("0 restored, 8 already there");
+  });
+
+  it("restores into a mailbox that still has part of the mail", async () => {
+    const kiln = idRow.parse(
+      await env.DB.prepare(
+        "SELECT id FROM mailboxes WHERE local_part = 'kiln' AND team_id = ?"
+      )
+        .bind(teamId)
+        .first()
+    ).id;
+
+    // A message without a Message-ID: only its id in the mailbox says it is there.
+    const imported = await worker.fetch(
+      new Request(
+        `${origin}/api/mail/import/mailboxes/${kiln}/messages?sourceId=m7&placement=inbox`,
+        {
+          method: "POST",
+          headers: { cookie, "content-type": "message/rfc822" },
+          body: [
+            "From: Rosa Quill <rosa@fernhollow.example>",
+            "To: kiln@example.test",
+            "Subject: No id",
+            "Date: Wed, 04 Mar 2026 10:00:00 +0000",
+            "",
+            "Sent by an old script.",
+            "",
+          ].join("\r\n"),
+        }
+      )
+    );
+
+    expect(imported.status).toBe(201);
+    await imported.json();
+
+    const run = await hooks.fetchAndWait(
+      new Request(`${origin}/api/admin/backups/run`, {
+        method: "POST",
+        headers: { cookie, origin },
+      })
+    );
+
+    expect(run.status).toBe(202);
+    await run.json();
+    await hooks.scheduled({ scheduledTime: Date.now() });
+
+    const { id } = required((await backupStatus()).latest, "a snapshot");
+    const dir = mkdtempSync(join(tmpdir(), "ow-backup-"));
+    await downloadBucket(dir);
+    const before = await messages(kiln);
+
+    // The reply is lost; its thread is still here.
+    await hooks.mailboxSql(
+      kiln,
+      "DELETE FROM emails WHERE subject = 'Re: Kiln schedule'"
+    );
+
+    const { accessToken } = await mcpAccessToken(cookie, {
+      scope: "admin.workspace",
+    });
+
+    const log: string[] = [];
+
+    const code = await main(
+      [
+        "backup",
+        join(dir, "backups", id),
+        "--workspace",
+        origin,
+        "--token",
+        accessToken,
+        "--state-dir",
+        join(dir, "state"),
+      ],
+      {
+        fetch: (input: string, init?: RequestInit) =>
+          worker.fetch(new Request(input, init)),
+        credentialsPath: null,
+        log: (line) => log.push(line),
+        progress: () => {},
+      }
+    );
+
+    expect(code, log.join("\n")).toBe(0);
+    // Only the reply comes back, into its thread.
+    expect(log.join("\n")).toContain("1 restored, 8 already there");
+    expect(await messages(kiln)).toEqual(before);
+  });
+
+  it("keeps the files sent mail only linked to", async () => {
+    const kiln = idRow.parse(
+      await env.DB.prepare(
+        "SELECT id FROM mailboxes WHERE local_part = 'kiln' AND team_id = ?"
+      )
+        .bind(teamId)
+        .first()
+    ).id;
+
+    const fileKey = `mailboxes/${kiln}/messages/msg_linked/attachments/att_linked`;
+    const sentKey = `mailboxes/${kiln}/raw/msg_linked.eml`;
+    await env.MAIL_STORAGE.put(fileKey, "Kiln price list");
+    // As sent: the file is a download link.
+    await env.MAIL_STORAGE.put(
+      sentKey,
+      "Subject: Price list\r\n\r\nDownload: https://example.test/d/1\r\n"
+    );
+    await mailbox(kiln).insertEmail({
+      id: "msg_linked",
+      conversationId: "conv_linked",
+      direction: "outgoing",
+      fromJson: [{ address: "kiln@example.test", name: "Kiln" }],
+      toJson: [{ address: "rosa@fernhollow.example", name: null }],
+      subject: "Price list",
+      bodyText: "Download: https://example.test/d/1",
+      timelineAt: new Date(),
+      transportState: "submitted",
+      messageIdHeader: "<linked@example.test>",
+      rawMimeR2Key: sentKey,
+      attachmentsJson: [
+        {
+          id: "att_linked",
+          r2Key: fileKey,
+          filename: "prices.txt",
+          contentType: "text/plain",
+          size: 15,
+          contentId: null,
+          disposition: "attachment",
+          delivery: "download_link",
+          downloadTokenHash: "hash",
+          downloadExpiresAt: Date.now() + 60_000,
+        },
+      ],
+    });
+
+    const run = await hooks.fetchAndWait(
+      new Request(`${origin}/api/admin/backups/run`, {
+        method: "POST",
+        headers: { cookie, origin },
+      })
+    );
+
+    expect(run.status).toBe(202);
+    await run.json();
+    await hooks.scheduled({ scheduledTime: Date.now() });
+
+    const [stored] = await hooks.mailboxRows(
+      kiln,
+      z.object({ backup_sha256: z.string() }),
+      "SELECT backup_sha256 FROM emails WHERE id = 'msg_linked'"
+    );
+
+    const eml = required(
+      await env.BACKUP_STORAGE.get(
+        `backups/objects/${required(stored, "the message was backed up").backup_sha256}.eml`
+      ),
+      "the message's object"
+    );
+
+    // The file itself, not only its link.
+    expect(await eml.text()).toContain(btoa("Kiln price list"));
   });
 
   it("is for administrators only", async () => {
