@@ -203,9 +203,12 @@ You set your own under **Settings → Auto-reply**; while it runs, a banner in
 Mail turns it off. A shared inbox's is set in its address's editor under
 **Teams**, and anyone's under **People**, saved with **Save address**. Mail to
 an alias is answered from the alias by its mailbox's auto-reply; mail through
-a plus address or the catch-all is answered too. Copies of mailing list posts,
-mail from other lists, bounces, other automatic replies, calendar mail, and
-mail in Spam or Trash never are. Replies are marked `Auto-Submitted:
+a plus address is answered too. Mail the catch-all took isn't, since the reply
+would give the mailbox's own address to whoever guessed at the domain. Copies
+of mailing list posts, mail from other lists, bounces, other automatic
+replies, calendar mail, and mail in Spam or Trash never are either. The
+message for people at the workspace goes only to a sender whose domain passed
+DMARC and who gets the reply at that same domain. Replies are marked `Auto-Submitted:
 auto-replied` and aren't kept in Sent.
 
 ## Administration

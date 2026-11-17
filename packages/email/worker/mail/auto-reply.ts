@@ -66,13 +66,17 @@ const SYSTEM_LOCAL_PART =
 /**
  * RFC 3834 and common-practice checks that depend only on the message and
  * how it was delivered: why it gets no reply, or null when it may get one.
- * Mail delivered to the mailbox directly, through an alias, a plus address
- * or the catch-all may be answered; a copy of a workspace mailing list's
- * post (`listAddress`) never is.
+ * Mail delivered to the mailbox directly, through an alias or a plus
+ * address may be answered. Mail the catch-all took isn't: the reply would
+ * come from the mailbox's own address, handing it to whoever guessed at
+ * the domain. A copy of a workspace mailing list's post (`listAddress`)
+ * never is.
  */
 export function messageSkipReason(input: {
   headers: Map<string, string>;
   envelopeFrom: string;
+  /** The address the message was delivered to (the envelope recipient). */
+  deliveredTo: string;
   /** The mailbox's address and its aliases, lowercased. */
   ownAddresses: readonly string[];
   listAddress: string | null;
@@ -88,6 +92,18 @@ export function messageSkipReason(input: {
   }
 
   if (input.listAddress) return "mailing list copy";
+
+  const delivered = input.deliveredTo.trim().toLowerCase();
+  const at = delivered.lastIndexOf("@");
+  const plus = delivered.indexOf("+");
+
+  // `sam+shop@` reached `sam@`.
+  const base =
+    plus > 0 && plus < at
+      ? `${delivered.slice(0, plus)}${delivered.slice(at)}`
+      : delivered;
+
+  if (!input.ownAddresses.includes(base)) return "catch-all delivery";
 
   const autoSubmitted = headers
     .get("auto-submitted")

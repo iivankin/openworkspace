@@ -416,7 +416,7 @@ describe("auto-replies", () => {
     expect(await answered(primaryId)).toEqual([]);
   });
 
-  it("answer by delivery: direct, alias, plus address and catch-all, not list copies", async () => {
+  it("answer by delivery: direct, alias and plus address, not catch-all or list copies", async () => {
     const refused = (json: AutoReplyBody) =>
       call(adminCookie, `/api/mail/mailboxes/${primaryId}/auto-reply`, {
         method: "PUT",
@@ -565,14 +565,12 @@ describe("auto-replies", () => {
         "ana@outside.test",
         "bob@outside.test",
         "cy@outside.test",
-        "di@outside.test",
       ])
-    ).toEqual([
-      "ana@outside.test",
-      "bob@outside.test",
-      "cy@outside.test",
-      "di@outside.test",
-    ]);
+    ).toEqual(["ana@outside.test", "bob@outside.test", "cy@outside.test"]);
+    // The catch-all's mail (to nobody@) isn't answered.
+    expect(
+      (await answered(primaryId)).map((row) => row.sender_address)
+    ).not.toContain("di@outside.test");
 
     // Another message from Ana within the interval, however she spells her
     // address, gets no second reply.

@@ -18,6 +18,7 @@ import {
   messageSkipReason,
   parseHeaderBlock,
 } from "../mail/auto-reply";
+import { relaxedAligned } from "../mail/org-domain";
 import { replyAlias } from "../mail/reply-plan";
 import { inlineImages } from "../mail/rich-content";
 import {
@@ -152,6 +153,7 @@ export async function maybeAutoReply(
     messageSkipReason({
       headers: parseHeaderBlock(rawMime),
       envelopeFrom: job.envelopeFrom,
+      deliveredTo: job.envelopeTo,
       ownAddresses: [
         mailboxAddress,
         ...aliases.map((alias) => alias.address),
@@ -166,17 +168,23 @@ export async function maybeAutoReply(
 
   // The reply goes to the envelope sender (RFC 3834), but who wrote is the
   // From address: the envelope sender of forwarded mail, newsletters and
-  // many companies is a rewritten bounce address. From counts as inside
-  // the workspace only when DMARC verified it, so it can't be forged.
+  // many companies is a rewritten bounce address. From counts only when
+  // DMARC verified it, so it can't be forged.
   const recipient = autoReplyRecipient(job.envelopeFrom);
   // One reply per sender, however they spell their address's case.
   const sender = recipient.toLowerCase();
-  const author = email.fromJson[0]?.address ?? null;
+  const writer = email.fromJson[0]?.address ?? null;
 
+  const author =
+    writer && email.authenticationResultsJson?.verdict === "verified"
+      ? writer
+      : null;
+
+  // The workspace's own message also needs the reply to go to From's
+  // domain: a colleague's signed message resent with another envelope
+  // sender (a replay) would otherwise hand it to whoever resent it.
   const inside = Boolean(
-    author &&
-    email.authenticationResultsJson?.verdict === "verified" &&
-    mailDomainAllowed(author)
+    author && mailDomainAllowed(author) && relaxedAligned(author, recipient)
   );
 
   const message = inside ? settings.inside : settings.outside;

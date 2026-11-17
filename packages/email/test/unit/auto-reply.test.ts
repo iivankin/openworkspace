@@ -16,6 +16,7 @@ function skip(
   headers: string,
   overrides: {
     envelopeFrom?: string;
+    deliveredTo?: string;
     listAddress?: string;
     mailboxState?: "active" | "archive" | "spam" | "trash";
     attachments?: { filename: string; contentType: string }[];
@@ -24,6 +25,7 @@ function skip(
   return messageSkipReason({
     headers: parseHeaderBlock(raw(`${headers}\r\n\r\nBody`)),
     envelopeFrom: overrides.envelopeFrom ?? "ana@example.net",
+    deliveredTo: overrides.deliveredTo ?? own,
     ownAddresses: [own, "sales@example.test"],
     listAddress: overrides.listAddress ?? null,
     mailboxState: overrides.mailboxState ?? "active",
@@ -142,10 +144,18 @@ describe("messageSkipReason", () => {
     expect(skip("", { mailboxState: "archive" })).toBeNull();
   });
 
-  it("goes by delivery, not To: only a mailing list's copy is skipped", () => {
-    // Delivered through an alias, a plus address or the catch-all, To names
-    // another address; the reply still goes out.
-    expect(skip("To: sam+shop@example.test")).toBeNull();
+  it("goes by delivery, not To: catch-all mail and list copies are skipped", () => {
+    // Delivered through an alias or a plus address, To may name another
+    // address; the reply still goes out.
+    expect(
+      skip("To: sam+shop@example.test", {
+        deliveredTo: "sales+promo@example.test",
+      })
+    ).toBeNull();
+    // The catch-all's reply would give away the mailbox's own address.
+    expect(skip("", { deliveredTo: "nobody@example.test" })).toBe(
+      "catch-all delivery"
+    );
     expect(skip("", { listAddress: "all@example.test" })).toBe(
       "mailing list copy"
     );
