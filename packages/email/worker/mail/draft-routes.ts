@@ -16,8 +16,8 @@ import {
 import { MAIL_SEND_SCOPE } from "../../shared/permissions";
 import type { StoredImageRef } from "../../shared/rich-content";
 import { mailboxStub } from "../mailbox";
-import type { SaveDraftResult } from "../mailbox";
 import type { Draft, DraftAttachment } from "../mailbox/schema";
+import type { SaveDraftResult } from "../mailbox/support";
 import { accessibleMailbox } from "./access";
 import {
   draftIdSchema,

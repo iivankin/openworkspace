@@ -1,19 +1,12 @@
 import {
   aiObjectRunner,
-  aiFeatureEnabled,
   aiModel,
-  createDb,
   createId,
-  mailboxAccess,
-  mailboxAddressSql,
-  mailboxes,
-  mailDomainAllowed,
   normalizeMailboxAddress,
   deferWebhookTask,
   queueWebhookEvent,
 } from "@open-workspace/core/module";
 import type { AiModel } from "@open-workspace/core/module";
-import { required } from "@open-workspace/core/shared";
 import { DurableObject } from "cloudflare:workers";
 import {
   and,
@@ -26,40 +19,18 @@ import {
   isNull,
   lt,
   lte,
-  ne,
   or,
   sql,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
-import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
-import { z } from "zod";
 
 import migrations from "../../drizzle/mailbox/migrations.js";
-import {
-  DRAFTS_FOLDER_ID,
-  FOLDER_ORDER_STEP,
-  folderOrderPositions,
-  isCompleteFolderOrder,
-  sortFolders,
-} from "../../shared/folder-order";
-import {
-  MAX_CUSTOM_FOLDER_COUNT,
-  mailboxRealtimeUpdate,
-} from "../../shared/mail";
-import type {
-  MailboxPushJob,
-  MailboxRealtimeClientMessage,
-} from "../../shared/mail";
+import { DRAFTS_FOLDER_ID, sortFolders } from "../../shared/folder-order";
+import { mailboxRealtimeUpdate } from "../../shared/mail";
+import type { MailboxPushJob } from "../../shared/mail";
 import { blockPatternsFor } from "../../shared/mail-feedback";
-import type {
-  FeedbackLabel,
-  SenderBlock,
-  Unsubscription,
-} from "../../shared/mail-feedback";
-import { headerValues } from "../../shared/mail-headers";
-import { MAX_IMPORTED_TEXT_CHARACTERS } from "../../shared/mail-import";
-import type { ImportPlacement } from "../../shared/mail-import";
+import type { Unsubscription } from "../../shared/mail-feedback";
 import {
   officePreviewExtension,
   officePreviewKey,
@@ -75,15 +46,6 @@ import {
   MAILBOX_AI_MAX_ATTEMPTS,
 } from "../mail/ai-classification";
 import { keysAwaitingArchive, sendArchived } from "../mail/archive";
-import {
-  AUTO_REPLY_HOURLY_CAP,
-  autoReplyImagePrefix,
-  autoReplyRecipient,
-  autoReplyStatus,
-  buildAutoReply,
-  messageSkipReason,
-  parseHeaderBlock,
-} from "../mail/auto-reply";
 import { classificationSignals } from "../mail/classification-signals";
 import type { ClassificationSignals } from "../mail/classification-signals";
 import { deliveryFacts } from "../mail/delivery-facts";
@@ -92,7 +54,6 @@ import {
   MissingRawMimeError,
   prepareInboundEmail,
   prepareUnprocessableInboundEmail,
-  rawHeaderText,
   rawMessageId,
   readInboundRawMime,
   UnprocessableInboundEmailError,
@@ -103,9 +64,6 @@ import { emailListKey } from "../mail/message-view";
 import { prepareOutboundDelivery } from "../mail/outbound-delivery";
 import { suggestParticipants } from "../mail/participants";
 import type { ParticipantSource } from "../mail/participants";
-import { replyAlias } from "../mail/reply-plan";
-import { inlineImages } from "../mail/rich-content";
-import { evaluateRules, ruleMatches } from "../mail/rules";
 import type { RuleInput, RuleOutcome } from "../mail/rules";
 import { buildEmailSearchQuery } from "../mail/search";
 import { spamhausDqsKey, workspaceIdentity } from "../mail/security-settings";
@@ -116,31 +74,24 @@ import {
   workspaceBlockPatterns,
   workspaceFeedbackSummary,
 } from "../mail/workspace-safety";
-import { indexInsertedEmail, mergeConversation } from "./email-index";
-import {
-  customFolderPredicate,
-  folderAggregateJoinPredicate,
-  systemFolderDefinitions,
-  systemFolderPredicate,
-} from "./folder-model";
-import type { MailboxState, SystemFolderType } from "./folder-model";
+import { indexInsertedEmail } from "./email-index";
+import type { MailboxState } from "./folder-model";
 import { mergedPlacement, requestedPlacement } from "./import-placement";
 import { decideDelivery } from "./inbound-decision";
 import { readInboxCounts, writeInboxCounts } from "./inbox-counts";
 import type { InboxCounts } from "./inbox-counts";
-import {
-  bumpJmapState,
-  changedSince,
-  currentSeq,
+import type {
   jmapChanges as jmapChangeLog,
-  emailPlacement as jmapEmailPlacement,
-  jmapState,
-  mailboxes as jmapMailboxRows,
-  moveEmails as jmapMoveEmails,
   queryAllEmails as queryAllJmapEmails,
   queryEmails as queryJmapEmails,
-  threadEmails as jmapThreadEmails,
 } from "./jmap-store";
+import { bumpJmapState, currentSeq, jmapState } from "./jmap-store";
+import * as autoReplies from "./mailbox-auto-reply";
+import * as mailboxDrafts from "./mailbox-drafts";
+import * as mailboxFolders from "./mailbox-folders";
+import * as mailboxJmap from "./mailbox-jmap";
+import * as mailboxRules from "./mailbox-rules";
+import * as senderSafety from "./mailbox-senders";
 import type {
   EmailAiClassification,
   EmailScreening,
@@ -171,375 +122,81 @@ import {
   pendingInbound,
   pendingObjectDeletions,
   senders,
-  unsubscriptions,
 } from "./schema";
 import type {
   AutoReplySettings,
-  Draft,
   Email,
-  FolderRecord,
-  MailRule,
   NewEmail,
   NewFolder,
   PendingInbound,
 } from "./schema";
 import {
-  blockFromPattern,
-  listBlockedSenders,
   recordCorrespondents,
-  recordSenderFeedback,
   senderFeedbackSummary,
   senderHistory,
   senderStatuses,
   setSenderBlocked,
-  setSenderTrusted,
   workspaceBlockFor,
 } from "./senders";
-
-const schema = {
-  conversations,
-  emailReadStates,
-  emails,
-  folders,
-  mailboxAiConfiguration,
-  mailRules,
-  pendingInbound,
-  pendingObjectDeletions,
-  senders,
-  unsubscriptions,
-};
-
-type MailboxDatabase = DrizzleSqliteDODatabase<typeof schema>;
-
-/** The change counter whose inbox counts D1 has (see `syncInboxCounts`). */
-const COUNTS_VERSION_KEY = "inboxCountsVersion";
-const INBOUND_ALARM_BATCH_SIZE = 1;
-const OBJECT_DELETION_ALARM_BATCH_SIZE = 100;
-const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
-
-/** A raw copy not yet in the mail archive waits for the hourly archive retry. */
-const ARCHIVE_WAIT_MS = 60 * 60 * 1000;
-const MAX_INBOUND_RETRY_AGE_MS = 24 * 60 * 60 * 1000;
-
-/** Attempts a delivery may end without an outcome (alarm killed) before it is stored unparsed. */
-const MAX_UNFINISHED_INBOUND_ATTEMPTS = 3;
-
-const ALARM_WAKE_DELAY_MS = 1000;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export type AutoReplyInput = Omit<
-  AutoReplySettings,
-  "id" | "updatedBy" | "updatedAt"
->;
-
-/** Bounds one emptying or retention pass, so a huge Trash can't hold the object. */
-const RETENTION_BATCH_SIZE = 100;
-
-const PRESENCE_TTL_MS = 60_000;
-const AI_CONFIGURATION_ID = "default";
-
-/** Per person and mailbox; a runaway client can't fill the mailbox's storage. */
-const MAX_DRAFTS_PER_USER = 200;
-
-/** Set while imported mail has not been announced (counts, realtime, JMAP state). */
-const IMPORT_PENDING_KEY = "import:pending";
-
-/** Custom folders imports created, until a restored settings line orders them. */
-const IMPORTED_FOLDERS_KEY = "imported-folders";
-
-/** How long imported mail may wait to be announced when the importer does not finish. */
-const IMPORT_ANNOUNCE_DELAY_MS = 15_000;
-
-/** Browser sessions, authorized against their session on every update. */
-const SESSION_SOCKET_TAG = "session";
-
-/** JMAP EventSource streams held by the Worker; they receive the new state. */
-const JMAP_SOCKET_TAG = "jmap";
-
-/** What a browser session sends: whether its tab is visible. */
-const visibilitySchema = z.enum([
-  "visible",
-  "hidden",
-]) satisfies z.ZodType<MailboxRealtimeClientMessage>;
-
-/** Who a session socket belongs to; it survives hibernation with the socket. */
-const socketAttachmentSchema = z.object({
-  userId: z.string(),
-  sessionId: z.string(),
-  sessionTokenHash: z.string(),
-  visibility: visibilitySchema,
-  presenceUpdatedAt: z.number(),
-});
-
-type MailboxSocketAttachment = z.output<typeof socketAttachmentSchema>;
-
-/** A session socket's attachment; null for other sockets (JMAP streams carry none). */
-function socketAttachment(socket: WebSocket): MailboxSocketAttachment | null {
-  const attachment = socketAttachmentSchema.safeParse(
-    socket.deserializeAttachment()
-  );
-
-  return attachment.success ? attachment.data : null;
-}
-
-function errorMessage(cause: unknown) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-function retryDelay(attempts: number) {
-  return Math.min(
-    MAX_RETRY_DELAY_MS,
-    5000 * 2 ** Math.min(Math.max(attempts - 1, 0), 10)
-  );
-}
-
-/**
- * The folder a conversation is listed in, as the app names it: its custom
- * folder or Inbox while active, else Archive, Spam or Trash.
- */
-function conversationFolder(place: {
-  mailboxState: MailboxState;
-  folderId: string | null;
-}) {
-  if (place.mailboxState !== "active") return place.mailboxState;
-
-  return place.folderId ?? "inbox";
-}
-
-/** Whether a delivery has been retried for as long as it may be. */
-function isPastRetryAge(job: PendingInbound, now: number) {
-  return now - job.receivedAt.getTime() >= MAX_INBOUND_RETRY_AGE_MS;
-}
-
-function stringListJson(values: string[]) {
-  return JSON.stringify([...new Set(values)]);
-}
-
-export type DraftInput = Omit<Draft, "userId" | "version" | "updatedAt">;
-
-/** A mailbox's settings in a backup: `backupSettings()` less its drafts. */
-export type MailboxBackupSettings = Omit<
-  ReturnType<MailboxDO["backupSettings"]>,
-  "drafts"
->;
-
-export type SaveDraftResult =
-  | { status: "saved"; draft: Draft }
-  | { status: "conflict"; draft: Draft | null }
-  | { status: "limit" };
-
-export type ConversationUpdate = {
-  mailboxState?: MailboxState;
-  folderId?: string | null;
-};
-
-export type ConversationCursorPosition = {
-  timelineAt: number;
-  emailId: string;
-};
-
-export type ConversationListItem = {
-  email: Email;
-  messageCount: number;
-  unreadCount: number;
-  hasIncoming: boolean;
-  /** The person has a reply draft in this conversation. */
-  hasDraft: boolean;
-};
-
-/** A page of a folder's list: conversations, or in Drafts the person's drafts. */
-export type ConversationPage = {
-  items: ConversationListItem[];
-  drafts: Draft[];
-  next: ConversationCursorPosition | null;
-  version: number;
-};
-
-export type SubmitOutgoingResult = {
-  outcome: "inserted" | "existing" | "conflict";
-  email: Email;
-};
-
-export type InboundDeliveryInput = {
-  id: string;
-  mailboxId: string;
-  rawObjectKey: string;
-  envelopeFrom: string;
-  envelopeTo: string;
-  /** Set when this is a member's copy of mail to a workspace mailing list. */
-  listAddress?: string;
-  receivedAt: number;
-};
-
-export type ImportMessageInput = {
-  /** The import's delivery id: the message is stored as `inboundMessageId(importId)`. */
-  importId: string;
-  /** Where the route stored the raw message. */
-  rawObjectKey: string;
-  /** The mailbox's own address, which tells sent mail from received. */
-  mailboxAddress: string;
-  /** When the message was received; the Date header (then now) without one. */
-  receivedAt: number | null;
-  placement: ImportPlacement;
-  /** A custom folder (by name, created when missing) for a message in the Inbox. */
-  folderName: string | null;
-  /** The people a received message is read for. */
-  seenBy: string[];
-  /** The conversation the importer's thread key names; null threads by Message-ID headers. */
-  conversationId: string | null;
-  /** Null decides by the From address. */
-  direction: "incoming" | "outgoing" | null;
-};
-
-export type ImportMessageResult =
-  | {
-      status: "imported";
-      id: string;
-      conversationId: string;
-      /** Why the requested folder was not used, if it was not. */
-      folderSkipped: "limit" | "invalid" | null;
-    }
-  | { status: "duplicate"; id: string; conversationId: string }
-  | { status: "unprocessable"; reason: string };
-
-function clampText(value: string | null | undefined) {
-  return value && value.length > MAX_IMPORTED_TEXT_CHARACTERS
-    ? value.slice(0, MAX_IMPORTED_TEXT_CHARACTERS)
-    : (value ?? null);
-}
-
-/** The Date header of a raw message, in ms, if it parses. */
-function headerDate(rawMime: ArrayBuffer) {
-  const value = headerValues(rawHeaderText(rawMime), "date")[0];
-  const time = value ? Date.parse(value) : Number.NaN;
-
-  return Number.isFinite(time) ? time : null;
-}
-
-export type FolderListItem = {
-  id: string;
-  name: string;
-  kind: "system" | "custom";
-  systemType: SystemFolderType | typeof DRAFTS_FOLDER_ID | null;
-  sortOrder: number;
-  totalCount: number;
-  unreadCount: number;
-};
-
-type MailFolder =
-  | (FolderRecord & { kind: "custom"; systemType: null })
-  | {
-      id: string;
-      name: string;
-      kind: "system";
-      systemType: SystemFolderType;
-      sortOrder: number;
-    };
-
-type ConversationRow = {
-  email_id: string;
-  timeline_at: number;
-  message_count: number;
-  unread_count: number;
-  has_incoming: number;
-};
-
-type ConversationSnapshotCountRow = {
-  message_count: number;
-  unread_count: number;
-};
-
-type FolderCountRow = {
-  total_count: number;
-  unread_count: number;
-};
-
-type FolderListRow = {
-  id: string;
-  name: string;
-  kind: "system" | "custom";
-  system_type: SystemFolderType | null;
-  sort_order: number;
-  total_count: number;
-  unread_count: number;
-};
-
-export type FolderCounts = {
-  totalCount: number;
-  unreadCount: number;
-};
-
-function folderMembership(folder: MailFolder) {
-  if (folder.kind === "custom") {
-    return {
-      predicate: `
-        c.folder_id = ?
-        and ${customFolderPredicate("c")}
-      `,
-      bindings: [folder.id],
-    };
-  }
-
-  return {
-    predicate: systemFolderPredicate(folder.systemType, "c"),
-    bindings: [],
-  };
-}
-
-const FOLDER_AGGREGATE_JOIN_PREDICATE = folderAggregateJoinPredicate(
-  "folder",
-  "conversation"
-);
-
-export type TransportUpdate = {
-  state: Email["transportState"];
-  messageIdHeader?: string;
-  error?: string | null;
-};
-
-const MAX_RULES = 100;
-const RULE_TEST_SCAN = 500;
-
-function ruleView(rule: MailRule) {
-  return {
-    id: rule.id,
-    name: rule.name,
-    enabled: rule.enabled,
-    match: rule.match,
-    conditions: rule.conditionsJson,
-    actions: rule.actionsJson,
-    stopProcessing: rule.stopProcessing,
-    updatedAt: rule.updatedAt.getTime(),
-  };
-}
-
-type InboundScreening = {
-  block: SenderBlock | null;
-  trusted: boolean;
-};
-
-const LIKE_ESCAPE = (value: string) =>
-  value.replaceAll(/[\\%_]/gu, (char) => `\\${char}`);
-
-/** SQL predicate on a lowercased address expression for a block pattern. */
-function blockPatternPredicate(expression: string, pattern: string) {
-  if (!pattern.startsWith("@")) {
-    return { sql: `${expression} = ?`, bindings: [pattern] };
-  }
-
-  const domain = LIKE_ESCAPE(pattern.slice(1));
-
-  return {
-    sql: `(${expression} like ? escape '\\' or ${expression} like ? escape '\\')`,
-    bindings: [`%@${domain}`, `%.${domain}`],
-  };
-}
+import type {
+  AutoReplyInput,
+  ConversationCursorPosition,
+  ConversationListItem,
+  ConversationPage,
+  ConversationRow,
+  ConversationSnapshotCountRow,
+  ConversationUpdate,
+  DraftInput,
+  FolderCountRow,
+  FolderCounts,
+  FolderListItem,
+  FolderListRow,
+  ImportMessageInput,
+  ImportMessageResult,
+  InboundDeliveryInput,
+  InboundScreening,
+  MailFolder,
+  MailboxBackupSettings,
+  MailboxDatabase,
+  MailboxSocketAttachment,
+  SaveDraftResult,
+  SubmitOutgoingResult,
+  TransportUpdate,
+  MailboxContext,
+} from "./support";
+import {
+  ALARM_WAKE_DELAY_MS,
+  ARCHIVE_WAIT_MS,
+  COUNTS_VERSION_KEY,
+  FOLDER_AGGREGATE_JOIN_PREDICATE,
+  IMPORTED_FOLDERS_KEY,
+  IMPORT_ANNOUNCE_DELAY_MS,
+  IMPORT_PENDING_KEY,
+  INBOUND_ALARM_BATCH_SIZE,
+  JMAP_SOCKET_TAG,
+  MAX_RULES,
+  MAX_UNFINISHED_INBOUND_ATTEMPTS,
+  OBJECT_DELETION_ALARM_BATCH_SIZE,
+  PRESENCE_TTL_MS,
+  RETENTION_BATCH_SIZE,
+  SESSION_SOCKET_TAG,
+  clampText,
+  errorMessage,
+  folderMembership,
+  headerDate,
+  isPastRetryAge,
+  retryDelay,
+  schema,
+  socketAttachment,
+  stringListJson,
+  visibilitySchema,
+} from "./support";
 
 export class MailboxDO extends DurableObject<Env> {
   private readonly db: MailboxDatabase;
   private readonly state: DurableObjectState;
   private readonly bindings: Env;
+  private readonly context: MailboxContext;
   private recentParticipantSources: ParticipantSource[] | null = null;
   /** The running D1 write of the inbox counts; see `syncInboxCounts`. */
   private countsWrite: Promise<void> | null = null;
@@ -559,6 +216,21 @@ export class MailboxDO extends DurableObject<Env> {
     this.state = ctx;
     this.bindings = env;
     this.db = drizzle(ctx.storage, { schema });
+    this.context = {
+      db: this.db,
+      state: ctx,
+      env,
+      publishUpdate: () => this.publishUpdate(),
+      announceJmapState: (push) => this.announceJmapState(push),
+      scheduleAlarm: (at) => this.scheduleAlarm(at),
+      scheduleRetention: () => this.scheduleRetention(),
+      getEmail: (id) => this.getEmail(id),
+      resolveParent: (inReplyTo, references) =>
+        this.resolveParent(inReplyTo, references),
+      forgetParticipants: () => {
+        this.recentParticipantSources = null;
+      },
+    };
     ctx.blockConcurrencyWhile(async () => {
       await migrate(this.db, migrations);
 
@@ -994,7 +666,9 @@ export class MailboxDO extends DurableObject<Env> {
             ? readInboundRawMime(this.bindings, job)
             : Promise.resolve(autoReply)
         )
-          .then((rawMime) => this.maybeAutoReply(job, email, rawMime))
+          .then((rawMime) =>
+            autoReplies.maybeAutoReply(this.context, job, email, rawMime)
+          )
           .catch((error) => {
             console.error(`Auto-reply check failed for ${email.id}`, error);
           });
@@ -1017,13 +691,16 @@ export class MailboxDO extends DurableObject<Env> {
     if (folderId === DRAFTS_FOLDER_ID) {
       return {
         items: [],
-        drafts: cursor || unreadOnly ? [] : this.searchDrafts(userId, search),
+        drafts:
+          cursor || unreadOnly
+            ? []
+            : mailboxDrafts.searchDrafts(this.context, userId, search),
         next: null,
         version: this.version(),
       };
     }
 
-    const folder = this.getFolder(folderId);
+    const folder = mailboxFolders.getFolder(this.context, folderId);
 
     if (!folder) return null;
     const membership = folderMembership(folder);
@@ -1164,837 +841,123 @@ export class MailboxDO extends DurableObject<Env> {
     };
   }
 
-  /** The system folders at their places in the mailbox's folder order. */
-  private systemFolders() {
-    const stored = new Map(
-      this.db
-        .select()
-        .from(systemFolderOrder)
-        .all()
-        .map((row) => [row.folderId, row.sortOrder])
-    );
-
-    return systemFolderDefinitions.map((folder) => ({
-      ...folder,
-      sortOrder:
-        folder.id === "inbox" ? 0 : (stored.get(folder.id) ?? folder.sortOrder),
-    }));
-  }
-
   getFolder(id: string): MailFolder | null {
-    const system = this.systemFolders().find((folder) => folder.id === id);
-
-    if (system) {
-      return {
-        ...system,
-        kind: "system",
-      };
-    }
-
-    const custom = this.db
-      .select()
-      .from(folders)
-      .where(eq(folders.id, id))
-      .all()[0];
-
-    return custom ? { ...custom, kind: "custom", systemType: null } : null;
-  }
-
-  private folderNameTaken(name: string, excludingId?: string) {
-    const normalized = name.toLocaleLowerCase("en-US");
-
-    return (
-      normalized === DRAFTS_FOLDER_ID ||
-      systemFolderDefinitions.some(
-        (folder) => folder.name.toLocaleLowerCase("en-US") === normalized
-      ) ||
-      this.db
-        .select({ id: folders.id, name: folders.name })
-        .from(folders)
-        .all()
-        .some(
-          (folder) =>
-            folder.id !== excludingId &&
-            folder.name.toLocaleLowerCase("en-US") === normalized
-        )
-    );
+    return mailboxFolders.getFolder(this.context, id);
   }
 
   createFolder(id: string, name: string) {
-    const result = this.insertFolder(id, name);
-
-    if (result.status === "ok") this.publishUpdate();
-
-    return result;
-  }
-
-  private insertFolder(id: string, name: string) {
-    const normalizedName = name.trim();
-
-    if (!normalizedName || normalizedName.length > 80) {
-      return { status: "invalid" as const };
-    }
-
-    const existing = this.db
-      .select({ id: folders.id, sortOrder: folders.sortOrder })
-      .from(folders)
-      .all();
-
-    if (existing.length >= MAX_CUSTOM_FOLDER_COUNT) {
-      return { status: "limit" as const };
-    }
-
-    if (this.folderNameTaken(normalizedName)) {
-      return { status: "conflict" as const };
-    }
-
-    // A new folder goes to the end of the whole order, system folders included.
-    const last = Math.max(
-      ...existing.map((item) => item.sortOrder),
-      ...this.systemFolders().map((item) => item.sortOrder)
-    );
-
-    const folder = this.db
-      .insert(folders)
-      .values({ id, name: normalizedName, sortOrder: last + FOLDER_ORDER_STEP })
-      .returning()
-      .get();
-
-    return { status: "ok" as const, folder };
+    return mailboxFolders.createFolder(this.context, id, name);
   }
 
   renameFolder(id: string, name: string) {
-    const normalizedName = name.trim();
-
-    if (!normalizedName || normalizedName.length > 80) {
-      return { status: "invalid" as const };
-    }
-
-    if (
-      !this.getFolder(id) ||
-      systemFolderDefinitions.some((item) => item.id === id)
-    ) {
-      return { status: "not_found" as const };
-    }
-
-    if (this.folderNameTaken(normalizedName, id)) {
-      return { status: "conflict" as const };
-    }
-
-    const [folder] = this.db
-      .update(folders)
-      .set({ name: normalizedName })
-      .where(eq(folders.id, id))
-      .returning()
-      .all();
-
-    if (!folder) return { status: "not_found" as const };
-    this.publishUpdate();
-
-    return { status: "ok" as const, folder };
+    return mailboxFolders.renameFolder(this.context, id, name);
   }
 
   deleteFolder(id: string) {
-    const deleted = this.db
-      .delete(folders)
-      .where(eq(folders.id, id))
-      .returning({ id: folders.id })
-      .all()[0];
-
-    if (!deleted) return { status: "not_found" as const };
-    this.publishUpdate();
-
-    return { status: "ok" as const };
+    return mailboxFolders.deleteFolder(this.context, id);
   }
 
-  /**
-   * Sets the one order of every folder but Inbox: each system folder and
-   * custom folder exactly once, so system folders can sit among custom ones.
-   */
   reorderFolders(folderIds: string[]) {
-    const customIds = this.db
-      .select({ id: folders.id })
-      .from(folders)
-      .all()
-      .map((folder) => folder.id);
-
-    if (!isCompleteFolderOrder(folderIds, customIds)) {
-      return { status: "conflict" as const };
-    }
-
-    const custom = new Set(customIds);
-    this.db.transaction((tx) => {
-      for (const { id, sortOrder } of folderOrderPositions(folderIds)) {
-        if (custom.has(id)) {
-          tx.update(folders).set({ sortOrder }).where(eq(folders.id, id)).run();
-        } else {
-          tx.insert(systemFolderOrder)
-            .values({ folderId: id, sortOrder })
-            .onConflictDoUpdate({
-              target: systemFolderOrder.folderId,
-              set: { sortOrder },
-            })
-            .run();
-        }
-      }
-    });
-    this.publishUpdate();
-
-    return { status: "ok" as const };
+    return mailboxFolders.reorderFolders(this.context, folderIds);
   }
 
-  private aiConfiguration(): MailboxAiConfiguration {
-    const stored = this.db
-      .select()
-      .from(mailboxAiConfiguration)
-      .where(eq(mailboxAiConfiguration.id, AI_CONFIGURATION_ID))
-      .all()[0];
-
-    return stored
-      ? {
-          instructions: stored.instructions,
-          confidenceThreshold: stored.confidenceThreshold,
-        }
-      : {
-          instructions: "",
-          confidenceThreshold: 75,
-        };
-  }
-
-  /** `folderDeleted`: a "Move to folder" action whose folder is gone, so it files nothing. */
   listRules() {
-    const custom = new Set(
-      this.db
-        .select({ id: folders.id })
-        .from(folders)
-        .all()
-        .map((folder) => folder.id)
-    );
-
-    return this.db
-      .select()
-      .from(mailRules)
-      .orderBy(asc(mailRules.position))
-      .all()
-      .map((rule) => ({
-        ...ruleView(rule),
-        folderDeleted: rule.actionsJson.some(
-          (action) =>
-            action.type === "moveToFolder" && !custom.has(action.folderId)
-        ),
-      }));
-  }
-
-  /**
-   * A "Move to folder" action needs a custom folder that exists, unless the
-   * rule already had it: a rule whose folder was deleted can still be
-   * renamed or switched off.
-   */
-  private ruleFolderError(input: RuleInput, kept: readonly string[] = []) {
-    return input.actions.some(
-      (action) =>
-        action.type === "moveToFolder" &&
-        !kept.includes(action.folderId) &&
-        this.getFolder(action.folderId)?.kind !== "custom"
-    )
-      ? "Move to folder needs an existing custom folder"
-      : null;
+    return mailboxRules.listRules(this.context);
   }
 
   createRule(input: RuleInput) {
-    const error = this.ruleFolderError(input);
-
-    if (error) return { status: "invalid" as const, error };
-
-    const existing = this.db
-      .select({ position: mailRules.position })
-      .from(mailRules)
-      .all();
-
-    if (existing.length >= MAX_RULES) return { status: "limit" as const };
-
-    const rule: MailRule = {
-      id: createId("rule"),
-      position: Math.max(0, ...existing.map((row) => row.position)) + 1,
-      name: input.name,
-      enabled: input.enabled,
-      match: input.match,
-      conditionsJson: input.conditions,
-      actionsJson: input.actions,
-      stopProcessing: input.stopProcessing,
-      updatedAt: new Date(),
-    };
-
-    this.db.insert(mailRules).values(rule).run();
-
-    return { status: "ok" as const, rule: ruleView(rule) };
+    return mailboxRules.createRule(this.context, input);
   }
 
   updateRule(id: string, input: RuleInput) {
-    const stored = this.db
-      .select({ actions: mailRules.actionsJson })
-      .from(mailRules)
-      .where(eq(mailRules.id, id))
-      .all()[0];
-
-    if (!stored) return { status: "not_found" as const };
-
-    const error = this.ruleFolderError(
-      input,
-      stored.actions.flatMap((action) =>
-        action.type === "moveToFolder" ? [action.folderId] : []
-      )
-    );
-
-    if (error) return { status: "invalid" as const, error };
-
-    const [updated] = this.db
-      .update(mailRules)
-      .set({
-        name: input.name,
-        enabled: input.enabled,
-        match: input.match,
-        conditionsJson: input.conditions,
-        actionsJson: input.actions,
-        stopProcessing: input.stopProcessing,
-        updatedAt: new Date(),
-      })
-      .where(eq(mailRules.id, id))
-      .returning()
-      .all();
-
-    if (!updated) return { status: "not_found" as const };
-
-    return { status: "ok" as const, rule: ruleView(updated) };
+    return mailboxRules.updateRule(this.context, id, input);
   }
 
   deleteRule(id: string) {
-    return (
-      this.db
-        .delete(mailRules)
-        .where(eq(mailRules.id, id))
-        .returning({ id: mailRules.id })
-        .all().length > 0
-    );
+    return mailboxRules.deleteRule(this.context, id);
   }
 
   reorderRules(ruleIds: string[]) {
-    const current = this.db.select({ id: mailRules.id }).from(mailRules).all();
-
-    if (
-      current.length !== ruleIds.length ||
-      new Set(ruleIds).size !== ruleIds.length ||
-      !current.every((row) => ruleIds.includes(row.id))
-    ) {
-      return false;
-    }
-
-    this.db.transaction((tx) => {
-      for (const [index, id] of ruleIds.entries()) {
-        tx.update(mailRules)
-          .set({ position: index + 1 })
-          .where(eq(mailRules.id, id))
-          .run();
-      }
-    });
-
-    return true;
+    return mailboxRules.reorderRules(this.context, ruleIds);
   }
 
-  /** How many of the latest incoming messages the conditions match; changes nothing. */
   testRule(rule: Pick<RuleInput, "match" | "conditions">) {
-    const recent = this.db
-      .select()
-      .from(emails)
-      .where(eq(emails.direction, "incoming"))
-      .orderBy(desc(emails.timelineAt))
-      .limit(RULE_TEST_SCAN)
-      .all();
-
-    const matches = recent.filter((email) => ruleMatches(rule, email));
-
-    return {
-      scanned: recent.length,
-      matches: matches.length,
-      sample: matches.slice(0, 5).map((email) => ({
-        id: email.id,
-        conversationId: email.conversationId,
-        subject: email.subject,
-        from: email.fromJson[0]?.address ?? null,
-        timelineAt: email.timelineAt.getTime(),
-      })),
-    };
-  }
-
-  /** The rules' verdict on a live delivery, or null when none matches. */
-  private inboundRules(email: NewEmail, jobId: string): RuleOutcome | null {
-    let outcome: RuleOutcome;
-
-    try {
-      outcome = evaluateRules(
-        this.db
-          .select()
-          .from(mailRules)
-          .where(eq(mailRules.enabled, true))
-          .orderBy(asc(mailRules.position))
-          .all()
-          .map(ruleView),
-        {
-          fromJson: email.fromJson ?? [],
-          toJson: email.toJson ?? [],
-          ccJson: email.ccJson ?? [],
-          envelopeTo: email.envelopeTo ?? null,
-          subject: email.subject ?? "",
-          listId: email.listId ?? null,
-          attachmentsJson: email.attachmentsJson ?? [],
-        }
-      );
-    } catch (error) {
-      // A broken rule never holds up the delivery.
-      console.error(`Rules failed for inbound delivery ${jobId}`, error);
-
-      return null;
-    }
-
-    return outcome.matchedRuleIds.length ? outcome : null;
-  }
-
-  /** Everyone with access to the mailbox: whom "Mark read" marks mail read for. */
-  private async mailboxReaders() {
-    const members = await createDb(this.bindings.DB)
-      .select({ userId: mailboxAccess.userId })
-      .from(mailboxAccess)
-      .where(eq(mailboxAccess.mailboxId, this.state.id.name ?? ""));
-
-    return members.map((member) => member.userId);
+    return mailboxRules.testRule(this.context, rule);
   }
 
   getMailboxAiSettings() {
-    return {
-      configuration: this.aiConfiguration(),
-      globalEnabled: aiFeatureEnabled("classification"),
-    };
+    return mailboxRules.getMailboxAiSettings(this.context);
   }
 
   setMailboxAiConfiguration(configuration: MailboxAiConfiguration) {
-    if (
-      configuration.confidenceThreshold < 50 ||
-      configuration.confidenceThreshold > 100 ||
-      configuration.instructions.length > 4000
-    ) {
-      throw new Error("Invalid mailbox AI configuration");
-    }
-
-    this.db
-      .insert(mailboxAiConfiguration)
-      .values({
-        id: AI_CONFIGURATION_ID,
-        instructions: configuration.instructions.trim(),
-        confidenceThreshold: configuration.confidenceThreshold,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: mailboxAiConfiguration.id,
-        set: {
-          instructions: configuration.instructions.trim(),
-          confidenceThreshold: configuration.confidenceThreshold,
-          updatedAt: new Date(),
-        },
-      })
-      .run();
-
-    return this.getMailboxAiSettings();
+    return mailboxRules.setMailboxAiConfiguration(this.context, configuration);
   }
 
-  /** The person's drafts in this mailbox, newest first. */
   listDrafts(userId: string) {
-    return this.db
-      .select()
-      .from(drafts)
-      .where(eq(drafts.userId, userId))
-      .orderBy(desc(drafts.updatedAt))
-      .all();
-  }
-
-  /**
-   * The Drafts folder: the person's drafts, newest first, those whose
-   * recipients, subject or text hold `search` when given. One page: there
-   * are at most MAX_DRAFTS_PER_USER.
-   */
-  private searchDrafts(userId: string, search: string | undefined) {
-    const needle = search?.trim().toLocaleLowerCase("en-US");
-
-    return this.listDrafts(userId).filter(
-      (draft) =>
-        !needle ||
-        [...draft.to, ...draft.cc, draft.subject, draft.bodyText].some(
-          (value) => value.toLocaleLowerCase("en-US").includes(needle)
-        )
-    );
+    return mailboxDrafts.listDrafts(this.context, userId);
   }
 
   getDraft(userId: string, id: string) {
-    return (
-      this.db
-        .select()
-        .from(drafts)
-        .where(and(eq(drafts.userId, userId), eq(drafts.id, id)))
-        .get() ?? null
-    );
+    return mailboxDrafts.getDraft(this.context, userId, id);
   }
 
-  /**
-   * Saves a draft if it is still at `expectedVersion` (0 for a new one). The
-   * check and the write run without an await between them, so they can't
-   * interleave with another save. A conversation has one reply box, so a
-   * reply draft replaces the person's other reply drafts in its
-   * conversation. `copiedKeys` are files copied for this save; those the
-   * stored draft doesn't hold afterwards (a conflict, the cap), and the files
-   * the save dropped or the replaced drafts held, are queued for deletion.
-   */
-  async saveDraft(
+  saveDraft(
     userId: string,
     input: DraftInput,
     expectedVersion: number,
     copiedKeys: string[] = []
   ): Promise<SaveDraftResult> {
-    const current = this.getDraft(userId, input.id);
-    const result = this.writeDraft(userId, input, expectedVersion, current);
-    const kept = result.status === "saved" ? result.draft : current;
-    const keptKeys = new Set(kept?.attachments.map((file) => file.r2Key));
-
-    const replaced =
-      result.status === "saved" && input.kind === "reply"
-        ? this.db
-            .delete(drafts)
-            .where(
-              and(
-                eq(drafts.userId, userId),
-                eq(drafts.kind, "reply"),
-                eq(drafts.conversationId, input.conversationId ?? ""),
-                ne(drafts.id, input.id)
-              )
-            )
-            .returning({ attachments: drafts.attachments })
-            .all()
-        : [];
-
-    await this.forgetDraftFiles(
-      [
-        ...copiedKeys,
-        ...(current?.attachments.map((file) => file.r2Key) ?? []),
-        ...replaced.flatMap((draft) =>
-          draft.attachments.map((file) => file.r2Key)
-        ),
-      ].filter((key) => !keptKeys.has(key))
-    );
-
-    if (result.status === "saved") {
-      this.announceDrafts(!current || replaced.length > 0);
-    }
-
-    return result;
-  }
-
-  /**
-   * Tells clients the drafts changed. A new or deleted draft changes the
-   * Drafts count and list, so web clients refresh; an autosave only tells
-   * JMAP streams, without a push to phones every few seconds.
-   */
-  private announceDrafts(listChanged: boolean) {
-    if (listChanged) {
-      this.publishUpdate();
-
-      return;
-    }
-
-    bumpJmapState(this.state.storage);
-    this.announceJmapState(false);
-  }
-
-  private writeDraft(
-    userId: string,
-    input: DraftInput,
-    expectedVersion: number,
-    current: Draft | null
-  ): SaveDraftResult {
-    if ((current?.version ?? 0) !== expectedVersion) {
-      return { status: "conflict", draft: current };
-    }
-
-    if (!current) {
-      const [count] = this.db
-        .select({ value: sql<number>`count(*)` })
-        .from(drafts)
-        .where(eq(drafts.userId, userId))
-        .all();
-
-      if ((count?.value ?? 0) >= MAX_DRAFTS_PER_USER) {
-        return { status: "limit" };
-      }
-    }
-
-    const draft: Draft = {
-      ...input,
+    return mailboxDrafts.saveDraft(
+      this.context,
       userId,
-      version: expectedVersion + 1,
-      updatedAt: new Date(),
-    };
-
-    this.db
-      .insert(drafts)
-      .values(draft)
-      .onConflictDoUpdate({ target: [drafts.userId, drafts.id], set: draft })
-      .run();
-
-    return { status: "saved", draft };
-  }
-
-  /** Whether the person had a draft with this id; its files are queued for deletion. */
-  async deleteDraft(userId: string, id: string) {
-    const [deleted] = this.db
-      .delete(drafts)
-      .where(and(eq(drafts.userId, userId), eq(drafts.id, id)))
-      .returning({ attachments: drafts.attachments })
-      .all();
-
-    await this.forgetDraftFiles(
-      deleted?.attachments.map((file) => file.r2Key) ?? []
+      input,
+      expectedVersion,
+      copiedKeys
     );
-
-    if (deleted) this.announceDrafts(true);
-
-    return Boolean(deleted);
   }
 
-  /**
-   * Queues draft files for deletion. The queue skips a key some draft still
-   * holds, so a save racing this one can't lose its file.
-   */
-  async forgetDraftFiles(objectKeys: string[]) {
-    await this.forgetObjects(objectKeys);
+  deleteDraft(userId: string, id: string) {
+    return mailboxDrafts.deleteDraft(this.context, userId, id);
   }
 
-  /**
-   * Queues this mailbox's objects for deletion. The queue skips a key a
-   * message or draft still holds, and one the archive doesn't have yet.
-   */
-  private async forgetObjects(objectKeys: string[]) {
-    const mailboxId = this.state.id.name ?? "";
-
-    const owned = objectKeys.filter((key) => mailboxOwnsObject(mailboxId, key));
-
-    if (!owned.length) return;
-    const cleanupAt = new Date();
-
-    for (const objectKey of new Set(owned)) {
-      this.db
-        .insert(pendingObjectDeletions)
-        .values({ objectKey, nextAttemptAt: cleanupAt })
-        .onConflictDoNothing()
-        .run();
-    }
-
-    await this.scheduleAlarm(cleanupAt.getTime() + ALARM_WAKE_DELAY_MS);
+  forgetDraftFiles(objectKeys: string[]) {
+    return mailboxDrafts.forgetDraftFiles(this.context, objectKeys);
   }
 
   jmapState() {
-    return jmapState(this.state.storage);
+    return mailboxJmap.jmapState(this.context);
   }
 
-  /** Foo/changes for this person (jmap-store.ts); null: resync instead. */
   jmapChanges(input: Parameters<typeof jmapChangeLog>[1]) {
-    const changes = jmapChangeLog(this.state.storage.sql, input);
-
-    if (!changes || input.type !== "Mailbox" || !changes.emailsChanged) {
-      return changes;
-    }
-
-    // Mail changed, so any mailbox's counts may have: all of them updated.
-    const all = jmapMailboxRows(this.state.storage.sql, input.userId).map(
-      (row) => row.id
-    );
-
-    return {
-      ...changes,
-      updated: all.filter(
-        (id) => !changes.created.includes(id) && !changes.destroyed.includes(id)
-      ),
-    };
+    return mailboxJmap.jmapChanges(this.context, input);
   }
 
   jmapMailboxes(userId: string) {
-    return {
-      state: jmapState(this.state.storage),
-      mailboxes: jmapMailboxRows(this.state.storage.sql, userId),
-    };
+    return mailboxJmap.jmapMailboxes(this.context, userId);
   }
 
   jmapQueryEmails(input: Parameters<typeof queryJmapEmails>[1]) {
-    // The drafts mailbox lists the person's drafts, newest first; its
-    // other conditions are not applied.
-    if (input.filter.inMailbox === DRAFTS_FOLDER_ID) {
-      const ids = this.listDrafts(input.userId).map((draft) => draft.id);
-
-      if (input.ascending) ids.reverse();
-
-      return {
-        state: jmapState(this.state.storage),
-        ids: ids.slice(input.position, input.position + input.limit),
-        total: ids.length,
-      };
-    }
-
-    return {
-      state: jmapState(this.state.storage),
-      ...queryJmapEmails(this.state.storage.sql, input),
-    };
+    return mailboxJmap.jmapQueryEmails(this.context, input);
   }
 
-  /**
-   * Email/queryChanges (RFC 8620 §5.6): every email that changed since the
-   * state is removed and, where the query lists it now, added back at its
-   * index. Emails that didn't change can't have joined, left or moved in
-   * the list, so this turns the old list into the current one. With
-   * collapseThreads a changed email can change its thread's representative,
-   * so every email of a changed thread counts as changed. Null: resync.
-   */
   jmapQueryChanges(
     input: Parameters<typeof queryAllJmapEmails>[1] & {
       sinceQueryState: string;
     }
   ) {
-    const store = this.state.storage.sql;
-
-    const changed = changedSince(
-      store,
-      "Email",
-      input.sinceQueryState,
-      input.userId
-    );
-
-    if (!changed) return null;
-    const removed = new Set(changed);
-    const threads = new Set<string>();
-
-    if (input.collapseThreads && input.filter.inMailbox !== DRAFTS_FOLDER_ID) {
-      for (const id of changedSince(
-        store,
-        "Thread",
-        input.sinceQueryState,
-        input.userId
-      ) ?? []) {
-        threads.add(id);
-      }
-
-      for (const row of this.db
-        .select({ conversationId: emails.conversationId })
-        .from(emails)
-        .where(inArray(emails.id, [...changed]))
-        .all()) {
-        threads.add(row.conversationId);
-      }
-
-      for (const row of this.db
-        .select({ id: emails.id })
-        .from(emails)
-        .where(inArray(emails.conversationId, [...threads]))
-        .all()) {
-        removed.add(row.id);
-      }
-    }
-
-    const listed =
-      input.filter.inMailbox === DRAFTS_FOLDER_ID
-        ? this.listDrafts(input.userId).map((draft) => ({
-            id: draft.id,
-            conversation_id: "",
-          }))
-        : queryAllJmapEmails(store, input);
-
-    if (input.filter.inMailbox === DRAFTS_FOLDER_ID && input.ascending) {
-      listed.reverse();
-    }
-
-    const added = listed.flatMap((row, index) =>
-      removed.has(row.id) || threads.has(row.conversation_id)
-        ? [{ id: row.id, index }]
-        : []
-    );
-
-    for (const { id } of added) removed.add(id);
-
-    return {
-      state: jmapState(this.state.storage),
-      removed: [...removed],
-      added,
-      total: listed.length,
-    };
+    return mailboxJmap.jmapQueryChanges(this.context, input);
   }
 
-  /**
-   * Emails with their JMAP Mailbox and this user's $seen keyword, and the
-   * person's drafts among `ids`; unknown ids are left out.
-   */
   jmapEmails(userId: string, ids: string[]) {
-    const placement = jmapEmailPlacement(this.state.storage.sql, userId, ids);
-    const draftIds = ids.filter((id) => id.startsWith("drf_"));
-
-    return {
-      state: jmapState(this.state.storage),
-      emails: ids.flatMap((id) => {
-        const email = this.getEmail(id);
-        const place = placement.get(id);
-
-        return email && place ? [{ email, ...place }] : [];
-      }),
-      drafts: draftIds.length
-        ? this.db
-            .select()
-            .from(drafts)
-            .where(and(eq(drafts.userId, userId), inArray(drafts.id, draftIds)))
-            .all()
-        : [],
-    };
+    return mailboxJmap.jmapEmails(this.context, userId, ids);
   }
 
   jmapThreads(ids: string[]) {
-    return {
-      state: jmapState(this.state.storage),
-      threads: [...jmapThreadEmails(this.state.storage.sql, ids)].map(
-        ([id, emailIds]) => ({ id, emailIds })
-      ),
-    };
+    return mailboxJmap.jmapThreads(this.context, ids);
   }
 
   jmapMoveEmails(emailIds: string[], target: string) {
-    const moved = this.db.transaction(() => {
-      const known = jmapMoveEmails(this.state.storage.sql, emailIds, target);
-
-      if (known) {
-        // Mail kept out of a conversation as spam rejoins it once moved out of Junk.
-        this.rejoinSplitConversations(
-          this.db
-            .selectDistinct({ id: emails.conversationId })
-            .from(emails)
-            .where(
-              sql`${emails.id} in (select cast(value as text) from json_each(${stringListJson(emailIds)}))`
-            )
-            .all()
-            .map((row) => row.id)
-        );
-      }
-
-      return known;
-    });
-
-    if (moved) {
-      this.publishUpdate();
-
-      if (isRetentionFolder(target)) this.scheduleRetention();
-    }
-
-    return moved;
+    return mailboxJmap.jmapMoveEmails(this.context, emailIds, target);
   }
 
   /**
@@ -2064,7 +1027,7 @@ export class MailboxDO extends DurableObject<Env> {
         .from(mailRules)
         .orderBy(asc(mailRules.position))
         .all(),
-      autoReply: this.getAutoReply(),
+      autoReply: autoReplies.getAutoReply(this.context),
       autoReplyLog: this.db.select().from(autoReplyLog).all(),
       ai: this.db.select().from(mailboxAiConfiguration).get() ?? null,
       // Blocks and "Not spam"; the counters come back with the mail.
@@ -2248,14 +1211,17 @@ export class MailboxDO extends DurableObject<Env> {
           replyMode: null,
         };
 
-    const result = this.writeDraft(
+    const result = mailboxDrafts.writeDraft(
+      this.context,
       userId,
       draft,
       0,
-      this.getDraft(userId, input.id)
+      mailboxDrafts.getDraft(this.context, userId, input.id)
     );
 
-    if (result.status === "saved") this.announceDrafts(true);
+    if (result.status === "saved") {
+      mailboxDrafts.announceDrafts(this.context, true);
+    }
 
     return result.status;
   }
@@ -2471,8 +1437,9 @@ export class MailboxDO extends DurableObject<Env> {
 
     return {
       ...snapshot,
-      history: this.getSenderHistory(senderAddresses),
-      safety: this.getMessageSafetyContext(
+      history: senderSafety.getSenderHistory(this.context, senderAddresses),
+      safety: senderSafety.getMessageSafetyContext(
+        this.context,
         senderAddresses,
         incoming.flatMap((message) => emailListKey(message) ?? [])
       ),
@@ -2494,8 +1461,9 @@ export class MailboxDO extends DurableObject<Env> {
 
     return {
       email,
-      history: this.getSenderHistory(senderAddresses),
-      safety: this.getMessageSafetyContext(
+      history: senderSafety.getSenderHistory(this.context, senderAddresses),
+      safety: senderSafety.getMessageSafetyContext(
+        this.context,
         senderAddresses,
         listKey ? [listKey] : []
       ),
@@ -2648,12 +1616,14 @@ export class MailboxDO extends DurableObject<Env> {
         folder.system_type,
         folder.sort_order
     `,
-        JSON.stringify(this.systemFolders()),
+        JSON.stringify(mailboxFolders.systemFolders(this.context)),
         userId
       )
       .toArray();
 
-    const sent = this.systemFolders().find((folder) => folder.id === "sent");
+    const sent = mailboxFolders
+      .systemFolders(this.context)
+      .find((folder) => folder.id === "sent");
 
     const [draftCount] = this.db
       .select({ value: sql<number>`count(*)` })
@@ -2711,7 +1681,7 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   getFolderCounts(userId: string, folderId: string): FolderCounts | null {
-    const folder = this.getFolder(folderId);
+    const folder = mailboxFolders.getFolder(this.context, folderId);
 
     return folder ? this.countFolder(userId, folder) : null;
   }
@@ -3150,7 +2120,12 @@ export class MailboxDO extends DurableObject<Env> {
       .find((folder) => folder.name.toLocaleLowerCase("en-US") === normalized);
 
     if (existing) return { id: existing.id };
-    const created = this.insertFolder(createId("fld"), name);
+
+    const created = mailboxFolders.insertFolder(
+      this.context,
+      createId("fld"),
+      name
+    );
 
     if (created.status === "ok") {
       // Placed by an import, not by a person: a restored settings line may
@@ -3363,7 +2338,7 @@ export class MailboxDO extends DurableObject<Env> {
     }
 
     if (!ai) return null;
-    const configuration = this.aiConfiguration();
+    const configuration = mailboxRules.aiConfiguration(this.context);
 
     // A rule already decided where the message goes: the model only
     // judges spam.
@@ -3515,66 +2490,29 @@ export class MailboxDO extends DurableObject<Env> {
     return stored;
   }
 
-  /**
-   * Fills sender intelligence in on view: for a message without any, or
-   * replacing the failed result checked at `replacesCheckedAt`.
-   */
   setEmailSenderIntel(
     emailId: string,
     intel: SenderIntel,
     replacesCheckedAt: number | null = null
   ) {
-    const current =
-      replacesCheckedAt === null
-        ? isNull(emails.senderIntelJson)
-        : sql`json_extract(${emails.senderIntelJson}, '$.checkedAt') = ${replacesCheckedAt}`;
-
-    return (
-      this.db
-        .update(emails)
-        .set({ senderIntelJson: intel })
-        .where(
-          and(eq(emails.id, emailId), eq(emails.direction, "incoming"), current)
-        )
-        .returning({ id: emails.id })
-        .all().length > 0
+    return senderSafety.setEmailSenderIntel(
+      this.context,
+      emailId,
+      intel,
+      replacesCheckedAt
     );
   }
 
-  /** Inbound/outbound counters for the given addresses (lowercased keys). */
   getSenderHistory(addresses: string[]) {
-    return Object.fromEntries(senderHistory(this.state.storage.sql, addresses));
+    return senderSafety.getSenderHistory(this.context, addresses);
   }
 
-  /** Block, trust and report state for senders, and unsubscribe records for lists. */
   getMessageSafetyContext(addresses: string[], listKeys: string[]) {
-    const keys = [...new Set(listKeys)].slice(0, 100);
-
-    const rows = keys.length
-      ? this.db
-          .select()
-          .from(unsubscriptions)
-          .where(inArray(unsubscriptions.listKey, keys))
-          .all()
-      : [];
-
-    return {
-      senders: Object.fromEntries(
-        senderStatuses(this.state.storage.sql, addresses)
-      ),
-      unsubscriptions: Object.fromEntries(
-        rows.map((row): [string, Unsubscription] => [
-          row.listKey,
-          {
-            listKey: row.listKey,
-            method: row.method,
-            status: row.status,
-            target: row.target,
-            at: row.createdAt.getTime(),
-          },
-        ])
-      ),
-    };
+    return senderSafety.getMessageSafetyContext(
+      this.context,
+      addresses,
+      listKeys
+    );
   }
 
   recordUnsubscription(input: {
@@ -3586,389 +2524,39 @@ export class MailboxDO extends DurableObject<Env> {
     detail: string | null;
     userId: string;
   }): Unsubscription {
-    const createdAt = new Date();
-    const values = { ...input, createdAt };
-    this.db
-      .insert(unsubscriptions)
-      .values(values)
-      .onConflictDoUpdate({ target: unsubscriptions.listKey, set: values })
-      .run();
-    this.publishUpdate();
-
-    return {
-      listKey: input.listKey,
-      method: input.method,
-      status: input.status,
-      target: input.target,
-      at: createdAt.getTime(),
-    };
-  }
-
-  /** Moves every Inbox or Archive conversation with mail from the pattern to Spam. */
-  private moveSenderConversationsToSpam(pattern: string) {
-    const predicate = blockPatternPredicate(
-      "lower(json_extract(message.from_json, '$[0].address'))",
-      pattern
-    );
-
-    const moved = this.state.storage.sql
-      .exec<{ id: string }>(
-        `
-      update conversations
-      set mailbox_state = 'spam', folder_id = null, state_changed_at = ?
-      where mailbox_state in ('active', 'archive')
-        and id in (
-          select message.conversation_id from emails message
-          where message.direction = 'incoming' and ${predicate.sql}
-        )
-      returning id
-    `,
-        Date.now(),
-        ...predicate.bindings
-      )
-      .toArray().length;
-
-    if (moved) this.scheduleRetention();
-
-    return moved;
+    return senderSafety.recordUnsubscription(this.context, input);
   }
 
   blockSender(pattern: string, moveExisting: boolean) {
-    const moved = this.db.transaction(() => {
-      setSenderBlocked(this.state.storage.sql, pattern, true, Date.now());
-
-      return moveExisting ? this.moveSenderConversationsToSpam(pattern) : 0;
-    });
-
-    this.recentParticipantSources = null;
-    this.publishUpdate();
-
-    return { block: blockFromPattern(pattern, Date.now(), false), moved };
+    return senderSafety.blockSender(this.context, pattern, moveExisting);
   }
 
-  /** For a workspace-wide block: existing mail goes to Spam; the block itself lives in D1. */
   moveSenderToSpam(pattern: string) {
-    const moved = this.moveSenderConversationsToSpam(pattern);
-
-    if (moved) {
-      this.recentParticipantSources = null;
-      this.publishUpdate();
-    }
-
-    return moved;
+    return senderSafety.moveSenderToSpam(this.context, pattern);
   }
 
   unblockSender(pattern: string) {
-    const existed =
-      this.state.storage.sql
-        .exec(
-          "select 1 from senders where address = ? and blocked_at is not null",
-          pattern
-        )
-        .toArray().length > 0;
-
-    setSenderBlocked(this.state.storage.sql, pattern, false, Date.now());
-    this.recentParticipantSources = null;
-    this.publishUpdate();
-
-    return existed;
+    return senderSafety.unblockSender(this.context, pattern);
   }
 
   listBlockedSenders() {
-    return listBlockedSenders(this.state.storage.sql);
+    return senderSafety.listBlockedSenders(this.context);
   }
 
   setSenderTrusted(address: string, trusted: boolean) {
-    setSenderTrusted(this.state.storage.sql, address, trusted, Date.now());
-    this.publishUpdate();
-
-    return true;
+    return senderSafety.setSenderTrusted(this.context, address, trusted);
   }
 
-  /** The newest incoming message of each conversation, for actions that need a sender. */
   latestIncomingEmails(conversationIds: string[]) {
-    const ids = [...new Set(conversationIds)].slice(0, 100);
-
-    if (!ids.length) return [];
-
-    const rows = this.state.storage.sql
-      .exec<{ id: string }>(
-        `
-      select (
-        select message.id from emails message
-        where message.conversation_id = requested.value and message.direction = 'incoming'
-        order by message.timeline_at desc, message.id desc limit 1
-      ) as id
-      from json_each(?) requested
-    `,
-        stringListJson(ids)
-      )
-      .toArray()
-      .flatMap((row) => (row.id ? [row.id] : []));
-
-    return rows.length
-      ? this.db.select().from(emails).where(inArray(emails.id, rows)).all()
-      : [];
+    return senderSafety.latestIncomingEmails(this.context, conversationIds);
   }
 
-  /**
-   * Report spam: labels the message, records feedback for the classifier,
-   * and moves its conversation to Spam. Never contacts the sender.
-   */
   reportMessage(input: { emailId: string; userId: string }) {
-    const email = this.getEmail(input.emailId);
-
-    if (!email || email.direction !== "incoming") return null;
-    const address = email.fromJson[0]?.address ?? "";
-
-    const moved = this.db.transaction((tx) => {
-      tx.update(emails)
-        .set({ reportLabel: "spam" })
-        .where(eq(emails.id, email.id))
-        .run();
-
-      if (address.includes("@")) {
-        recordSenderFeedback(this.state.storage.sql, {
-          id: createId("fbk"),
-          address,
-          emailId: email.id,
-          label: "spam",
-          userId: input.userId,
-          now: Date.now(),
-        });
-      }
-
-      return (
-        tx
-          .update(conversations)
-          .set({
-            mailboxState: "spam",
-            folderId: null,
-            stateChangedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(conversations.id, email.conversationId),
-              inArray(conversations.mailboxState, ["active", "archive"])
-            )
-          )
-          .returning({ id: conversations.id })
-          .all().length > 0
-      );
-    });
-
-    this.recentParticipantSources = null;
-    this.publishUpdate();
-
-    if (moved) this.scheduleRetention();
-
-    return {
-      email: required(this.getEmail(email.id), "The reported email exists"),
-      moved,
-    };
+    return senderSafety.reportMessage(this.context, input);
   }
 
-  /** "Not spam": back to Inbox, the sender becomes trusted, and the feedback is recorded. */
   markNotSpam(input: { emailId: string; userId: string }) {
-    const email = this.getEmail(input.emailId);
-
-    if (!email || email.direction !== "incoming") return null;
-    const address = email.fromJson[0]?.address ?? "";
-    const label: FeedbackLabel = "not_spam";
-
-    const outcome = this.db.transaction((tx) => {
-      tx.update(emails)
-        .set({ reportLabel: null })
-        .where(eq(emails.conversationId, email.conversationId))
-        .run();
-
-      if (address.includes("@")) {
-        recordSenderFeedback(this.state.storage.sql, {
-          id: createId("fbk"),
-          address,
-          emailId: email.id,
-          label,
-          userId: input.userId,
-          now: Date.now(),
-        });
-        setSenderTrusted(this.state.storage.sql, address, true, Date.now());
-      }
-
-      const back =
-        tx
-          .update(conversations)
-          .set({ mailboxState: "active" })
-          .where(
-            and(
-              eq(conversations.id, email.conversationId),
-              eq(conversations.mailboxState, "spam")
-            )
-          )
-          .returning({ id: conversations.id })
-          .all().length > 0;
-
-      // Spam that named a conversation here was kept out of it; once it is
-      // not spam, it rejoins that conversation.
-      const conversationId = back
-        ? (this.rejoinSplitConversations([email.conversationId]).get(
-            email.conversationId
-          ) ?? email.conversationId)
-        : email.conversationId;
-
-      const place = tx
-        .select({
-          mailboxState: conversations.mailboxState,
-          folderId: conversations.folderId,
-        })
-        .from(conversations)
-        .where(eq(conversations.id, conversationId))
-        .all()[0];
-
-      return {
-        restored: back,
-        conversationId,
-        folder: place ? conversationFolder(place) : "inbox",
-      };
-    });
-
-    this.recentParticipantSources = null;
-    this.publishUpdate();
-
-    return {
-      restored: outcome.restored,
-      conversationId: outcome.conversationId,
-      rejoined: outcome.conversationId !== email.conversationId,
-      folder: outcome.folder,
-      address: address.includes("@") ? address : null,
-    };
-  }
-
-  /**
-   * Puts mail kept out of a conversation as spam (#25) back into it, once
-   * its own conversation has left Spam: by Not spam, a move in the app or
-   * over JMAP, or a reply sent from here. Call it inside the transaction
-   * that moved `conversationIds`; only those now in Inbox or Archive that
-   * hold a message marked with `split_from_conversation_id` are touched, so
-   * conversations threaded elsewhere (an import's, say) are never merged.
-   *
-   * The marked message names the conversation it was kept out of. When that
-   * conversation is gone, the message's own threading headers are resolved
-   * again. The conversation rejoins its target when the target is in Inbox
-   * or Archive; a target in Trash or Spam is not brought back by it, and the
-   * conversation stays where it was moved. Either way the decision is final
-   * and the mark is cleared.
-   *
-   * The rescued message is placed as a legitimate reply would be: moved to
-   * Inbox (or a custom folder), the target becomes active and takes that
-   * folder (else keeps its own). Moved to Archive, the target stays where it
-   * is. Returns, for each merged conversation, the one its messages are in.
-   */
-  private rejoinSplitConversations(conversationIds: string[]) {
-    const merged = new Map<string, string>();
-
-    if (!conversationIds.length) return merged;
-
-    const marked = this.db
-      .select({
-        emailId: emails.id,
-        conversationId: conversations.id,
-        mailboxState: conversations.mailboxState,
-        folderId: conversations.folderId,
-        splitFrom: emails.splitFromConversationId,
-        inReplyTo: emails.inReplyToJson,
-        references: emails.referencesJson,
-      })
-      .from(emails)
-      .innerJoin(conversations, eq(conversations.id, emails.conversationId))
-      .where(
-        and(
-          sql`${conversations.id} in (select cast(value as text) from json_each(${stringListJson(conversationIds)}))`,
-          inArray(conversations.mailboxState, ["active", "archive"]),
-          isNotNull(emails.splitFromConversationId)
-        )
-      )
-      .all();
-
-    const groups = new Map<string, typeof marked>();
-
-    for (const row of marked) {
-      groups.set(row.conversationId, [
-        ...(groups.get(row.conversationId) ?? []),
-        row,
-      ]);
-    }
-
-    for (const [conversationId, rows] of groups) {
-      const targets = new Set(
-        rows.map((row) => this.splitTarget(conversationId, row))
-      );
-
-      const [target, ...others] = targets;
-
-      this.db
-        .update(emails)
-        .set({ splitFromConversationId: null })
-        .where(
-          and(
-            eq(emails.conversationId, conversationId),
-            isNotNull(emails.splitFromConversationId)
-          )
-        )
-        .run();
-
-      if (!target || others.length) continue;
-      const [moved] = rows;
-
-      if (!moved) continue;
-      mergeConversation(this.state.storage.sql, conversationId, target);
-
-      if (moved.mailboxState === "active") {
-        this.db
-          .update(conversations)
-          .set({
-            mailboxState: "active",
-            folderId: moved.folderId ?? sql`${conversations.folderId}`,
-          })
-          .where(eq(conversations.id, target))
-          .run();
-      }
-
-      merged.set(conversationId, target);
-    }
-
-    return merged;
-  }
-
-  /**
-   * The conversation a marked message rejoins, or null: the one it was kept
-   * out of, else (when that one is gone) its parent's, while that
-   * conversation is in Inbox or Archive.
-   */
-  private splitTarget(
-    conversationId: string,
-    row: { splitFrom: string | null; inReplyTo: string[]; references: string[] }
-  ) {
-    const placeOf = (id: string) =>
-      this.db
-        .select({ mailboxState: conversations.mailboxState })
-        .from(conversations)
-        .where(eq(conversations.id, id))
-        .all()[0];
-
-    let targetId = row.splitFrom;
-    let target = targetId ? placeOf(targetId) : undefined;
-
-    if (!target) {
-      const parent = this.resolveParent(row.inReplyTo, row.references);
-      targetId = parent?.conversationId ?? null;
-      target = targetId ? placeOf(targetId) : undefined;
-    }
-
-    return targetId &&
-      targetId !== conversationId &&
-      (target?.mailboxState === "active" || target?.mailboxState === "archive")
-      ? targetId
-      : null;
+    return senderSafety.markNotSpam(this.context, input);
   }
 
   submitOutgoing(input: NewEmail) {
@@ -4014,7 +2602,9 @@ export class MailboxDO extends DurableObject<Env> {
         recordCorrespondents(this.state.storage.sql, email);
         // A reply sent from here brings its conversation out of Spam, and
         // mail kept out of a conversation as spam rejoins it.
-        this.rejoinSplitConversations([email.conversationId]);
+        senderSafety.rejoinSplitConversations(this.context, [
+          email.conversationId,
+        ]);
 
         const inserted = tx
           .select()
@@ -4164,12 +2754,15 @@ export class MailboxDO extends DurableObject<Env> {
     sourceFolderId: string,
     update: ConversationUpdate
   ) {
-    const sourceFolder = this.getFolder(sourceFolderId);
+    const sourceFolder = mailboxFolders.getFolder(this.context, sourceFolderId);
 
     if (!sourceFolder) return null;
 
     if (update.folderId) {
-      const targetFolder = this.getFolder(update.folderId);
+      const targetFolder = mailboxFolders.getFolder(
+        this.context,
+        update.folderId
+      );
 
       if (!targetFolder || targetFolder.kind !== "custom") return null;
     }
@@ -4235,7 +2828,10 @@ export class MailboxDO extends DurableObject<Env> {
         .toArray();
 
       // Mail kept out of a conversation as spam rejoins it once moved out of Spam.
-      this.rejoinSplitConversations(moved.map((row) => row.id));
+      senderSafety.rejoinSplitConversations(
+        this.context,
+        moved.map((row) => row.id)
+      );
 
       return moved;
     });
@@ -4610,7 +3206,7 @@ export class MailboxDO extends DurableObject<Env> {
           .where(eq(pendingInbound.id, job.id))
           .run();
         // Its original copy isn't kept (once archived, if it's to be).
-        await this.forgetObjects([job.rawObjectKey]);
+        await mailboxDrafts.forgetObjects(this.context, [job.rawObjectKey]);
 
         return;
       }
@@ -4639,7 +3235,9 @@ export class MailboxDO extends DurableObject<Env> {
       };
 
       // Blocked senders get no rules: they go to Spam whatever a rule says.
-      const rules = screening.block ? null : this.inboundRules(email, job.id);
+      const rules = screening.block
+        ? null
+        : mailboxRules.inboundRules(this.context, email, job.id);
 
       let classification: EmailAiClassification | null = null;
 
@@ -4689,7 +3287,7 @@ export class MailboxDO extends DurableObject<Env> {
       // Who "Mark read" marks it read for; a failing rule action never
       // fails the delivery.
       const readers = rules?.markRead
-        ? await this.mailboxReaders().catch((error) => {
+        ? await mailboxRules.mailboxReaders(this.context).catch((error) => {
             console.error(`Rule could not mark ${job.id} read`, error);
 
             return [];
@@ -5164,251 +3762,15 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   getAutoReply(): AutoReplySettings | null {
-    return this.db.select().from(autoReplySettings).all()[0] ?? null;
+    return autoReplies.getAutoReply(this.context);
   }
 
   setAutoReply(input: AutoReplyInput, userId: string) {
-    const previous = this.getAutoReply();
-
-    const settings: AutoReplySettings = {
-      ...input,
-      id: 1,
-      updatedBy: userId,
-      updatedAt: new Date(),
-    };
-
-    // Each absence starts fresh: switching on or moving the window forgets
-    // who has been answered.
-    const newAbsence =
-      input.enabled &&
-      (!previous?.enabled ||
-        previous.startsAt?.getTime() !== input.startsAt?.getTime() ||
-        previous.endsAt?.getTime() !== input.endsAt?.getTime());
-
-    this.db.transaction((tx) => {
-      tx.insert(autoReplySettings)
-        .values(settings)
-        .onConflictDoUpdate({ target: autoReplySettings.id, set: settings })
-        .run();
-
-      if (newAbsence) tx.delete(autoReplyLog).run();
-    });
-
-    return settings;
+    return autoReplies.setAutoReply(this.context, input, userId);
   }
 
   turnOffAutoReply(userId: string) {
-    this.db
-      .update(autoReplySettings)
-      .set({ enabled: false, updatedBy: userId, updatedAt: new Date() })
-      .run();
-
-    return this.getAutoReply();
-  }
-
-  /**
-   * Whether this mailbox has written to any of `addresses` (To, Cc or Bcc),
-   * as its correspondents record keeps it, even after that mail is deleted.
-   */
-  private hasWrittenTo(addresses: readonly string[]) {
-    const unique = [
-      ...new Set(addresses.map((address) => address.trim().toLowerCase())),
-    ].filter(Boolean);
-
-    return (
-      unique.length > 0 &&
-      this.db
-        .select({ address: senders.address })
-        .from(senders)
-        .where(
-          and(inArray(senders.address, unique), gt(senders.outboundCount, 0))
-        )
-        .limit(1)
-        .all().length > 0
-    );
-  }
-
-  /**
-   * The automatic reply to a live delivery (never an import): the message
-   * for people inside the workspace or the one for everyone else. It is
-   * sent, not stored, and never retried: the sender is logged before
-   * sending, so a failure can't turn into a loop.
-   */
-  private async maybeAutoReply(
-    job: PendingInbound,
-    email: Email,
-    rawMime: ArrayBuffer
-  ) {
-    const settings = this.getAutoReply();
-    const now = new Date();
-
-    if (!settings || autoReplyStatus(settings, now) !== "active") return;
-
-    const conversation = this.db
-      .select({ mailboxState: conversations.mailboxState })
-      .from(conversations)
-      .where(eq(conversations.id, email.conversationId))
-      .all()[0];
-
-    const mailboxId = this.state.id.name ?? "";
-    const db = createDb(this.bindings.DB);
-
-    const [mailbox, aliases] = await Promise.all([
-      db
-        .select({
-          address: mailboxAddressSql,
-          displayName: mailboxes.displayName,
-        })
-        .from(mailboxes)
-        .where(eq(mailboxes.id, mailboxId))
-        .limit(1)
-        .then((rows) => rows[0]),
-      db
-        .select({
-          address: mailboxAddressSql,
-          displayName: mailboxes.displayName,
-        })
-        .from(mailboxes)
-        .where(eq(mailboxes.aliasOf, mailboxId)),
-    ]);
-
-    if (!mailbox) return;
-
-    const mailboxAddress = normalizeMailboxAddress(mailbox.address);
-
-    if (
-      messageSkipReason({
-        headers: parseHeaderBlock(rawMime),
-        envelopeFrom: job.envelopeFrom,
-        ownAddresses: [
-          mailboxAddress,
-          ...aliases.map((alias) => alias.address),
-        ].map((address) => address.toLowerCase()),
-        listAddress: job.listAddress,
-        mailboxState: conversation?.mailboxState,
-        email,
-      })
-    ) {
-      return;
-    }
-
-    // The reply goes to the envelope sender (RFC 3834), but who wrote is the
-    // From address: the envelope sender of forwarded mail, newsletters and
-    // many companies is a rewritten bounce address. From counts as inside
-    // the workspace only when DMARC verified it, so it can't be forged.
-    const recipient = autoReplyRecipient(job.envelopeFrom);
-    // One reply per sender, however they spell their address's case.
-    const sender = recipient.toLowerCase();
-    const author = email.fromJson[0]?.address ?? null;
-
-    const inside = Boolean(
-      author &&
-      email.authenticationResultsJson?.verdict === "verified" &&
-      mailDomainAllowed(author)
-    );
-
-    const message = inside ? settings.inside : settings.outside;
-
-    if (!message.enabled) return;
-
-    if (
-      !inside &&
-      settings.outside.audience === "knownSenders" &&
-      !this.hasWrittenTo(author ? [author, recipient] : [recipient])
-    ) {
-      return;
-    }
-
-    const intervalMs = settings.replyIntervalDays * DAY_MS;
-
-    const reserved = this.db.transaction((tx) => {
-      tx.delete(autoReplyLog)
-        .where(
-          lt(autoReplyLog.lastRepliedAt, new Date(now.getTime() - intervalMs))
-        )
-        .run();
-
-      if (
-        tx
-          .select({ sender: autoReplyLog.senderAddress })
-          .from(autoReplyLog)
-          .where(eq(autoReplyLog.senderAddress, sender))
-          .all().length > 0
-      ) {
-        return false;
-      }
-
-      const lastHour =
-        tx
-          .select({ count: sql<number>`count(*)` })
-          .from(autoReplyLog)
-          .where(
-            gt(autoReplyLog.lastRepliedAt, new Date(now.getTime() - 3_600_000))
-          )
-          .all()[0]?.count ?? 0;
-
-      if (lastHour >= AUTO_REPLY_HOURLY_CAP) return false;
-
-      tx.insert(autoReplyLog)
-        .values({
-          senderAddress: sender,
-          lastRepliedAt: now,
-          lastOriginalEmailId: email.id,
-        })
-        .run();
-
-      return true;
-    });
-
-    if (!reserved) return;
-
-    // Mail that came through an alias is answered from the alias.
-    const from = replyAlias(email, aliases) ?? mailbox;
-
-    try {
-      const images = await Promise.all(
-        inlineImages(
-          autoReplyImagePrefix(mailboxId),
-          message.html,
-          message.images
-        ).map(async (image) => {
-          const object = await this.bindings.MAIL_STORAGE.get(image.r2Key);
-
-          if (!object) throw new Error(`Image ${image.contentId} is missing`);
-
-          return {
-            contentId: image.contentId,
-            filename: image.filename,
-            type: image.contentType,
-            content: await object.arrayBuffer(),
-          };
-        })
-      );
-
-      // Sent mail, so the archive keeps it; it's never stored, so its own id.
-      const result = await sendArchived(
-        this.bindings,
-        { id: `ar_${crypto.randomUUID()}`, mailboxId },
-        buildAutoReply({
-          from: {
-            address: normalizeMailboxAddress(from.address),
-            name: from.displayName,
-          },
-          recipient,
-          original: email,
-          message,
-          images,
-        })
-      );
-
-      this.db
-        .update(autoReplyLog)
-        .set({ lastOutboundMessageId: result.messageId })
-        .where(eq(autoReplyLog.senderAddress, sender))
-        .run();
-    } catch (error) {
-      console.error(`Auto-reply to ${recipient} failed`, error);
-    }
+    return autoReplies.turnOffAutoReply(this.context, userId);
   }
 
   private async scheduleAlarm(at: number) {

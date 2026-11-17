@@ -29,7 +29,7 @@ import {
   MAIL_ORGANIZE_SCOPE,
 } from "../../shared/permissions";
 import { mailboxStub } from "../mailbox";
-import type { ImportMessageResult } from "../mailbox";
+import type { ImportMessageResult } from "../mailbox/support";
 import { readCappedBody } from "./capped-body";
 import { inboundMessageId, rawMessageId } from "./inbound";
 import { rawMessageKey } from "./storage-keys";

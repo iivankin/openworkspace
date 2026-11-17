@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ConversationCursorPosition } from "../mailbox";
+import type { ConversationCursorPosition } from "../mailbox/support";
 
 const CURSOR_VERSION = 1;
 
