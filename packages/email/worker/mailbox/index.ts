@@ -124,6 +124,7 @@ import {
 } from "./folder-model";
 import type { MailboxState, SystemFolderType } from "./folder-model";
 import { mergedPlacement, requestedPlacement } from "./import-placement";
+import { decideDelivery } from "./inbound-decision";
 import { readInboxCounts, writeInboxCounts } from "./inbox-counts";
 import type { InboxCounts } from "./inbox-counts";
 import {
@@ -494,17 +495,6 @@ export type TransportUpdate = {
   state: Email["transportState"];
   messageIdHeader?: string;
   error?: string | null;
-};
-
-/**
- * Where an incoming message lands, decided before it is stored. Spam and
- * Trash split the message off (see insertClassifiedInboundEmail); `archive`
- * and `folderId` file only a message that starts a conversation.
- */
-type InboundPlacement = {
-  state: "spam" | "trash" | null;
-  folderId: string | null;
-  archive: boolean;
 };
 
 const MAX_RULES = 100;
@@ -937,11 +927,21 @@ export class MailboxDO extends DurableObject<Env> {
     );
   }
 
+  /**
+   * What follows storing a delivery: its webhook, the update, the push
+   * notification and the auto-reply, then the delivery is done. Until then
+   * the pending row stays, so a killed alarm runs these again; the
+   * auto-reply log keeps a sender to one reply.
+   *
+   * `autoReply` is the message's MIME to answer, `"read"` to read it again
+   * (a retry), or null for an unreadable message, which isn't answered.
+   */
   private async finishStoredInbound(
     job: PendingInbound,
     email: Email,
     now: number,
-    announce: boolean
+    announce: boolean,
+    autoReply: ArrayBuffer | "read" | null
   ) {
     try {
       const mailboxId = this.state.id.name ?? "unknown-mailbox";
@@ -984,6 +984,19 @@ export class MailboxDO extends DurableObject<Env> {
 
       if (conversation?.mailboxState === "active" && !markedRead) {
         await this.queueIncomingNotification(email);
+      }
+
+      if (autoReply) {
+        // Never able to fail the delivery.
+        await (
+          autoReply === "read"
+            ? readInboundRawMime(this.bindings, job)
+            : Promise.resolve(autoReply)
+        )
+          .then((rawMime) => this.maybeAutoReply(job, email, rawMime))
+          .catch((error) => {
+            console.error(`Auto-reply check failed for ${email.id}`, error);
+          });
       }
 
       this.db.delete(pendingInbound).where(eq(pendingInbound.id, job.id)).run();
@@ -1545,22 +1558,14 @@ export class MailboxDO extends DurableObject<Env> {
     return outcome.matchedRuleIds.length ? outcome : null;
   }
 
-  /** "Mark read" marks a message read for everyone with access to the mailbox. */
-  private async markReadForMembers(emailId: string) {
+  /** Everyone with access to the mailbox: whom "Mark read" marks mail read for. */
+  private async mailboxReaders() {
     const members = await createDb(this.bindings.DB)
       .select({ userId: mailboxAccess.userId })
       .from(mailboxAccess)
       .where(eq(mailboxAccess.mailboxId, this.state.id.name ?? ""));
 
-    const readAt = new Date();
-
-    for (const userId of new Set(members.map((member) => member.userId))) {
-      this.db
-        .insert(emailReadStates)
-        .values({ userId, emailId, readAt })
-        .onConflictDoNothing()
-        .run();
-    }
+    return members.map((member) => member.userId);
   }
 
   getMailboxAiSettings() {
@@ -3323,43 +3328,6 @@ export class MailboxDO extends DurableObject<Env> {
     return Number(row?.senders ?? 0) >= 2;
   }
 
-  /**
-   * Blocks win over rules and AI. A rule's Spam wins over AI; an AI spam
-   * verdict holds unless the sender is trusted or a rule says "never Spam".
-   * Otherwise a matching rule's placement replaces AI sorting's folder.
-   */
-  private inboundPlacement(
-    screening: InboundScreening,
-    classification: EmailAiClassification | null,
-    rules: RuleOutcome | null
-  ): InboundPlacement {
-    const spam = { state: "spam", folderId: null, archive: false } as const;
-    const rule = rules?.placement;
-
-    if (screening.block || rule?.type === "spam") return spam;
-
-    if (classification?.spam && !screening.trusted && !rules?.notSpam) {
-      return spam;
-    }
-
-    if (rule?.type === "trash") {
-      return { state: "trash", folderId: null, archive: false };
-    }
-
-    if (rule?.type === "archive") {
-      return { state: null, folderId: null, archive: true };
-    }
-
-    return {
-      state: null,
-      folderId:
-        rule?.type === "folder"
-          ? rule.folderId
-          : (classification?.folderId ?? null),
-      archive: false,
-    };
-  }
-
   /** The model from openworkspace.json; tests substitute one on the instance. */
   protected classificationModel(): Promise<AiModel | null> {
     return aiModel(this.bindings, "classification");
@@ -3404,59 +3372,85 @@ export class MailboxDO extends DurableObject<Env> {
     });
   }
 
+  /**
+   * Stores an incoming message where decideDelivery puts it, in one
+   * transaction with its conversation's placement and a rule's "Mark read"
+   * for `readers`, so a retry never finds the message stored but not filed.
+   */
   private insertClassifiedInboundEmail(
     input: NewEmail,
+    screening: InboundScreening,
+    rules: RuleOutcome | null,
     classification: EmailAiClassification | null,
-    placement: InboundPlacement
+    readers: readonly string[]
   ) {
     const prepared = prepareOfficePreviews(input);
 
     const stored = this.db.transaction((tx) => {
-      // Threading trusts the sender's In-Reply-To and References, so spam
-      // that names a message here starts its own conversation instead of
-      // moving (or reviving) one with other mail. Spam may join spam.
-      const joined = placement.state
-        ? tx
-            .select({ mailboxState: conversations.mailboxState })
-            .from(conversations)
-            .where(eq(conversations.id, prepared.conversationId))
-            .all()[0]
-        : undefined;
-
-      // The conversation it named is recorded, so the message rejoins it
-      // when it leaves Spam (rejoinSplitConversations).
-      const email =
-        joined && joined.mailboxState !== placement.state
-          ? {
-              ...prepared,
-              conversationId: createId("conv"),
-              splitFromConversationId: prepared.conversationId,
-            }
-          : prepared;
-
-      const trustedFolder = placement.folderId
-        ? tx
-            .select({ id: folders.id })
-            .from(folders)
-            .where(eq(folders.id, placement.folderId))
-            .all()[0]
-        : null;
-
-      const normalizedClassification =
-        classification?.folderId &&
-        !tx
+      const folderExists = (folderId: string) =>
+        tx
           .select({ id: folders.id })
           .from(folders)
-          .where(eq(folders.id, classification.folderId))
-          .all()[0]
+          .where(eq(folders.id, folderId))
+          .all().length > 0;
+
+      // The conversation its threading headers name (the sender chose them).
+      const parent = tx
+        .select({
+          state: conversations.mailboxState,
+          folderId: conversations.folderId,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, prepared.conversationId))
+        .all()[0];
+
+      const startsConversation = !tx
+        .select({ id: emails.id })
+        .from(emails)
+        .where(
+          and(
+            eq(emails.conversationId, prepared.conversationId),
+            eq(emails.direction, "incoming")
+          )
+        )
+        .limit(1)
+        .all()[0];
+
+      // AI sorting's folder, if it still exists.
+      const sorted =
+        classification?.folderId && !folderExists(classification.folderId)
           ? { ...classification, folderId: null }
           : classification;
+
+      const placement = decideDelivery({
+        blocked: Boolean(screening.block),
+        trusted: screening.trusted,
+        authenticated: input.authenticationResultsJson?.verdict === "verified",
+        rules,
+        classification: sorted,
+        parent: parent ?? null,
+        startsConversation,
+        folderExists,
+      });
+
+      // Spam or Trash kept apart records the conversation it named, to
+      // rejoin it when moved out (rejoinSplitConversations).
+      const email = placement.split
+        ? {
+            ...prepared,
+            conversationId: createId("conv"),
+            splitFromConversationId:
+              placement.state === "spam" || placement.state === "trash"
+                ? prepared.conversationId
+                : null,
+          }
+        : prepared;
 
       const inserted = tx
         .insert(emails)
         .values({
           ...email,
-          aiClassificationJson: normalizedClassification,
+          aiClassificationJson: sorted,
         })
         .onConflictDoNothing()
         .returning()
@@ -3467,47 +3461,34 @@ export class MailboxDO extends DurableObject<Env> {
       insertOfficePreviewJobs(this.state.storage.sql, email);
       recordCorrespondents(this.state.storage.sql, email);
 
-      const activeConversation = and(
-        eq(conversations.id, email.conversationId),
-        eq(conversations.mailboxState, "active")
-      );
+      const before = placement.split ? undefined : parent?.state;
 
-      // AI sorting and rules file only the first incoming message of a conversation:
-      // a reply to received mail (whose threading headers the sender chose)
-      // leaves the thread where it is. Replies to a thread this mailbox
-      // started are filed like new mail.
-      const startsConversation = !tx
-        .select({ id: emails.id })
-        .from(emails)
-        .where(
-          and(
-            eq(emails.conversationId, email.conversationId),
-            eq(emails.direction, "incoming"),
-            ne(emails.id, inserted.id)
-          )
+      const enteredSpamOrTrash =
+        (placement.state === "spam" || placement.state === "trash") &&
+        before !== placement.state;
+
+      const filed = {
+        mailboxState: placement.state,
+        folderId: placement.folderId,
+      };
+
+      tx.update(conversations)
+        // Retention counts from entering Trash or Spam.
+        .set(
+          enteredSpamOrTrash ? { ...filed, stateChangedAt: new Date() } : filed
         )
-        .limit(1)
-        .all()[0];
+        .where(eq(conversations.id, email.conversationId))
+        .run();
 
-      if (placement.state) {
-        tx.update(conversations)
-          .set({
-            mailboxState: placement.state,
-            folderId: null,
-            stateChangedAt: new Date(),
-          })
-          .where(activeConversation)
-          .run();
-      } else if (placement.archive && startsConversation) {
-        tx.update(conversations)
-          .set({ mailboxState: "archive", folderId: null })
-          .where(activeConversation)
-          .run();
-      } else if (trustedFolder && startsConversation) {
-        tx.update(conversations)
-          .set({ folderId: trustedFolder.id })
-          .where(and(activeConversation, isNull(conversations.folderId)))
-          .run();
+      if (placement.markRead) {
+        const readAt = new Date();
+
+        for (const userId of new Set(readers)) {
+          tx.insert(emailReadStates)
+            .values({ userId, emailId: inserted.id, readAt })
+            .onConflictDoNothing()
+            .run();
+        }
       }
 
       return (
@@ -4573,7 +4554,7 @@ export class MailboxDO extends DurableObject<Env> {
     const existing = this.getEmail(messageId);
 
     if (existing) {
-      await this.finishStoredInbound(job, existing, now, false);
+      await this.finishStoredInbound(job, existing, now, false, "read");
 
       return;
     }
@@ -4686,32 +4667,29 @@ export class MailboxDO extends DurableObject<Env> {
         );
       }
 
-      const placement = this.inboundPlacement(screening, classification, rules);
+      // Who "Mark read" marks it read for; a failing rule action never
+      // fails the delivery.
+      const readers = rules?.markRead
+        ? await this.mailboxReaders().catch((error) => {
+            console.error(`Rule could not mark ${job.id} read`, error);
+
+            return [];
+          })
+        : [];
 
       const stored = this.insertClassifiedInboundEmail(
         email,
+        screening,
+        rules,
         classification,
-        placement
+        readers
       );
 
       if (!stored) {
         throw new Error("Parsed inbound email was not persisted");
       }
 
-      // A failing rule action never fails the delivery.
-      if (rules?.markRead && placement.state !== "spam") {
-        await this.markReadForMembers(stored.id).catch((error) => {
-          console.error(`Rule could not mark ${stored.id} read`, error);
-        });
-      }
-
-      // After the message is stored, and never able to delay or fail it.
-      this.state.waitUntil(
-        this.maybeAutoReply(job, stored, rawMime).catch((error) => {
-          console.error(`Auto-reply check failed for ${stored.id}`, error);
-        })
-      );
-      await this.finishStoredInbound(job, stored, now, true);
+      await this.finishStoredInbound(job, stored, now, true, rawMime);
     } catch (error) {
       if (error instanceof UnprocessableInboundEmailError) {
         const fallback = prepareUnprocessableInboundEmail({
@@ -4720,7 +4698,7 @@ export class MailboxDO extends DurableObject<Env> {
           rawMimeR2Key: job.rawObjectKey,
         });
 
-        const stored = await this.insertEmail(fallback);
+        const stored = await this.storeFallbackInbound(job, fallback);
 
         if (!stored) {
           throw new Error("Inbound fallback email was not persisted", {
@@ -4728,7 +4706,7 @@ export class MailboxDO extends DurableObject<Env> {
           });
         }
 
-        await this.finishStoredInbound(job, stored, now, true);
+        await this.finishStoredInbound(job, stored, now, true, null);
         console.error(`Stored fallback for inbound delivery ${job.id}`, error);
 
         return;
@@ -4742,7 +4720,7 @@ export class MailboxDO extends DurableObject<Env> {
             error instanceof MissingRawMimeError ? null : job.rawObjectKey,
         });
 
-        const stored = await this.insertEmail(fallback);
+        const stored = await this.storeFallbackInbound(job, fallback);
 
         if (!stored) {
           throw new Error("Inbound infrastructure fallback was not persisted", {
@@ -4750,7 +4728,7 @@ export class MailboxDO extends DurableObject<Env> {
           });
         }
 
-        await this.finishStoredInbound(job, stored, now, true);
+        await this.finishStoredInbound(job, stored, now, true, null);
         console.error(
           `Stored infrastructure fallback for inbound delivery ${job.id}`,
           error
@@ -4800,6 +4778,39 @@ export class MailboxDO extends DurableObject<Env> {
   }
 
   /**
+   * Stores an unreadable message in a delivery's place. Its only sender is
+   * the envelope's, which is still screened: a blocked sender's goes to Spam
+   * without a notification, so unparseable mail can't get past a block.
+   */
+  private async storeFallbackInbound(job: PendingInbound, fallback: NewEmail) {
+    const sender = job.envelopeFrom ?? "";
+
+    const workspaceBlocks = sender
+      ? await workspaceBlockPatterns(this.bindings.DB).catch((error) => {
+          console.error("Could not read workspace blocks", error);
+
+          return new Map<string, number>();
+        })
+      : new Map<string, number>();
+
+    const block = sender
+      ? (workspaceBlockFor(sender, workspaceBlocks) ??
+        senderStatuses(this.state.storage.sql, [sender]).get(
+          sender.toLocaleLowerCase()
+        )?.block ??
+        null)
+      : null;
+
+    return this.insertClassifiedInboundEmail(
+      fallback,
+      { block, trusted: false },
+      null,
+      null,
+      []
+    );
+  }
+
+  /**
    * Stores a delivery that is not parsed again as an unreadable message,
    * with a link to its raw MIME. The delivery is backed off first, so a
    * failure here (R2 or storage) waits its turn behind newer mail.
@@ -4825,13 +4836,13 @@ export class MailboxDO extends DurableObject<Env> {
         rawMimeR2Key: raw ? job.rawObjectKey : null,
       });
 
-      const stored = await this.insertEmail(fallback);
+      const stored = await this.storeFallbackInbound(job, fallback);
 
       if (!stored) {
         throw new Error("Unparsed inbound fallback was not persisted");
       }
 
-      await this.finishStoredInbound(job, stored, now, true);
+      await this.finishStoredInbound(job, stored, now, true, null);
       console.error(`Stored fallback for unparsed inbound delivery ${job.id}`);
     } catch (error) {
       console.error(

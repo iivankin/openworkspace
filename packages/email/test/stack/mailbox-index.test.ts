@@ -71,12 +71,15 @@ async function deliverInbound(
     body: string;
     inReplyTo: string | null;
     messageId?: string;
+    /** Trace headers above the message's own, as Cloudflare adds them. */
+    trace?: string[];
   }
 ) {
   const rawObjectKey = `test/${delivery.id}.eml`;
   await env.MAIL_STORAGE.put(
     rawObjectKey,
     [
+      ...(delivery.trace ?? []),
       `From: <${delivery.from}>`,
       "To: me@example.test",
       delivery.inReplyTo ? "Subject: Re: The original" : "Subject: New",
@@ -450,6 +453,44 @@ describe("mailbox conversation index", () => {
           pushDispatch.safeParse(call.data).success
       )
     ).toHaveLength(1);
+  });
+
+  it("lets a trusted sender past AI spam sorting only when authenticated", async () => {
+    const mailboxId = `mbx_trusted_spoof_${crypto.randomUUID()}`;
+    const mailbox = mailboxStub(mailboxId);
+    const sender = "partner@trusted.example";
+
+    await mailbox.testFake({ push: "capture", classifier: spamClassifier() });
+    await mailbox.setSenderTrusted(sender, true);
+
+    // Anyone can write a trusted address into From.
+    const forged = await deliverInbound(mailbox, mailboxId, {
+      id: `delivery_forged_${crypto.randomUUID()}`,
+      from: sender,
+      body: "Spam offer: wire the money today.",
+      inReplyTo: null,
+    });
+
+    expect(
+      await mailbox.getConversationSnapshot(forged.conversationId)
+    ).toMatchObject({ mailboxState: "spam" });
+
+    const genuine = await deliverInbound(mailbox, mailboxId, {
+      id: `delivery_genuine_${crypto.randomUUID()}`,
+      from: sender,
+      body: "Spam offer: our partner newsletter.",
+      inReplyTo: null,
+      trace: [
+        "Received: from mail.trusted.example (192.0.2.10)",
+        "        by cloudflare-email.net (cloudflare) id 0a1b2c3d4e5f",
+        "        for <me@example.test>; Sat, 31 Oct 2026 10:00:00 +0000",
+        "Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=trusted.example policy.dmarc=reject; spf=pass smtp.mailfrom=partner@trusted.example",
+      ],
+    });
+
+    expect(
+      await mailbox.getConversationSnapshot(genuine.conversationId)
+    ).toMatchObject({ mailboxState: "active" });
   });
 
   it("puts a spam reply marked Not spam back into the conversation it answers", async () => {

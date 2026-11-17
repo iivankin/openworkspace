@@ -230,6 +230,21 @@ describe("mailbox rules", () => {
 
     expect((await placeOf(mailboxId, bcc.id)).mailbox_state).toBe("archive");
 
+    // The next notification in that thread keeps it archived.
+    const followUp = await deliver(mailboxId, {
+      id: "rule-bcc-follow-up",
+      from: "vendor@example.net",
+      to: "list@elsewhere.example",
+      envelopeTo: own,
+      subject: "Re: Minutes",
+      headers: ["In-Reply-To: <rule-bcc@example.net>"],
+    });
+
+    expect(followUp.conversationId).toBe(bcc.conversationId);
+    expect((await placeOf(mailboxId, followUp.id)).mailbox_state).toBe(
+      "archive"
+    );
+
     // A reply a rule sends to Trash gets its own conversation; the thread
     // it names stays in Inbox and is recorded for the way back.
     const thread = await deliver(mailboxId, {

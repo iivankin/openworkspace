@@ -129,8 +129,15 @@ folder, Archive, Trash or Spam, the AI only checks for spam. A rule's Spam
 always applies, and an AI spam verdict stands unless a rule says **Never send
 to Spam**. Blocked senders go to Spam whatever the rules say, and no rule runs
 for them. Like AI sorting, moving and archiving apply only to mail that
-starts a conversation. A message a rule puts in Spam or Trash gets its own
-conversation and goes back into the thread it answers when you take it out.
+starts a conversation, but a thread a rule archived stays in Archive when more
+of its mail matches the rule (a notification thread, say). Otherwise new mail
+brings its thread back from Archive or Trash. A message a rule puts in Spam or
+Trash gets its own conversation and goes back into the thread it answers when
+you take it out; mail that isn't spam naming a thread in Spam gets its own
+conversation in Inbox.
+
+A sender you trust skips AI spam sorting only when their domain's DMARC check
+passed, since anyone can put a trusted address in From.
 
 ## Drafts
 
