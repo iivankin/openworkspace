@@ -21,6 +21,7 @@ import {
 import { announceMailboxAccessChanged } from "./mailbox-routes";
 import { hasKnownUserIds } from "./records";
 import { personTeamsSchema, teamInputSchema } from "./schemas";
+import { userTargetRefusal } from "./target-guard";
 
 async function teamMailboxIds(db: Database, teamIds: readonly string[]) {
   const rows = await db
@@ -29,6 +30,47 @@ async function teamMailboxIds(db: Database, teamIds: readonly string[]) {
     .where(inArray(mailboxes.teamId, [...teamIds]));
 
   return rows.map((row) => row.id);
+}
+
+/**
+ * Changing who is on a team acts on each person added, removed or whose
+ * send rights change, as `/teams/person/:id` does; a team for everyone
+ * covers administrators, so only they may make one or end it.
+ */
+async function membershipRefusal(
+  c: Context<AppEnv>,
+  db: Database,
+  userIds: Iterable<string>,
+  coversEveryone: boolean
+) {
+  if (coversEveryone && c.get("user").role !== "admin") {
+    return apiError(
+      c,
+      403,
+      "FORBIDDEN",
+      "Only administrators can change a team for everyone"
+    );
+  }
+
+  const refusals = await Promise.all(
+    [...new Set(userIds)].map((userId) => userTargetRefusal(c, db, userId))
+  );
+
+  const refusal = refusals.find(Boolean);
+
+  return refusal
+    ? apiError(c, refusal.status, refusal.code, refusal.message)
+    : null;
+}
+
+/** Who is on a team now, with their send rights; an everyone team keeps no rows. */
+async function currentMembers(db: Database, teamId: string) {
+  const rows = await db
+    .select({ userId: teamMembers.userId, canSend: teamMembers.canSend })
+    .from(teamMembers)
+    .where(eq(teamMembers.teamId, teamId));
+
+  return new Map(rows.map((row) => [row.userId, row.canSend]));
 }
 
 /** Team membership is mailbox access: announce the change for each team mailbox. */
@@ -126,7 +168,7 @@ export const teamAdminRoutes = new Hono<AppEnv>()
     }
 
     const [team] = await db
-      .select({ id: teams.id })
+      .select({ id: teams.id, everyone: teams.everyone })
       .from(teams)
       .where(eq(teams.id, teamId))
       .limit(1);
@@ -134,6 +176,21 @@ export const teamAdminRoutes = new Hono<AppEnv>()
     if (!team) return apiError(c, 404, "NOT_FOUND", "Team not found");
     const now = new Date();
     const members = memberRows(teamId, input, now);
+    const before = await currentMembers(db, teamId);
+    const after = new Map(members.map((row) => [row.userId, row.canSend]));
+
+    const changed = [...new Set([...before.keys(), ...after.keys()])].filter(
+      (userId) => before.get(userId) !== after.get(userId)
+    );
+
+    const refused = await membershipRefusal(
+      c,
+      db,
+      changed,
+      team.everyone !== input.everyone
+    );
+
+    if (refused) return refused;
 
     try {
       await db.batch([
@@ -283,12 +340,21 @@ export const teamAdminRoutes = new Hono<AppEnv>()
     const teamId = c.req.param("id");
 
     const [team] = await db
-      .select({ id: teams.id })
+      .select({ id: teams.id, everyone: teams.everyone })
       .from(teams)
       .where(eq(teams.id, teamId))
       .limit(1);
 
     if (!team) return apiError(c, 404, "NOT_FOUND", "Team not found");
+
+    const refused = await membershipRefusal(
+      c,
+      db,
+      (await currentMembers(db, teamId)).keys(),
+      team.everyone
+    );
+
+    if (refused) return refused;
 
     if ((await teamMailboxIds(db, [teamId])).length > 0) {
       return apiError(

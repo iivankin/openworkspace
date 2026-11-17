@@ -261,6 +261,80 @@ describe("people managers and the accounts they act on", () => {
   });
 });
 
+describe("team managers and the people on teams", () => {
+  it("change only the membership of people they could manage", async () => {
+    const teamManager = await invite("Team manager", "teams@example.test", [
+      "manage_teams",
+    ]);
+
+    const member = await invite("Member", "member@example.test");
+    const cookie = await signIn(teamManager);
+
+    const created = await call(adminCookie, "/api/admin/teams", {
+      method: "POST",
+      json: {
+        name: "Finance",
+        slug: "finance",
+        description: null,
+        members: [{ userId: adminId, canSend: true }],
+      },
+    });
+
+    expect(created.status).toBe(201);
+
+    const { teamId } = z
+      .object({ teamId: z.string() })
+      .parse(await created.json());
+
+    const team = (members: { userId: string; canSend: boolean }[]) => ({
+      method: "PATCH",
+      json: {
+        name: "Finance",
+        slug: "finance",
+        description: null,
+        everyone: false,
+        members,
+      },
+    });
+
+    const admin = { userId: adminId, canSend: true };
+
+    // Taking the administrator off (or changing their rights) is refused.
+    await expectStatus(403, cookie, `/api/admin/teams/${teamId}`, team([]));
+    await expectStatus(
+      403,
+      cookie,
+      `/api/admin/teams/${teamId}`,
+      team([{ userId: adminId, canSend: false }])
+    );
+    // Adding someone they could manage, the administrator left as is, is not.
+    await expectStatus(
+      200,
+      cookie,
+      `/api/admin/teams/${teamId}`,
+      team([admin, { userId: member, canSend: true }])
+    );
+    // Nor may they make it a team for everyone, or delete it with the administrator on it.
+    await expectStatus(403, cookie, `/api/admin/teams/${teamId}`, {
+      ...team([admin]),
+      json: { ...team([admin]).json, everyone: true },
+    });
+    await expectStatus(403, cookie, `/api/admin/teams/${teamId}`, {
+      method: "DELETE",
+    });
+
+    expect(
+      await env.DB.prepare(
+        "SELECT user_id FROM team_members WHERE team_id = ? ORDER BY user_id"
+      )
+        .bind(teamId)
+        .all()
+    ).toMatchObject({
+      results: [adminId, member].toSorted().map((id) => ({ user_id: id })),
+    });
+  });
+});
+
 describe("the last administrator", () => {
   async function activeAdministrators() {
     return (
