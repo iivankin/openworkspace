@@ -1,7 +1,6 @@
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 
-import { hasWorkspacePermission } from "../../shared/workspace";
 import type { WorkspacePermission } from "../../shared/workspace";
 import type { AppEnv, SessionUser } from "../env";
 import { apiError } from "../lib/http";
@@ -49,11 +48,13 @@ export function actsAsAdministrator(c: Context<AppEnv>, scope: string) {
   return c.get("authKind") !== "oauth" || c.get("oauthScopes").includes(scope);
 }
 
+/**
+ * Whether this request holds `permission`: an administrator's session holds
+ * them all, and an app's OAuth token only those its scopes hand it, an
+ * administrator's included (requestPermissions).
+ */
 export function can(c: Context<AppEnv>, permission: WorkspacePermission) {
-  return hasWorkspacePermission(
-    { role: c.get("user").role, permissions: requestPermissions(c) },
-    permission
-  );
+  return requestPermissions(c).includes(permission);
 }
 
 /** Lets the request through only if the signed-in user holds `permission`. */

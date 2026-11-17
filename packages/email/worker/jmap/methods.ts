@@ -1561,7 +1561,8 @@ async function emailSet(state: RequestState, args: EmailSetArguments) {
       );
     }
 
-    if (inTrash.length) {
+    // Deleting for good needs send access, as in the app.
+    if (inTrash.length && owner.canSend) {
       await stub.permanentlyDeleteConversations([
         ...new Set(inTrash.map((row) => row.email.conversationId)),
       ]);
@@ -1569,8 +1570,17 @@ async function emailSet(state: RequestState, args: EmailSetArguments) {
 
     const found = new Set(emails.map((row) => row.email.id));
 
+    const refused = new Set(
+      owner.canSend ? [] : inTrash.map((row) => row.email.id)
+    );
+
     for (const id of destroyIds) {
-      if (found.has(id)) destroyed.push(id);
+      if (refused.has(id)) {
+        notDestroyed.set(id, {
+          type: "forbidden",
+          description: "Send access is required to delete mail for good",
+        });
+      } else if (found.has(id)) destroyed.push(id);
       else notDestroyed.set(id, { type: "notFound" });
     }
   }

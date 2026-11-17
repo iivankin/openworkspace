@@ -277,22 +277,6 @@ function filterDraft(message: MessageDetail): MailRuleInput {
   };
 }
 
-/**
- * Whether the signed-in person may change a mailbox's rules: a shared
- * inbox's act on everyone's mail, so only people who manage teams change
- * them; a person's own mailbox, its owner (the Worker checks the same).
- */
-export function mayEditRules(
-  mailbox: { kind: string },
-  user: { role: string; permissions: readonly string[] } | null | undefined
-) {
-  return (
-    mailbox.kind !== "shared" ||
-    user?.role === "admin" ||
-    Boolean(user?.permissions.includes("manage_teams"))
-  );
-}
-
 /** Rules tab: ordered deterministic rules for new mail, with an inline editor. */
 export function MailboxRules({
   mailboxId,

@@ -75,6 +75,7 @@ export {
 export {
   createMailboxAddress,
   deleteMailboxAddress,
+  mayManageAddress,
 } from "./admin/mailbox-routes";
 
 // Answers and input.

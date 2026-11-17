@@ -44,6 +44,7 @@ import type { MailboxListRow } from "./access";
 import { translateEmailSegments } from "./ai-translation";
 import { autoReplyRoutes } from "./auto-reply-routes";
 import { BIMI_LOGO_HEADERS, bimiLogoPath, bimiObjectKey } from "./bimi";
+import { mayOrganizeMailbox } from "./capabilities";
 import {
   decodeConversationCursor,
   encodeConversationCursor,
@@ -361,7 +362,12 @@ function outgoingFailure(c: Parameters<typeof apiError>[0], cause: unknown) {
  * GET /mailboxes without `ok`. Each mailbox's `version` is the change
  * counter its `unreadCount` reflects; see `update:<version>`.
  */
-export function mailboxListView(rows: MailboxListRow[]) {
+/**
+ * The mailbox list for the app; `manageTeams`: whether this request may
+ * organize shared inboxes (capabilities.ts), shown per mailbox as
+ * `canOrganize` so the app hides what the Worker would refuse.
+ */
+export function mailboxListView(rows: MailboxListRow[], manageTeams: boolean) {
   return {
     mailboxes: rows.map(
       ({
@@ -379,6 +385,8 @@ export function mailboxListView(rows: MailboxListRow[]) {
         return {
           ...mailbox,
           kind: mailboxKind(ownerUserId),
+          /** Its folders, rules and AI sorting (capabilities.ts). */
+          canOrganize: ownerUserId !== null || manageTeams,
           /** The signature sending from here adds (signatures.ts), if any. */
           signature:
             signatureOwnerId && signatureHtml !== null
@@ -491,31 +499,23 @@ export function conversationPageView(
 }
 
 /**
- * A shared inbox's rules act on everyone's mail, so only people who manage
- * teams (and their addresses) change them; a person's own mailbox, its
- * owner. Anyone who can open the mailbox can read them.
+ * The refusal for changing how a mailbox is organized (its folders, rules
+ * and AI sorting) without the right (capabilities.ts), or null.
  */
-function mayEditRules(
-  c: Context<AppEnv>,
-  access: { ownerUserId: string | null }
-) {
-  return access.ownerUserId !== null || can(c, "manage_teams");
-}
-
-async function rulesRefusal(c: Context<AppEnv>, mailboxId: string) {
+async function organizeRefusal(c: Context<AppEnv>, mailboxId: string) {
   const access = await accessibleMailbox(c, mailboxId, "read");
 
   if (!access) {
     return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
   }
 
-  return mayEditRules(c, access)
+  return mayOrganizeMailbox(c, access)
     ? null
     : apiError(
         c,
         403,
         "FORBIDDEN",
-        "Only people who manage teams can change a shared inbox's rules"
+        "Only people who manage teams can change a shared inbox's folders, rules and AI sorting"
       );
 }
 
@@ -524,7 +524,10 @@ export const mailRoutes = new Hono<AppEnv>()
   .get("/mailboxes", oauthScope(MAIL_READ_SCOPE), async (c) => {
     const rows = await accessibleMailboxes(c);
 
-    return c.json({ ok: true as const, ...mailboxListView(rows) });
+    return c.json({
+      ok: true as const,
+      ...mailboxListView(rows, can(c, "manage_teams")),
+    });
   })
   .get("/mailboxes/:id/realtime", oauthScope(MAIL_READ_SCOPE), async (c) => {
     if (c.get("authKind") !== "session") {
@@ -723,9 +726,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await organizeRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       return c.json({
         ok: true as const,
@@ -747,8 +750,8 @@ export const mailRoutes = new Hono<AppEnv>()
 
     return c.json({
       ok: true as const,
-      /** Whether the signed-in person may change them (rulesRefusal). */
-      canEdit: mayEditRules(c, access),
+      /** Whether the signed-in person may change them (capabilities.ts). */
+      canEdit: mayOrganizeMailbox(c, access),
       rules: await mailboxStub(c.env, mailboxId).listRules(),
     });
   })
@@ -759,7 +762,7 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      const refused = await rulesRefusal(c, mailboxId);
+      const refused = await organizeRefusal(c, mailboxId);
 
       if (refused) return refused;
 
@@ -810,7 +813,7 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      const refused = await rulesRefusal(c, mailboxId);
+      const refused = await organizeRefusal(c, mailboxId);
 
       if (refused) return refused;
 
@@ -837,7 +840,7 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      const refused = await rulesRefusal(c, mailboxId);
+      const refused = await organizeRefusal(c, mailboxId);
 
       if (refused) return refused;
 
@@ -863,7 +866,7 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      const refused = await rulesRefusal(c, mailboxId);
+      const refused = await organizeRefusal(c, mailboxId);
 
       if (refused) return refused;
 
@@ -907,9 +910,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await organizeRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).createFolder(
         createId("fld"),
@@ -938,9 +941,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await organizeRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).reorderFolders(
         c.req.valid("json").folderIds
@@ -965,9 +968,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await organizeRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).renameFolder(
         c.req.param("folderId"),
@@ -995,9 +998,9 @@ export const mailRoutes = new Hono<AppEnv>()
     async (c) => {
       const mailboxId = c.req.param("id");
 
-      if (!(await accessibleMailbox(c, mailboxId, "read"))) {
-        return apiError(c, 403, "FORBIDDEN", "Mailbox access is required");
-      }
+      const refused = await organizeRefusal(c, mailboxId);
+
+      if (refused) return refused;
 
       const result = await mailboxStub(c.env, mailboxId).deleteFolder(
         c.req.param("folderId")

@@ -65,7 +65,10 @@ Bounces, delays and spam complaints show on the sent message.
 
 ## Folders
 
-Members of a mailbox can reorder its folders. Inbox always stays first. On
+You create, rename, delete and reorder your own mailbox's folders. A shared
+inbox's folders and [AI sorting](#ai-sorting), like its [rules](#rules), are
+changed only by people who manage teams; its members still move conversations
+into them. Inbox always stays first. On
 phones, the bar at the bottom switches mailboxes and scrolls through the
 folders.
 

@@ -67,8 +67,11 @@ export function FolderManager({
   folders,
   onSelectFolder,
   controlled,
+  canOrganize,
 }: {
   mailboxId: string;
+  /** False for a shared inbox to someone who doesn't manage teams. */
+  canOrganize: boolean;
   activeFolderId: string;
   folders: MailFolder[];
   onSelectFolder: (folderId: string) => void;
@@ -309,7 +312,16 @@ export function FolderManager({
             </TabsList>
 
             <TabsContent value="folders" className="space-y-4 pt-2">
-              <form className="flex gap-2" onSubmit={createFolder}>
+              {canOrganize ? null : (
+                <p className="text-muted-foreground text-sm">
+                  Only people who manage teams change a shared inbox's folders.
+                </p>
+              )}
+              <form
+                className="flex gap-2"
+                hidden={!canOrganize}
+                onSubmit={createFolder}
+              >
                 <Input
                   aria-label="New folder name"
                   maxLength={80}
@@ -387,7 +399,10 @@ export function FolderManager({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">
                           {folder.name}
                         </span>
-                        <div className="flex shrink-0 items-center">
+                        <div
+                          className="flex shrink-0 items-center"
+                          hidden={!canOrganize}
+                        >
                           <ToolbarTooltip label="Move up">
                             <Button
                               type="button"
@@ -494,6 +509,7 @@ export function FolderManager({
               <MailboxAiSettings
                 mailboxId={mailboxId}
                 active={open && section === "ai"}
+                canEdit={canOrganize}
               />
             </TabsContent>
           </Tabs>

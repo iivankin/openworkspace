@@ -1,4 +1,4 @@
-import { Button, useAuth, useConfirm } from "@open-workspace/core/ui";
+import { Button, useConfirm } from "@open-workspace/core/ui";
 import {
   ChevronUp,
   CircleAlert,
@@ -14,7 +14,6 @@ import { ConversationLoadingSkeleton } from "./conversation-loading-skeleton";
 import { ConversationMessage } from "./conversation-message";
 import { ConversationReply, ReplyActionIcon } from "./conversation-reply";
 import type { ReplyHandle, SentReply } from "./conversation-reply";
-import { mayEditRules } from "./mailbox-rules";
 import { actionButtonLabel } from "./message-actions";
 import type { SenderHandlers } from "./message-actions";
 import {
@@ -86,7 +85,6 @@ export function ConversationView({
   const replyRegion = useRef<HTMLDivElement>(null);
   const reply = useRef<ReplyHandle>(null);
   const drafts = useDrafts(mailbox?.canSend ? mailbox.id : undefined);
-  const { user } = useAuth();
   const discardDraft = useDiscardDraft();
   const openConversationId = messages.at(-1)?.conversationId;
 
@@ -404,7 +402,7 @@ export function ConversationView({
                           message,
                           senderActions,
                           reportable,
-                          mayEditRules(mailbox, user)
+                          mailbox.canOrganize
                         )
                       : undefined,
                 }}

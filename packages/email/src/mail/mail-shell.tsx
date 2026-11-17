@@ -103,6 +103,7 @@ export function MailShell({ route }: { route: MailRoute }) {
         <FolderManager
           key={mail.mailbox.id}
           mailboxId={mail.mailbox.id}
+          canOrganize={mail.mailbox.canOrganize}
           activeFolderId={mail.folder}
           folders={mail.folders ?? []}
           onSelectFolder={mail.selectFolder}

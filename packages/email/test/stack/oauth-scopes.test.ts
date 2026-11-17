@@ -292,6 +292,40 @@ describe("OAuth scopes", () => {
     );
   });
 
+  it("hand an administrator's token only the permissions its scopes cover", async () => {
+    const team = await api(
+      (await mcpAccessToken(adminCookie, { scope: "admin.teams" })).accessToken,
+      "/api/admin/teams",
+      {
+        method: "POST",
+        json: { name: "Ops", slug: "ops", description: null, members: [] },
+      }
+    );
+
+    expect(team.status).toBe(201);
+
+    const { teamId } = await readJson(
+      team,
+      z.looseObject({ teamId: z.string() })
+    );
+
+    // admin.people opens the mailbox routes, but a team's needs admin.teams.
+    const people = await mcpAccessToken(adminCookie, { scope: "admin.people" });
+
+    const refused = await api(people.accessToken, "/api/admin/mailboxes", {
+      method: "POST",
+      json: {
+        address: "ops@example.test",
+        displayName: "Ops",
+        ownerUserId: null,
+        teamId,
+      },
+    });
+
+    expect(refused.status).toBe(403);
+    await refused.body?.cancel();
+  });
+
   it("show on consent what the person may not grant, and leave it out", async () => {
     const { requestId } = await startConsent(memberCookie, {
       scope: "mail.read admin.people admin.access offline_access",

@@ -165,6 +165,38 @@ describe("team mailboxes", () => {
     expect(refused.status).toBe(403);
     await refused.body?.cancel();
 
+    // Its folders and AI sorting too.
+    await Promise.all(
+      (
+        [
+          ["folders", "POST", { name: "Partners" }],
+          ["ai", "PUT", { confidenceThreshold: 80, instructions: "" }],
+        ] as const
+      ).map(async ([path, method, json]) => {
+        const response = await call(
+          memberCookie,
+          `/api/mail/mailboxes/${mailboxId}/${path}`,
+          { method, json }
+        );
+
+        expect(response.status, path).toBe(403);
+        await response.body?.cancel();
+      })
+    );
+
+    const organizable = await readJson(
+      await call(memberCookie, "/api/mail/mailboxes"),
+      z.object({
+        mailboxes: z.array(
+          z.looseObject({ id: z.string(), canOrganize: z.boolean() })
+        ),
+      })
+    );
+
+    expect(
+      organizable.mailboxes.find((item) => item.id === mailboxId)
+    ).toMatchObject({ canOrganize: false });
+
     await env.DB.prepare("UPDATE users SET permissions = ? WHERE id = ?")
       .bind(JSON.stringify(["manage_teams"]), memberId)
       .run();

@@ -305,6 +305,7 @@ function MailboxFolders({
             <span className="[&_button]:size-6 [&_button]:rounded-md [&_svg]:size-3.5">
               <FolderManager
                 mailboxId={mailbox.id}
+                canOrganize={mailbox.canOrganize}
                 activeFolderId={activeFolder ?? "inbox"}
                 folders={folders}
                 onSelectFolder={onSelect}

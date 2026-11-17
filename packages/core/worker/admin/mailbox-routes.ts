@@ -46,6 +46,19 @@ async function mailboxRefusal(
     : null;
 }
 
+/**
+ * Whether this request may manage an address and what is set on it (a
+ * module's auto-reply, forwards): a team's with manage_teams, a person's
+ * with manage_people when it may act on that person (target-guard.ts).
+ */
+export async function mayManageAddress(
+  c: Context<AppEnv>,
+  db: Database,
+  address: { ownerUserId: string | null }
+) {
+  return !(await mailboxRefusal(c, db, address));
+}
+
 async function mailboxOwnership(db: Database, mailboxId: string) {
   const [mailbox] = await db
     .select({ ownerUserId: mailboxes.ownerUserId })

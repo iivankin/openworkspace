@@ -1,5 +1,5 @@
 import type { AppEnv, WorkspaceModule } from "@open-workspace/core/module";
-import { timed } from "@open-workspace/core/module";
+import { can, timed } from "@open-workspace/core/module";
 import type { Context } from "hono";
 import { z } from "zod";
 
@@ -47,7 +47,9 @@ async function loadMailBootstrap(
   const { mailboxId, folder } = startupLocation(input.pathname, rows);
   const access = rows.find((row) => row.id === mailboxId);
 
-  if (!access) return { ...mailboxListView(rows), mailbox: null };
+  const manageTeams = can(c, "manage_teams");
+
+  if (!access) return { ...mailboxListView(rows, manageTeams), mailbox: null };
 
   const view = await timed(c, "do", "startup", () =>
     mailboxStub(c.env, access.id).startupView(
@@ -58,7 +60,7 @@ async function loadMailBootstrap(
   );
 
   return {
-    ...mailboxListView(rows),
+    ...mailboxListView(rows, manageTeams),
     mailbox: {
       id: access.id,
       folder,

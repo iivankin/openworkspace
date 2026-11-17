@@ -1,6 +1,6 @@
 import {
   apiError,
-  can,
+  mayManageAddress,
   createDb,
   mailboxes,
   requireAuth,
@@ -47,7 +47,9 @@ async function managedForward(c: Context<AppEnv>, mailboxId: string) {
 
   if (!address) return null;
 
-  if (!can(c, address.ownerUserId ? "manage_people" : "manage_teams")) {
+  // Managed like the address itself, never by its owner alone: a person's
+  // forwards are set under People.
+  if (!(await mayManageAddress(c, createDb(c.env.DB), address))) {
     return false;
   }
 

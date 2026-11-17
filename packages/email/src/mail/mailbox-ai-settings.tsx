@@ -23,9 +23,12 @@ import type {
 export function MailboxAiSettings({
   mailboxId,
   active,
+  canEdit,
 }: {
   mailboxId: string;
   active: boolean;
+  /** False for a shared inbox to someone who doesn't manage teams. */
+  canEdit: boolean;
 }) {
   const settings = useQuery({
     queryKey: ["mailbox-ai", mailboxId],
@@ -69,6 +72,7 @@ export function MailboxAiSettings({
       key={`${mailboxId}:${settings.data.settings.configuration.instructions}:${settings.data.settings.configuration.confidenceThreshold}`}
       mailboxId={mailboxId}
       initial={settings.data.settings}
+      canEdit={canEdit}
     />
   ) : null;
 }
@@ -76,9 +80,11 @@ export function MailboxAiSettings({
 function MailboxAiSettingsForm({
   mailboxId,
   initial,
+  canEdit,
 }: {
   mailboxId: string;
   initial: MailboxAiSettingsValue;
+  canEdit: boolean;
 }) {
   const client = useQueryClient();
   const [configuration, setConfiguration] = useState(initial.configuration);
@@ -106,6 +112,11 @@ function MailboxAiSettingsForm({
 
   return (
     <form className="space-y-5" onSubmit={submit}>
+      {canEdit ? null : (
+        <p className="text-muted-foreground text-sm">
+          Only people who manage teams change a shared inbox's AI sorting.
+        </p>
+      )}
       <div className="border-border/70 flex items-start justify-between gap-4 border-y py-4">
         <div>
           <p className="text-sm font-medium">Processing status</p>
@@ -132,6 +143,7 @@ function MailboxAiSettingsForm({
             max={100}
             step={5}
             required
+            readOnly={!canEdit}
             value={configuration.confidenceThreshold}
             onChange={(event) =>
               setConfiguration({
@@ -155,6 +167,7 @@ function MailboxAiSettingsForm({
           id={`mailbox-ai-instructions-${mailboxId}`}
           className="min-h-32 resize-y"
           maxLength={4000}
+          readOnly={!canEdit}
           placeholder="For example: partnership requests go to Product. Treat newsletters as spam only when clearly unsolicited."
           value={configuration.instructions}
           onChange={(event) =>
@@ -170,7 +183,7 @@ function MailboxAiSettingsForm({
         </p>
       </div>
 
-      <DialogFooter>
+      <DialogFooter hidden={!canEdit}>
         <Button type="submit" disabled={save.isPending}>
           {save.isPending ? (
             <LoaderCircle className="animate-spin" />

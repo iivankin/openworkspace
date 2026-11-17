@@ -150,6 +150,12 @@ describe("read-only mailbox access", () => {
       conversations: [{ conversationId: "conv_visible" }],
     });
 
+    // Organizing a shared inbox (folders, AI sorting) needs manage_teams,
+    // not send access; without it it's refused (teams-permissions).
+    await env.DB.prepare("UPDATE users SET permissions = ? WHERE id = ?")
+      .bind(JSON.stringify(["manage_teams"]), userId)
+      .run();
+
     const updateAiRules = await worker.fetch(
       new Request(`http://example.test/api/mail/mailboxes/${mailboxId}/ai`, {
         method: "PUT",
@@ -299,6 +305,9 @@ describe("read-only mailbox access", () => {
 
     expect(deleteFolder.status).toBe(200);
     await deleteFolder.json();
+    await env.DB.prepare("UPDATE users SET permissions = '[]' WHERE id = ?")
+      .bind(userId)
+      .run();
     expect(await mailbox.getConversationSnapshot("conv_visible")).toMatchObject(
       { mailboxState: "active", folderId: null }
     );

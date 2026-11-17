@@ -1,6 +1,5 @@
 import {
   apiError,
-  can,
   createDb,
   mailboxAddressSql,
   mailboxes,
@@ -17,6 +16,7 @@ import { MAIL_ORGANIZE_SCOPE, MAIL_READ_SCOPE } from "../../shared/permissions";
 import { mailboxStub } from "../mailbox";
 import type { AutoReplyMessage, AutoReplySettings } from "../mailbox/schema";
 import { autoReplyImagePrefix, autoReplyStatus } from "./auto-reply";
+import { mayConfigureAddress } from "./capabilities";
 import {
   deleteRichImages,
   isEmptyRichContent,
@@ -41,12 +41,7 @@ async function autoReplyAccess(c: Context<AppEnv>, mailboxId: string) {
 
   if (!mailbox) return "not found";
 
-  const allowed =
-    mailbox.ownerUserId === null
-      ? can(c, "manage_teams")
-      : mailbox.ownerUserId === c.get("user").id || can(c, "manage_people");
-
-  return allowed ? "allowed" : "forbidden";
+  return (await mayConfigureAddress(c, mailbox)) ? "allowed" : "forbidden";
 }
 
 function refusal(c: Context<AppEnv>, access: "not found" | "forbidden") {

@@ -116,6 +116,7 @@ export function NavRail({ mail }: { mail: MailController }) {
             <span className="mt-0.5 [&_button]:size-10 [&_button]:rounded-[10px]">
               <FolderManager
                 mailboxId={mail.mailbox.id}
+                canOrganize={mail.mailbox.canOrganize}
                 activeFolderId={folder}
                 folders={folders ?? []}
                 onSelectFolder={mail.selectFolder}

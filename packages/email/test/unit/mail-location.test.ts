@@ -19,6 +19,7 @@ const mailboxes = [
     unreadCount: 0,
     version: 0,
     signature: null,
+    canOrganize: true,
   },
   {
     id: "mailbox-read-only",
@@ -29,6 +30,7 @@ const mailboxes = [
     unreadCount: 0,
     version: 0,
     signature: null,
+    canOrganize: true,
   },
 ];
 
